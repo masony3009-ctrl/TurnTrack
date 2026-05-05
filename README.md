@@ -1,50 +1,29 @@
-# Welcome to your Expo app 👋
+\# TurnTrack
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A cross-platform mobile app (iOS & Android) built to automate job scheduling for an Airbnb cleaning business.
 
-## Get started
+## What it does
+- Automatically scans Airbnb and Turno booking emails and adds cleaning jobs to a shared calendar
+- Real-time sync between multiple phones via Firebase Firestore
+- Push notifications on the day of each cleaning
+- Calendar view with job details and completion tracking
+- Jobs automatically disappear 24 hours after being marked done
 
-1. Install dependencies
+## Tech Stack
+- **React Native** + **TypeScript** — cross-platform mobile (iOS & Android)
+- **Expo** + **Expo Router** — framework and navigation
+- **Firebase Firestore** — real-time cloud database
+- **Google Apps Script** — serverless email automation pipeline
+- **EAS Build** + **EAS Update** — App Store deployment and OTA updates
 
-   ```bash
-   npm install
-   ```
+## How the automation works
+A Google Apps Script runs every 15 minutes and searches Gmail for Airbnb reservation confirmations and Turno cleaning emails. It uses regex to extract checkout dates and property addresses, then sends them directly to Firebase via REST API. New jobs appear on both phones instantly with no manual input.
 
-2. Start the app
+## Published
+Available on iOS via TestFlight. Built and deployed using Expo EAS.
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Setup
+1. Clone the repo
+2. Run `npm install`
+3. Copy `firebaseConfig.example.ts` to `firebaseConfig.ts` and add your Firebase credentials
+4. Run `npx expo start`
