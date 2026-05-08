@@ -3,7 +3,7 @@ import { collection, onSnapshot } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Calendar } from "react-native-calendars";
-import { db } from "../firebaseConfig";
+import { db } from "../firebase";
 
 type Job = {
   id: string;

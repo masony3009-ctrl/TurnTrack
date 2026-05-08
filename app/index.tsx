@@ -1,9 +1,9 @@
 import { useRouter } from "expo-router";
-import { addDoc, collection, doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { db } from "../firebaseConfig";
-import { registerForPushNotifications, scheduleTodaysJobNotifications } from "../notifications";
+import { db } from "../firebase";
+import { debugNotifications, registerForPushNotifications, scheduleTodaysJobNotifications, sendTestNotification } from "../notifications";
 
 type Job = {
   id: string;
@@ -11,7 +11,7 @@ type Job = {
   address: string;
   type: string;
   done: boolean;
-  completedAt?: number;
+  completedAt: number | null;
 };
 
 export default function Index() {
@@ -58,6 +58,7 @@ export default function Index() {
 
       setJobs(filtered);
       scheduleTodaysJobNotifications(filtered);
+      debugNotifications(filtered);
     });
     return unsub;
   }, []);
@@ -67,6 +68,23 @@ export default function Index() {
       done: !current,
       completedAt: !current ? Date.now() : null
     });
+  };
+
+  const deleteJob = (id: string, address: string) => {
+    Alert.alert(
+      "Delete job",
+      `Are you sure you want to delete "${address}"?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            await deleteDoc(doc(db, "jobs", id));
+          }
+        }
+      ]
+    );
   };
 
   const addJob = async () => {
@@ -135,6 +153,12 @@ export default function Index() {
             onPress={() => router.push({ pathname: "/job", params: { address: job.address, date: job.date, type: job.type }})}
           >
             <View style={[styles.card, job.done && styles.cardDone]}>
+              <TouchableOpacity
+                style={styles.deleteBtn}
+                onPress={() => deleteJob(job.id, job.address)}
+              >
+                <Text style={styles.deleteBtnText}>✕</Text>
+              </TouchableOpacity>
               <View style={styles.tag}>
                 <Text style={styles.tagText}>{job.type}</Text>
               </View>
@@ -151,6 +175,18 @@ export default function Index() {
         ))}
         <View style={{ height: 20 }} />
       </ScrollView>
+        <TouchableOpacity
+  style={{ backgroundColor: "#1A7ABF", borderRadius: 12, padding: 15, alignItems: "center", marginBottom: 8 }}
+  onPress={() => router.push("/scan-calendar")}
+>
+  <Text style={{ color: "#fff", fontWeight: "500", fontSize: 14 }}>Scan Calendar</Text>
+</TouchableOpacity>
+      <TouchableOpacity
+        style={{ backgroundColor: "#ff6b6b", borderRadius: 12, padding: 15, alignItems: "center", marginBottom: 8 }}
+        onPress={sendTestNotification}
+      >
+        <Text style={{ color: "#fff", fontWeight: "500", fontSize: 14 }}>Test Notification</Text>
+      </TouchableOpacity>
 
       <View style={styles.bottomBar}>
         <TouchableOpacity style={styles.calendarButton} onPress={() => router.push("/calendar")}>
@@ -171,6 +207,8 @@ const styles = StyleSheet.create({
   subheader: { fontSize: 14, color: "#7AAEC8", marginBottom: 20 },
   card: { backgroundColor: "#FFFFFF", borderRadius: 16, padding: 16, marginBottom: 10, borderWidth: 0.5, borderColor: "#C8E4F5" },
   cardDone: { opacity: 0.45 },
+  deleteBtn: { position: "absolute", top: 10, right: 10, width: 24, height: 24, borderRadius: 12, backgroundColor: "#F0F7FF", alignItems: "center", justifyContent: "center", zIndex: 10 },
+  deleteBtnText: { fontSize: 11, color: "#7AAEC8", fontWeight: "500" },
   tag: { alignSelf: "flex-start", backgroundColor: "#DAEEF9", borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3, marginBottom: 8 },
   tagText: { fontSize: 11, fontWeight: "500", color: "#0A4A7A" },
   date: { fontSize: 12, color: "#7AAEC8", marginBottom: 3 },

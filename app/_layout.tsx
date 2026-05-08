@@ -20,6 +20,7 @@ export default function Layout() {
 
   return (
     <Stack>
+      <Stack.Screen name="scan-calendar" options={{ headerShown: false }} />
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="job" options={{ headerShown: false }} />
       <Stack.Screen name="gmail" options={{ headerShown: false }} />
