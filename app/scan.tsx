@@ -3,7 +3,7 @@ import { useRouter } from "expo-router";
 import { addDoc, collection } from "firebase/firestore";
 import { useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { db } from "../firebaseConfig";
+import { db } from "../firebase";
 
 type DetectedJob = {
   date: string;
