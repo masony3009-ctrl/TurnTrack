@@ -117,33 +117,3 @@ export async function scheduleTodaysJobNotifications(jobs: any[]) {
     }
   }
 }
-export async function debugNotifications(jobs: any[]) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  console.log("Today is:", today.toDateString());
-  console.log("Total jobs:", jobs.length);
-  
-  jobs.forEach(job => {
-    const parsed = parseJobDate(job.date);
-    console.log(`Job: "${job.date}" → parsed: ${parsed ? parsed.toDateString() : "NULL"}`);
-    if (parsed) {
-      parsed.setHours(0, 0, 0, 0);
-      const daysAhead = (parsed.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
-      console.log(`  Days ahead: ${daysAhead}`);
-    }
-  });
-}
-export async function sendTestNotification() {
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title: "Test notification!",
-      body: "TurnTrack notifications are working!",
-      sound: true,
-    },
-    trigger: {
-      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-      seconds: 5,
-    },
-  });
-}
