@@ -43,29 +43,41 @@ firebase deploy --only functions
 This deploys `scanCalendar`, a callable function that proxies the Anthropic
 request. The app calls it via `httpsCallable(functions, "scanCalendar")`.
 
-## 4. Enable Anonymous Authentication
+## 4. Enable Email/Password login and create the shared account
 
-In the [Firebase Console](https://console.firebase.google.com/) →
-**Authentication** → **Sign-in method** → enable **Anonymous**.
+The app now requires a real login — anonymous auth was removed because anyone
+who has the (public) Firebase config can anonymously authenticate, which made
+the data effectively public.
 
-The app signs in anonymously on launch (`app/_layout.tsx`). This is what lets the
-Firestore rules require `request.auth != null`. Note: anonymous auth means
-"someone running this app", not per-user accounts — it closes the open-to-the-
-internet hole but does not separate users from each other. If you later want a
-real login (e.g. a shared business account), swap `signInAnonymously` for an
-email/password sign-in screen.
+1. [Firebase Console](https://console.firebase.google.com/) → **Authentication**
+   → **Sign-in method** → enable **Email/Password** (leave "Email link" off).
+2. **Authentication** → **Users** → **Add user** → create one shared account
+   (e.g. `crew@yourbusiness.com` + a strong password). Give this password to the
+   people who use the app.
+3. Copy that user's **User UID** (the long string in the Users table).
 
 > A real `apiKey` must be present in `firebase.ts` for auth to work. The
 > committed config has a blank `apiKey` — fill in the real one locally.
 
-## 5. Publish the Firestore security rules
+> Firebase's Email/Password provider technically lets a client self-register new
+> accounts. That's fine here: the security rules only grant access to UIDs you
+> explicitly allowlist (next step), so a self-registered account can read/write
+> nothing.
+
+## 5. Lock the rules to your account UID, then publish
+
+Open `firestore.rules` and replace `REPLACE_WITH_YOUR_USER_UID` with the UID you
+copied above (add more UIDs to the list if multiple people need separate logins).
+Then deploy:
 
 ```bash
 firebase deploy --only firestore:rules
 ```
 
-`firestore.rules` denies all unauthenticated access and only allows the `jobs`
-and `pushTokens` collections for signed-in clients. Everything else is denied.
+`firestore.rules` denies everything except the `jobs` and `pushTokens`
+collections, and only for the approved UID(s). Everything else is denied.
+**Until you replace the placeholder UID and deploy, the app will get
+permission-denied on every request.**
 
 ## 6. Update the Google Apps Script ingestion (IMPORTANT)
 
@@ -95,8 +107,8 @@ which isn't in this repo.)
 
 ## 7. Build a fresh app binary
 
-Rebuild and redistribute so users get the version that calls the Cloud Function
-instead of Anthropic directly:
+The login screen and `@react-native-async-storage/async-storage` need a new
+native build. Rebuild and redistribute:
 
 ```bash
 eas build --platform ios --profile production
@@ -105,9 +117,10 @@ eas build --platform ios --profile production
 ## Checklist
 
 - [ ] Old Anthropic key rotated/deleted
-- [ ] `ANTHROPIC_API_KEY` secret set
-- [ ] `scanCalendar` function deployed
-- [ ] Anonymous auth enabled + real `apiKey` in `firebase.ts`
+- [ ] `ANTHROPIC_API_KEY` secret set (only needed if you still use calendar scan)
+- [ ] `scanCalendar` function deployed (only if you still use calendar scan)
+- [ ] Email/Password enabled + shared account created + real `apiKey` in `firebase.ts`
+- [ ] `REPLACE_WITH_YOUR_USER_UID` replaced in `firestore.rules`
 - [ ] Firestore rules published
 - [ ] Apps Script updated to authenticate
 - [ ] New app build shipped

@@ -1,8 +1,9 @@
 import { useRouter } from "expo-router";
+import { signOut } from "firebase/auth";
 import { addDoc, collection, deleteDoc, doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { db } from "../firebase";
+import { auth, db } from "../firebase";
 import { registerForPushNotifications, scheduleTodaysJobNotifications } from "../notifications";
 
 type Job = {
@@ -104,9 +105,27 @@ export default function Index() {
     setShowForm(false);
   };
 
+  const handleSignOut = () => {
+    Alert.alert("Sign out", "Sign out of TurnTrack on this device?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Sign out",
+        style: "destructive",
+        onPress: () => {
+          signOut(auth).catch((e) => Alert.alert("Error", "Could not sign out. Please try again."));
+        },
+      },
+    ]);
+  };
+
   return (
     <View style={styles.container}>
-      <Text style={styles.appTitle}>TurnTrack</Text>
+      <View style={styles.topRow}>
+        <Text style={styles.appTitle}>TurnTrack</Text>
+        <TouchableOpacity onPress={handleSignOut} hitSlop={8}>
+          <Text style={styles.signOut}>Sign out</Text>
+        </TouchableOpacity>
+      </View>
       <Text style={styles.header}>Upcoming jobs</Text>
       <Text style={styles.subheader}>{jobs.filter(j => !j.done).length} jobs remaining</Text>
 
@@ -194,7 +213,9 @@ export default function Index() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#E8F4FD", paddingTop: 60, paddingHorizontal: 20 },
-  appTitle: { fontSize: 11, fontWeight: "500", color: "#1A7ABF", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 },
+  topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 },
+  appTitle: { fontSize: 11, fontWeight: "500", color: "#1A7ABF", letterSpacing: 2, textTransform: "uppercase" },
+  signOut: { fontSize: 13, color: "#7AAEC8", fontWeight: "500" },
   header: { fontSize: 26, fontWeight: "500", color: "#0A1F35", marginBottom: 2 },
   subheader: { fontSize: 14, color: "#7AAEC8", marginBottom: 20 },
   card: { backgroundColor: "#FFFFFF", borderRadius: 16, padding: 16, marginBottom: 10, borderWidth: 0.5, borderColor: "#C8E4F5" },

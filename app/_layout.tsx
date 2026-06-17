@@ -1,12 +1,14 @@
 import { Stack } from "expo-router";
 import * as Updates from "expo-updates";
-import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
+import { onAuthStateChanged, User } from "firebase/auth";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
+import LoginScreen from "../components/LoginScreen";
 import { auth } from "../firebase";
 
 export default function Layout() {
   const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     async function checkForUpdates() {
@@ -23,14 +25,15 @@ export default function Layout() {
     checkForUpdates();
   }, []);
 
-  // Sign in anonymously before rendering any screen, so every Firestore
-  // request is authenticated (required by firestore.rules). We wait for the
-  // first auth state before showing the app to avoid permission-denied reads.
+  // Track the signed-in user. Firestore access requires authentication (see
+  // firestore.rules), so we wait for the first auth state, then either show
+  // the login screen or the app. The session is persisted (firebase.ts), so a
+  // returning user lands straight in the app.
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      if (user) setAuthReady(true);
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);
     });
-    signInAnonymously(auth).catch((e) => console.log("Anonymous sign-in failed:", e));
     return unsub;
   }, []);
 
@@ -40,6 +43,10 @@ export default function Layout() {
         <ActivityIndicator color="#1A7ABF" />
       </View>
     );
+  }
+
+  if (!user) {
+    return <LoginScreen />;
   }
 
   return (

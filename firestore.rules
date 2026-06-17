@@ -2,28 +2,41 @@ rules_version = '2';
 
 // TurnTrack Firestore security rules.
 //
-// The app signs in anonymously on launch (see app/_layout.tsx), so every
-// legitimate request carries request.auth. These rules reject anything that
-// isn't authenticated, which closes the "anyone with the project ID can read
-// or wipe the database" hole.
+// The app requires a real email/password login (see app/_layout.tsx +
+// components/LoginScreen.tsx). Access is restricted to specific approved
+// account UIDs below — so even if someone self-registers an account against
+// the project, they still can't read or write anything unless their UID is
+// in the allowlist.
+//
+// SETUP: replace REPLACE_WITH_YOUR_USER_UID with the UID of your shared
+// TurnTrack account (Firebase Console > Authentication > Users > copy UID).
+// Add more UIDs to the list if multiple people need separate logins. Until
+// you do this and deploy, all access is denied. See SECURITY_SETUP.md.
 //
 // NOTE: if your Google Apps Script ingestion writes to `jobs` via the REST
-// API, it must now authenticate too (service-account OAuth token) or its
-// writes will be denied. See SECURITY_SETUP.md.
+// API, it must authenticate with a service account (whose requests bypass
+// these rules) or its writes will be denied. See SECURITY_SETUP.md.
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function isApproved() {
+      return request.auth != null
+        && request.auth.uid in [
+          "REPLACE_WITH_YOUR_USER_UID"
+        ];
+    }
+
     match /jobs/{jobId} {
-      allow read, delete: if request.auth != null;
-      allow create, update: if request.auth != null
+      allow read, delete: if isApproved();
+      allow create, update: if isApproved()
         && request.resource.data.date is string
         && request.resource.data.address is string
         && request.resource.data.type is string;
     }
 
     match /pushTokens/{tokenId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isApproved();
     }
 
     // Deny everything else by default.
