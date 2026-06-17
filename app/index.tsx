@@ -3,7 +3,7 @@ import { addDoc, collection, deleteDoc, doc, onSnapshot, updateDoc } from "fireb
 import { useEffect, useState } from "react";
 import { Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { db } from "../firebase";
-import { debugNotifications, registerForPushNotifications, scheduleTodaysJobNotifications, sendTestNotification } from "../notifications";
+import { registerForPushNotifications, scheduleTodaysJobNotifications } from "../notifications";
 
 type Job = {
   id: string;
@@ -58,7 +58,6 @@ export default function Index() {
 
       setJobs(filtered);
       scheduleTodaysJobNotifications(filtered);
-      debugNotifications(filtered);
     });
     return unsub;
   }, []);
@@ -181,13 +180,6 @@ export default function Index() {
 >
   <Text style={{ color: "#fff", fontWeight: "500", fontSize: 14 }}>Scan Calendar</Text>
 </TouchableOpacity>
-      <TouchableOpacity
-        style={{ backgroundColor: "#ff6b6b", borderRadius: 12, padding: 15, alignItems: "center", marginBottom: 8 }}
-        onPress={sendTestNotification}
-      >
-        <Text style={{ color: "#fff", fontWeight: "500", fontSize: 14 }}>Test Notification</Text>
-      </TouchableOpacity>
-
       <View style={styles.bottomBar}>
         <TouchableOpacity style={styles.calendarButton} onPress={() => router.push("/calendar")}>
           <Text style={styles.calendarButtonText}>View calendar</Text>

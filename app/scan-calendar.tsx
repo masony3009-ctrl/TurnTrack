@@ -1,15 +1,26 @@
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { addDoc, collection } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import { useState } from "react";
 import { ActivityIndicator, Alert, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { db } from "../firebase";
+import { db, functions } from "../firebase";
 
 type DetectedJob = {
   date: string;
   address: string;
   type: string;
 };
+
+type ScanResult = {
+  property?: string;
+  checkouts?: { date: string; guest?: string }[];
+};
+
+const scanCalendarFn = httpsCallable<{ base64: string; mimeType: string; today: string }, ScanResult>(
+  functions,
+  "scanCalendar"
+);
 
 export default function ScanCalendarScreen() {
   const [image, setImage] = useState<string | null>(null);
@@ -41,88 +52,25 @@ export default function ScanCalendarScreen() {
   const scanCalendar = async (base64: string, mimeType: string) => {
     setLoading(true);
     try {
-      const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY;
-      if (!apiKey) {
-        Alert.alert("Error", "API key not configured.");
-        setLoading(false);
-        return;
-      }
-
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-opus-4-5",
-          max_tokens: 1000,
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: mimeType,
-                    data: base64,
-                  },
-                },
-                {
-                  type: "text",
-                  text: `This is a screenshot of an Airbnb host calendar. 
-
-The calendar shows guest bookings as dark/black horizontal bars spanning multiple days. Each bar has the guest's name on it.
-
-Please identify:
-1. The property name shown at the top of the screen
-2. The month shown
-3. For each booking bar, identify the CHECKOUT date which is the day AFTER the booking bar ends
-
-For example if a booking bar ends on the 9th, the checkout/cleaning date is the 9th (the last day of the bar is checkout day).
-
-Today is ${new Date().toDateString()}.
-
-Respond ONLY with valid JSON, no markdown, no explanation:
-{
-  "property": "exact property name from top of screen",
-  "month": "May 2026",
-  "checkouts": [
-    {"date": "Sat, May 9 2026", "guest": "Guest Name"},
-    {"date": "Tue, May 19 2026", "guest": "Guest Name"}
-  ]
-}`,
-                },
-              ],
-            },
-          ],
-        }),
-      });
-
-      const data = await response.json();
-      
-      if (data.error) {
-        Alert.alert("API Error", data.error.message);
-        setLoading(false);
-        return;
-      }
-
-      const text = data.content[0].text.trim();
-      const parsed = JSON.parse(text);
+      // Calls the Cloud Function, which holds the Anthropic key server-side.
+      // The key never ships in the app bundle.
+      const result = await scanCalendarFn({ base64, mimeType, today: new Date().toDateString() });
+      const parsed = result.data;
 
       setPropertyName(parsed.property || "Airbnb Property");
-      const jobs = parsed.checkouts.map((c: any) => ({
+      const jobs = (parsed.checkouts || []).map((c) => ({
         date: c.date,
         address: parsed.property || "Airbnb Property",
         type: "Airbnb Turnover",
       }));
       setDetectedJobs(jobs);
 
+      if (jobs.length === 0) {
+        Alert.alert("No checkouts found", "No checkout dates were detected in that screenshot.");
+      }
     } catch (e) {
-      console.log("Scan error:", e);
-      Alert.alert("Error", "Could not process the image. Please try again.");
+      const message = e instanceof Error ? e.message : "Could not process the image. Please try again.";
+      Alert.alert("Error", message);
     }
     setLoading(false);
   };

@@ -25,5 +25,9 @@ Available on iOS via TestFlight. Built and deployed using Expo EAS.
 ## Setup
 1. Clone the repo
 2. Run `npm install`
-3. Copy `firebaseConfig.example.ts` to `firebaseConfig.ts` and add your Firebase credentials
-4. Run `npx expo start`
+3. Copy `firebaseConfig.example.ts` to `firebase.ts` and add your Firebase credentials (this file is gitignored)
+4. Deploy the backend and lock down Firestore — see [SECURITY_SETUP.md](./SECURITY_SETUP.md)
+5. Run `npx expo start`
+
+## Security
+The Anthropic API key is held server-side in a Cloud Function (never shipped in the app), and Firestore is locked behind authentication. Read [SECURITY_SETUP.md](./SECURITY_SETUP.md) before deploying — it covers deploying the function, setting the secret, publishing the rules, and updating the Apps Script ingestion to authenticate.
