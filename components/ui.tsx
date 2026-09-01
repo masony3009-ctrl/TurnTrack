@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { ReactNode } from "react";
-import { Image, KeyboardTypeOptions, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View, ViewStyle } from "react-native";
+import { Dimensions, Image, KeyboardAvoidingView, KeyboardTypeOptions, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, ViewStyle } from "react-native";
 import { colors, initialsOf, radius, shadow, type } from "../theme";
 
 export function FormInput({ label, value, onChangeText, placeholder, keyboardType, autoCapitalize, secure }: {
@@ -24,6 +24,10 @@ export function FormInput({ label, value, onChangeText, placeholder, keyboardTyp
         keyboardType={keyboardType}
         autoCapitalize={autoCapitalize}
         secureTextEntry={secure}
+        // "oneTimeCode" stops iOS from covering PIN fields with its
+        // Strong Password autofill overlay, which blocks manual typing.
+        textContentType={secure ? "oneTimeCode" : undefined}
+        autoCorrect={false}
       />
     </View>
   );
@@ -172,19 +176,28 @@ export function SheetModal({ visible, title, onClose, children }: {
 }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.sheetOverlay}>
-        <TouchableOpacity style={{ flex: 1 }} onPress={onClose} />
-        <View style={styles.sheet}>
-          <View style={styles.sheetHandle} />
-          <View style={styles.sheetTitleRow}>
-            <Text style={styles.sheetTitle}>{title}</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={8}>
-              <Ionicons name="close" size={22} color={colors.faint} />
-            </TouchableOpacity>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <View style={styles.sheetOverlay}>
+          <TouchableOpacity style={{ flex: 1 }} onPress={onClose} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetTitleRow}>
+              <Text style={styles.sheetTitle}>{title}</Text>
+              <TouchableOpacity onPress={onClose} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.faint} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+              style={{ maxHeight: Dimensions.get("window").height * 0.7 }}
+            >
+              {children}
+            </ScrollView>
           </View>
-          {children}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
