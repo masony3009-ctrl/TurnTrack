@@ -1,14 +1,18 @@
+import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { addDoc, collection } from "firebase/firestore";
 import { useState } from "react";
 import { ActivityIndicator, Alert, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { BrandButton, Card, Pill } from "../components/ui";
 import { db } from "../firebase";
+import { colors, radius, type } from "../theme";
 
 type DetectedJob = {
   date: string;
   address: string;
   type: string;
+  sameDayTurnover?: boolean;
 };
 
 export default function ScanCalendarScreen() {
@@ -72,28 +76,36 @@ export default function ScanCalendarScreen() {
                 },
                 {
                   type: "text",
-                  text: `This is a screenshot of an Airbnb host calendar. 
+                  text: `This is an Airbnb host calendar screenshot.
 
-The calendar shows guest bookings as dark/black horizontal bars spanning multiple days. Each bar has the guest's name on it.
+The calendar shows guest bookings as solid BLACK horizontal bars spanning multiple days. Each bar has a guest name on it.
 
-Please identify:
-1. The property name shown at the top of the screen
-2. The month shown
-3. For each booking bar, identify the CHECKOUT date which is the day AFTER the booking bar ends
+IMPORTANT RULES:
+- A cleaning is needed on the EXACT DAY the black bar ENDS
+- The last day of the black bar is the checkout/cleaning day
+- Do NOT add a cleaning for days in the MIDDLE of a black bar
+- Do NOT add a cleaning if the black bar continues past the visible screen
+- Only add cleanings where a black bar visibly ENDS and is followed by empty/white days
+- Mark sameDayTurnover true when one guest checks out on a date and another black bar starts on that exact same date
 
-For example if a booking bar ends on the 9th, the checkout/cleaning date is the 9th (the last day of the bar is checkout day).
+Looking at the screenshot:
+- What is the property name at the top?
+- What month is shown?
+- For each black bar that has a visible END point, what is the last day of that bar?
+- For each checkout, does a different booking start on that same date?
 
 Today is ${new Date().toDateString()}.
 
-Respond ONLY with valid JSON, no markdown, no explanation:
+Respond ONLY with valid JSON, no markdown:
 {
-  "property": "exact property name from top of screen",
+  "property": "exact property name",
   "month": "May 2026",
   "checkouts": [
-    {"date": "Sat, May 9 2026", "guest": "Guest Name"},
-    {"date": "Tue, May 19 2026", "guest": "Guest Name"}
+    {"date": "Sat, May 9 2026", "guest": "Guest Name", "sameDayTurnover": false}
   ]
-}`,
+}
+
+If a booking bar does not have a clear end point visible in the screenshot, do NOT include it.`,
                 },
               ],
             },
@@ -102,7 +114,7 @@ Respond ONLY with valid JSON, no markdown, no explanation:
       });
 
       const data = await response.json();
-      
+
       if (data.error) {
         Alert.alert("API Error", data.error.message);
         setLoading(false);
@@ -117,6 +129,7 @@ Respond ONLY with valid JSON, no markdown, no explanation:
         date: c.date,
         address: parsed.property || "Airbnb Property",
         type: "Airbnb Turnover",
+        sameDayTurnover: c.sameDayTurnover === true,
       }));
       setDetectedJobs(jobs);
 
@@ -133,6 +146,9 @@ Respond ONLY with valid JSON, no markdown, no explanation:
         ...job,
         done: false,
         completedAt: null,
+        assignedTo: null,
+        assignedToName: null,
+        startedAt: null,
       });
     }
     Alert.alert("Added!", `${detectedJobs.length} cleaning jobs added to your calendar.`);
@@ -145,45 +161,55 @@ Respond ONLY with valid JSON, no markdown, no explanation:
 
   return (
     <View style={styles.container}>
-      <TouchableOpacity onPress={() => router.back()} style={styles.back}>
-        <Text style={styles.backText}>Back</Text>
+      <TouchableOpacity onPress={() => router.back()} style={styles.back} hitSlop={8}>
+        <Ionicons name="chevron-back" size={20} color={colors.tealDark} />
+        <Text style={styles.backText}>Jobs</Text>
       </TouchableOpacity>
-      <Text style={styles.appTitle}>TurnTrack</Text>
-      <Text style={styles.header}>Scan calendar</Text>
-      <Text style={styles.sub}>Upload a screenshot of your Airbnb calendar to automatically detect checkout dates</Text>
+      <Text style={type.wordmark}>TurnTrack</Text>
+      <Text style={[type.title, { marginTop: 2 }]}>Scan calendar</Text>
+      <Text style={styles.sub}>Upload a screenshot of your Airbnb calendar and the checkout dates get detected automatically.</Text>
 
-      <TouchableOpacity style={styles.uploadBtn} onPress={pickImage}>
-        <Text style={styles.uploadBtnText}>{image ? "Choose different photo" : "Upload calendar screenshot"}</Text>
-      </TouchableOpacity>
+      <BrandButton
+        label={image ? "Choose a different photo" : "Upload calendar screenshot"}
+        icon="image-outline"
+        onPress={pickImage}
+        style={{ marginBottom: 14 }}
+      />
 
       {image && (
         <Image source={{ uri: image }} style={styles.preview} resizeMode="contain" />
       )}
 
       {loading && (
-        <View style={styles.loadingBox}>
-          <ActivityIndicator color="#1A7ABF" />
-          <Text style={styles.loadingText}>Scanning with AI — this takes a few seconds...</Text>
-        </View>
+        <Card style={styles.loadingBox}>
+          <ActivityIndicator color={colors.teal} />
+          <Text style={styles.loadingText}>Scanning with AI — this takes a few seconds…</Text>
+        </Card>
       )}
 
       {detectedJobs.length > 0 && (
-        <ScrollView style={styles.results}>
-          <Text style={styles.resultsTitle}>Found {detectedJobs.length} cleaning(s) for {propertyName}:</Text>
+        <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+          <Text style={styles.resultsTitle}>Found {detectedJobs.length} cleaning{detectedJobs.length === 1 ? "" : "s"} for {propertyName}</Text>
           {detectedJobs.map((job, i) => (
-            <View key={i} style={styles.jobRow}>
-              <View style={styles.jobInfo}>
+            <Card key={i} tone={job.sameDayTurnover ? "gold" : "default"} style={styles.jobRow}>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.jobDate}>{job.date}</Text>
-                <Text style={styles.jobType}>{job.type}</Text>
+                <View style={styles.jobPills}>
+                  <Pill label={job.type} tone="teal" />
+                  {job.sameDayTurnover && <Pill label="Same-day" tone="gold" icon="alert-circle" />}
+                </View>
               </View>
-              <TouchableOpacity onPress={() => removeJob(i)} style={styles.removeBtn}>
-                <Text style={styles.removeBtnText}>✕</Text>
+              <TouchableOpacity onPress={() => removeJob(i)} hitSlop={8}>
+                <Ionicons name="close-circle-outline" size={22} color={colors.faint} />
               </TouchableOpacity>
-            </View>
+            </Card>
           ))}
-          <TouchableOpacity style={styles.addAllBtn} onPress={addAllJobs}>
-            <Text style={styles.addAllBtnText}>Add all {detectedJobs.length} jobs</Text>
-          </TouchableOpacity>
+          <BrandButton
+            label={`Add all ${detectedJobs.length} jobs`}
+            icon="checkmark-done"
+            onPress={addAllJobs}
+            style={{ marginTop: 6 }}
+          />
         </ScrollView>
       )}
     </View>
@@ -191,25 +217,15 @@ Respond ONLY with valid JSON, no markdown, no explanation:
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#E8F4FD", paddingTop: 60, paddingHorizontal: 20 },
-  back: { marginBottom: 8 },
-  backText: { fontSize: 15, color: "#1A7ABF" },
-  appTitle: { fontSize: 11, fontWeight: "500", color: "#1A7ABF", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 },
-  header: { fontSize: 26, fontWeight: "500", color: "#0A1F35", marginBottom: 4 },
-  sub: { fontSize: 14, color: "#7AAEC8", marginBottom: 20, lineHeight: 20 },
-  uploadBtn: { backgroundColor: "#1A7ABF", borderRadius: 12, padding: 15, alignItems: "center", marginBottom: 16 },
-  uploadBtnText: { color: "#FFFFFF", fontWeight: "500", fontSize: 15 },
-  preview: { width: "100%", height: 200, borderRadius: 12, marginBottom: 16 },
-  loadingBox: { flexDirection: "row", alignItems: "center", gap: 10, padding: 16, backgroundColor: "#FFFFFF", borderRadius: 12, marginBottom: 16 },
-  loadingText: { fontSize: 14, color: "#7AAEC8", flex: 1 },
-  results: { flex: 1 },
-  resultsTitle: { fontSize: 15, fontWeight: "500", color: "#0A1F35", marginBottom: 12 },
-  jobRow: { backgroundColor: "#FFFFFF", borderRadius: 12, padding: 14, marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 0.5, borderColor: "#C8E4F5" },
-  jobInfo: { flex: 1 },
-  jobDate: { fontSize: 14, fontWeight: "500", color: "#0A1F35" },
-  jobType: { fontSize: 12, color: "#7AAEC8", marginTop: 2 },
-  removeBtn: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#F0F7FF", alignItems: "center", justifyContent: "center" },
-  removeBtnText: { fontSize: 11, color: "#7AAEC8" },
-  addAllBtn: { backgroundColor: "#1A7ABF", borderRadius: 12, padding: 15, alignItems: "center", marginVertical: 16 },
-  addAllBtnText: { color: "#FFFFFF", fontWeight: "500", fontSize: 15 },
+  container: { flex: 1, backgroundColor: colors.bg, paddingTop: 56, paddingHorizontal: 20 },
+  back: { flexDirection: "row", alignItems: "center", marginBottom: 10, alignSelf: "flex-start" },
+  backText: { fontSize: 15, fontWeight: "600", color: colors.tealDark },
+  sub: { fontSize: 14, color: colors.muted, marginTop: 4, marginBottom: 18, lineHeight: 20 },
+  preview: { width: "100%", height: 180, borderRadius: radius.md, marginBottom: 14, backgroundColor: colors.card },
+  loadingBox: { flexDirection: "row", alignItems: "center", gap: 12 },
+  loadingText: { fontSize: 14, color: colors.muted, flex: 1 },
+  resultsTitle: { fontSize: 15.5, fontWeight: "700", color: colors.ink, marginBottom: 10 },
+  jobRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  jobDate: { fontSize: 14.5, fontWeight: "700", color: colors.ink, marginBottom: 7 },
+  jobPills: { flexDirection: "row", gap: 6 },
 });

@@ -9,6 +9,15 @@ A cross-platform mobile app (iOS & Android) built to automate job scheduling for
 - Calendar view with job details and completion tracking
 - Jobs automatically disappear 24 hours after being marked done
 
+## Crew management (Team, assignments, time tracking, payroll)
+- **Team screen** — add cleaners with an hourly rate, phone, and Zelle contact; deactivate or delete them
+- **Assignments** — assign any job to a cleaner from the job detail screen; the assignee shows on job cards, the calendar, and day-of notifications
+- **Time tracking** — Start cleaning / Finish cleaning timer on each job; finishing logs a time entry (minutes × the cleaner's hourly rate) and marks the job done
+- **Checklist** — each job carries its own tappable checklist with progress tracking
+- **Payroll screen** — unpaid hours and amount owed per cleaner, mark-paid-via-Zelle (with a copy-Zelle-contact button), manual time corrections, and paid history
+
+Firestore collections: `jobs`, `pushTokens`, `employees`, `timeEntries`. The security rules must allow read/write on all four.
+
 ## Tech Stack
 - **React Native** + **TypeScript** — cross-platform mobile (iOS & Android)
 - **Expo** + **Expo Router** — framework and navigation
