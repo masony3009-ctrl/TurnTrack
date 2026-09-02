@@ -6,7 +6,7 @@ import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "rea
 import { useProfile } from "../../components/ProfileProvider";
 import { BrandButton, Card, EmptyState, Fab, FormInput, IconButton, Pill, ScreenHeader, SheetModal } from "../../components/ui";
 import { db } from "../../firebase";
-import { debugNotifications, registerForPushNotifications, scheduleTodaysJobNotifications, sendTestNotification } from "../../notifications";
+import { registerForPushNotifications, scheduleTodaysJobNotifications, sendTestNotification } from "../../notifications";
 import { colors, radius } from "../../theme";
 import { hasSameDayTurnover, parseJobDateToDate } from "../../turnover";
 import { Job } from "../../types";
@@ -65,7 +65,6 @@ export default function JobsScreen() {
   useEffect(() => {
     const relevant = selfId ? jobs.filter(j => j.assignedTo === selfId) : jobs;
     scheduleTodaysJobNotifications(relevant);
-    debugNotifications(relevant);
   }, [jobs, selfId]);
 
   const toggleDone = async (id: string, current: boolean) => {

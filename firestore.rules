@@ -1,0 +1,32 @@
+rules_version = '2';
+
+// These are the rules CURRENTLY DEPLOYED to the cleanerapp-3f196 project
+// (open access — the app has no Firebase Auth yet; roles and PINs are
+// enforced in the app UI only).
+//
+// A stricter, auth-required version of these rules was drafted alongside
+// SECURITY_SETUP.md (see git history of this file / the security-fixes
+// branch). Do NOT deploy that version until the app actually signs users
+// in via Firebase Auth — deploying it now would lock every phone out.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /jobs/{jobId} {
+      allow read, write: if true;
+    }
+    match /pushTokens/{tokenId} {
+      allow read, write: if true;
+    }
+    match /employees/{employeeId} {
+      allow read, write: if true;
+    }
+    match /timeEntries/{entryId} {
+      allow read, write: if true;
+    }
+    match /devices/{deviceId} {
+      allow read, write: if true;
+    }
+    match /settings/{settingId} {
+      allow read, write: if true;
+    }
+  }
+}

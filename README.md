@@ -34,5 +34,7 @@ Available on iOS via TestFlight. Built and deployed using Expo EAS.
 ## Setup
 1. Clone the repo
 2. Run `npm install`
-3. Copy `firebaseConfig.example.ts` to `firebaseConfig.ts` and add your Firebase credentials
-4. Run `npx expo start`
+3. Run `npx expo start`
+
+## Security
+Current state: Firestore rules are open per-collection (no Firebase Auth; roles and PINs are enforced in the app UI), and the calendar-scan Anthropic key ships as an `EXPO_PUBLIC_` env var managed in EAS. A hardened setup — Anthropic key server-side in a Cloud Function, Firestore locked behind authentication — is drafted in [SECURITY_SETUP.md](./SECURITY_SETUP.md) and `functions/`, but is **not yet deployed** (it needs the Blaze plan, anonymous auth enabled, and the auth-required rules published together with an app build that signs in). `firestore.rules` in this repo mirrors what is actually deployed.
