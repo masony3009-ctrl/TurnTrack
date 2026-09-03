@@ -59,3 +59,43 @@ export function initialsOf(name: string): string {
   if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
+
+// Distinct colors for cleaners so the calendar and job cards show at a glance
+// who has which cleaning. Teal and gold are reserved for the app itself.
+export const cleanerPalette: string[] = [
+  "#E5624F", // coral
+  "#7B61D1", // violet
+  "#2F8BD6", // sky
+  "#6FA321", // lime
+  "#C9408F", // magenta
+  "#D98A12", // amber
+  "#2E4A9E", // navy
+  "#8C8A1A", // olive
+  "#8E3B6B", // plum
+  "#3A9E7A", // jade
+];
+
+export const unassignedColor = colors.gold;
+
+type Colorable = { id: string; color?: string | null } | null | undefined;
+
+// A cleaner's color, falling back to a stable palette pick for older
+// employee records that were created before colors existed.
+export function cleanerColor(employee: Colorable): string {
+  if (!employee) return unassignedColor;
+  if (employee.color) return employee.color;
+  let hash = 0;
+  for (const ch of employee.id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return cleanerPalette[hash % cleanerPalette.length];
+}
+
+export function pickUnusedColor(employees: { color?: string | null }[]): string {
+  const used = new Set(employees.map(e => e.color).filter(Boolean));
+  return cleanerPalette.find(c => !used.has(c)) || cleanerPalette[employees.length % cleanerPalette.length];
+}
+
+// "#RRGGBB" -> translucent tint for backgrounds behind colored text.
+export function tint(hex: string, alpha = 0.16): string {
+  const a = Math.round(alpha * 255).toString(16).padStart(2, "0");
+  return `${hex}${a}`;
+}

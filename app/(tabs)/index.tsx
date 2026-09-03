@@ -1,24 +1,15 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { addDoc, collection, deleteDoc, doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, onSnapshot, setDoc, updateDoc } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useProfile } from "../../components/ProfileProvider";
 import { BrandButton, Card, EmptyState, Fab, FormInput, IconButton, Pill, ScreenHeader, SheetModal } from "../../components/ui";
 import { db } from "../../firebase";
 import { registerForPushNotifications, scheduleTodaysJobNotifications, sendTestNotification } from "../../notifications";
-import { colors, radius } from "../../theme";
-import { hasSameDayTurnover, parseJobDateToDate } from "../../turnover";
-import { Job } from "../../types";
-
-function daysFromToday(dateStr: string): number | null {
-  const date = parseJobDateToDate(dateStr);
-  if (!date) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  date.setHours(0, 0, 0, 0);
-  return Math.round((date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-}
+import { cleanerColor, colors, radius } from "../../theme";
+import { daysFromToday, hasSameDayTurnover, HIDE_AFTER_DAYS, isJobVisible, parseJobDateToDate } from "../../turnover";
+import { DEFAULT_CHECKLIST, Job, parseChecklistText } from "../../types";
 
 export default function JobsScreen() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -28,13 +19,27 @@ export default function JobsScreen() {
   const [newType, setNewType] = useState("");
   const [newSameDayTurnover, setNewSameDayTurnover] = useState(false);
   const [mineOnly, setMineOnly] = useState(false);
+  const [showChecklistEditor, setShowChecklistEditor] = useState(false);
+  const [checklistText, setChecklistText] = useState("");
+  const [checklistTemplate, setChecklistTemplate] = useState<string[]>(DEFAULT_CHECKLIST);
   const router = useRouter();
-  const { state, switchProfile } = useProfile();
+  const { state, switchProfile, employees, deviceId } = useProfile();
   const isOwner = state.status === "owner";
   const selfId = state.status === "cleaner" ? state.employee.id : null;
 
   useEffect(() => {
-    registerForPushNotifications();
+    registerForPushNotifications(deviceId);
+  }, [deviceId]);
+
+  // The owner's checklist template lives at settings/checklist.
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "settings", "checklist"), (snap) => {
+      const items = snap.data()?.items;
+      setChecklistTemplate(Array.isArray(items) && items.length > 0 ? items : DEFAULT_CHECKLIST);
+    }, (error) => {
+      console.warn("checklist listener error:", error);
+    });
+    return unsub;
   }, []);
 
   useEffect(() => {
@@ -44,13 +49,9 @@ export default function JobsScreen() {
         ...d.data()
       })) as Job[];
 
-      const now = Date.now();
-      const filtered = loaded.filter(job => {
-        if (!job.done) return true;
-        if (!job.completedAt) return true;
-        const hoursSinceDone = (now - job.completedAt) / (1000 * 60 * 60);
-        return hoursSinceDone < 24;
-      });
+      // Cancelled jobs and jobs more than a couple of days past their
+      // cleaning date drop off the phones but stay in Firestore.
+      const filtered = loaded.filter(isJobVisible);
 
       filtered.sort((a, b) => {
         return (parseJobDateToDate(a.date)?.getTime() || 0) - (parseJobDateToDate(b.date)?.getTime() || 0);
@@ -89,6 +90,27 @@ export default function JobsScreen() {
         }
       ]
     );
+  };
+
+  const openChecklistEditor = () => {
+    setChecklistText(checklistTemplate.join("\n"));
+    setShowChecklistEditor(true);
+  };
+
+  const saveChecklist = async () => {
+    const items = parseChecklistText(checklistText);
+    if (items.length === 0) {
+      Alert.alert("Empty checklist", "Add at least one item, one per line.");
+      return;
+    }
+    try {
+      await setDoc(doc(db, "settings", "checklist"), { items, updatedAt: Date.now() });
+      setShowChecklistEditor(false);
+      Alert.alert("Checklist saved", `${items.length} items. New cleanings will use this list.`);
+    } catch (e) {
+      console.warn("save checklist failed:", e);
+      Alert.alert("Couldn't save", "The checklist didn't save. Check your connection and try again.");
+    }
   };
 
   const addJob = async () => {
@@ -135,6 +157,7 @@ export default function JobsScreen() {
         right={
           <>
             {isOwner && <IconButton icon="scan-outline" onPress={() => router.push("/scan-calendar")} />}
+            {isOwner && <IconButton icon="list-outline" onPress={openChecklistEditor} />}
             {isOwner && <IconButton icon="notifications-outline" onPress={sendTestNotification} />}
             <IconButton icon="swap-horizontal" onPress={switchProfile} />
           </>
@@ -173,6 +196,20 @@ export default function JobsScreen() {
         </View>
       )}
 
+      <SheetModal visible={showChecklistEditor} title="Cleaning checklist" onClose={() => setShowChecklistEditor(false)}>
+        <Text style={styles.checklistHint}>
+          One item per line. Every new cleaning gets this list, and it pops up when a cleaner taps Start cleaning.
+        </Text>
+        <FormInput
+          label="Checklist items"
+          placeholder={"Strip all beds\nWash and dry all laundry\n…"}
+          value={checklistText}
+          onChangeText={setChecklistText}
+          multiline
+        />
+        <BrandButton label="Save checklist" icon="checkmark" onPress={saveChecklist} />
+      </SheetModal>
+
       <SheetModal visible={showForm} title="New job" onClose={() => setShowForm(false)}>
         <FormInput label="Date" placeholder="e.g. Mon Mar 24" value={newDate} onChangeText={setNewDate} />
         <FormInput label="Address" placeholder="Property address" value={newAddress} onChangeText={setNewAddress} />
@@ -205,12 +242,14 @@ export default function JobsScreen() {
             <EmptyState
               icon="sparkles-outline"
               title="No jobs yet"
-              body="Jobs from your booking emails land here automatically. You can also scan an Airbnb calendar or add one by hand."
+              body={`Jobs from your booking emails land here automatically. You can also scan an Airbnb calendar or add one by hand. Finished jobs clear out ${HIDE_AFTER_DAYS} days after the cleaning date.`}
             />
           )
         )}
         {visibleJobs.map((job) => {
           const sameDay = hasSameDayTurnover(job);
+          const assignee = job.assignedTo ? employees.find(e => e.id === job.assignedTo) : null;
+          const assigneeColor = job.assignedTo ? cleanerColor(assignee || { id: job.assignedTo }) : colors.gold;
           return (
             <TouchableOpacity
               key={job.id}
@@ -245,9 +284,9 @@ export default function JobsScreen() {
                     <Ionicons
                       name={job.assignedToName ? "person-circle" : "person-circle-outline"}
                       size={20}
-                      color={job.assignedToName ? colors.tealDark : colors.gold}
+                      color={assigneeColor}
                     />
-                    <Text style={job.assignedToName ? styles.assignee : styles.unassigned}>
+                    <Text style={job.assignedToName ? [styles.assignee, { color: assigneeColor }] : styles.unassigned}>
                       {job.assignedToName || "Unassigned"}
                     </Text>
                   </View>
@@ -271,6 +310,7 @@ export default function JobsScreen() {
 }
 
 const styles = StyleSheet.create({
+  checklistHint: { fontSize: 13.5, color: colors.muted, lineHeight: 19, marginBottom: 12 },
   container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
   statRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
   statChip: {

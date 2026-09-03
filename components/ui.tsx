@@ -1,9 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import { ReactNode } from "react";
 import { Dimensions, Image, KeyboardAvoidingView, KeyboardTypeOptions, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, ViewStyle } from "react-native";
-import { colors, initialsOf, radius, shadow, type } from "../theme";
+import { cleanerPalette, colors, initialsOf, radius, shadow, tint, type } from "../theme";
 
-export function FormInput({ label, value, onChangeText, placeholder, keyboardType, autoCapitalize, secure }: {
+export function FormInput({ label, value, onChangeText, placeholder, keyboardType, autoCapitalize, secure, multiline }: {
   label: string;
   value: string;
   onChangeText: (text: string) => void;
@@ -11,12 +11,15 @@ export function FormInput({ label, value, onChangeText, placeholder, keyboardTyp
   keyboardType?: KeyboardTypeOptions;
   autoCapitalize?: "none" | "sentences" | "words" | "characters";
   secure?: boolean;
+  multiline?: boolean;
 }) {
   return (
     <View style={{ marginBottom: 12 }}>
       <Text style={styles.inputLabel}>{label}</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, multiline && styles.inputMultiline]}
+        multiline={multiline}
+        textAlignVertical={multiline ? "top" : undefined}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
@@ -101,12 +104,15 @@ export function Pill({ label, tone = "teal", icon }: {
   );
 }
 
-export function Avatar({ name, size = 40, muted, photo }: {
+export function Avatar({ name, size = 40, muted, photo, color }: {
   name: string;
   size?: number;
   muted?: boolean;
   photo?: string | null;
+  color?: string;
 }) {
+  const bg = muted ? colors.bg : color ? tint(color, 0.18) : colors.tealSoft;
+  const fg = muted ? colors.faint : color || colors.tealDark;
   if (photo) {
     return (
       <Image
@@ -119,10 +125,10 @@ export function Avatar({ name, size = 40, muted, photo }: {
     <View
       style={[
         styles.avatar,
-        { width: size, height: size, borderRadius: size / 2, backgroundColor: muted ? colors.bg : colors.tealSoft },
+        { width: size, height: size, borderRadius: size / 2, backgroundColor: bg },
       ]}
     >
-      <Text style={[styles.avatarText, { fontSize: size * 0.38, color: muted ? colors.faint : colors.tealDark }]}>
+      <Text style={[styles.avatarText, { fontSize: size * 0.38, color: fg }]}>
         {initialsOf(name)}
       </Text>
     </View>
@@ -230,12 +236,50 @@ export function ErrorState({ title, body }: { title: string; body: string }) {
   );
 }
 
+export function ColorDot({ color, size = 10, style }: { color: string; size?: number; style?: ViewStyle }) {
+  return <View style={[{ width: size, height: size, borderRadius: size / 2, backgroundColor: color }, style]} />;
+}
+
+export function ColorPicker({ label, value, onChange }: {
+  label: string;
+  value: string;
+  onChange: (hex: string) => void;
+}) {
+  return (
+    <View style={{ marginBottom: 12 }}>
+      <Text style={styles.inputLabel}>{label}</Text>
+      <View style={styles.swatchRow}>
+        {cleanerPalette.map(hex => {
+          const selected = hex === value;
+          return (
+            <TouchableOpacity
+              key={hex}
+              onPress={() => onChange(hex)}
+              style={[styles.swatch, { backgroundColor: hex }, selected && styles.swatchSelected]}
+              hitSlop={4}
+            >
+              {selected ? <Ionicons name="checkmark" size={16} color={colors.white} /> : null}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   inputLabel: { fontSize: 12, fontWeight: "600", color: colors.muted, marginBottom: 5, letterSpacing: 0.3 },
   input: {
     borderWidth: 1, borderColor: colors.line, borderRadius: radius.md,
     paddingHorizontal: 13, paddingVertical: 11, fontSize: 15, color: colors.ink, backgroundColor: colors.bg,
   },
+  inputMultiline: { minHeight: 180, lineHeight: 21 },
+  swatchRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  swatch: {
+    width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center",
+    borderWidth: 2, borderColor: "transparent",
+  },
+  swatchSelected: { borderColor: colors.ink },
   headerWrap: { flexDirection: "row", alignItems: "flex-start", paddingTop: 60, paddingBottom: 16 },
   headerRight: { flexDirection: "row", gap: 8, marginTop: 14 },
   iconBtn: {

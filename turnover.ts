@@ -54,3 +54,23 @@ export function parseJobDateToKey(dateStr: string): string | null {
 export function hasSameDayTurnover(job: JobLike): boolean {
   return job.sameDayTurnover === true;
 }
+
+export function daysFromToday(dateStr: string): number | null {
+  const date = parseJobDateToDate(dateStr);
+  if (!date) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  date.setHours(0, 0, 0, 0);
+  return Math.round((date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+// Jobs leave the app this many days after the cleaning date. They stay in
+// Firestore; this only controls what the phones show.
+export const HIDE_AFTER_DAYS = 2;
+
+export function isJobVisible(job: { date: string; cancelled?: boolean }): boolean {
+  if (job.cancelled) return false;
+  const days = daysFromToday(job.date);
+  if (days === null) return true;
+  return days >= -HIDE_AFTER_DAYS;
+}

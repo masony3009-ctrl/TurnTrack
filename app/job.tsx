@@ -6,9 +6,10 @@ import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "rea
 import { useProfile } from "../components/ProfileProvider";
 import { Avatar, BrandButton, Card, Pill, SheetModal } from "../components/ui";
 import { db } from "../firebase";
+import { assignmentMessage, cancellationMessage, sendPushToEmployee, unassignedMessage } from "../notifications";
 import { computeEarned, formatDuration, formatElapsed, formatMoney, minutesBetween } from "../payroll";
-import { colors, radius, type } from "../theme";
-import { buildChecklist, Employee, Job } from "../types";
+import { cleanerColor, colors, radius, type } from "../theme";
+import { buildChecklist, ChecklistItem, DEFAULT_CHECKLIST, Employee, Job } from "../types";
 
 export default function JobDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -17,10 +18,22 @@ export default function JobDetail() {
   const [missing, setMissing] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [showAssign, setShowAssign] = useState(false);
+  const [showChecklist, setShowChecklist] = useState(false);
   const [now, setNow] = useState(Date.now());
   const checklistInitialized = useRef(false);
+  const templateRef = useRef<string[]>(DEFAULT_CHECKLIST);
   const { state } = useProfile();
   const isOwner = state.status === "owner";
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "settings", "checklist"), (snapshot) => {
+      const items = snapshot.data()?.items;
+      templateRef.current = Array.isArray(items) && items.length > 0 ? items : DEFAULT_CHECKLIST;
+    }, (error) => {
+      console.warn("checklist template listener error:", error);
+    });
+    return unsub;
+  }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -34,7 +47,7 @@ export default function JobDetail() {
       setJob(data);
       if (!data.checklist && !checklistInitialized.current) {
         checklistInitialized.current = true;
-        updateDoc(doc(db, "jobs", id), { checklist: buildChecklist() });
+        updateDoc(doc(db, "jobs", id), { checklist: buildChecklist(templateRef.current) });
       }
     }, (error) => {
       console.warn("job listener error:", error);
@@ -62,12 +75,21 @@ export default function JobDetail() {
 
   const assign = async (emp: Employee | null) => {
     if (!job) return;
+    const previousId = job.assignedTo || null;
+    if ((emp ? emp.id : null) === previousId) {
+      setShowAssign(false);
+      return;
+    }
     try {
       await updateDoc(doc(db, "jobs", job.id), {
         assignedTo: emp ? emp.id : null,
         assignedToName: emp ? emp.name : null,
       });
       setShowAssign(false);
+      // Tell the new cleaner, and the old one if there was one. Pushes go to
+      // whichever phones are signed in as them; failures are logged, not shown.
+      if (emp) sendPushToEmployee(emp.id, assignmentMessage({ ...job, assignedTo: emp.id, assignedToName: emp.name }));
+      if (previousId) sendPushToEmployee(previousId, unassignedMessage(job));
     } catch (e) {
       console.warn("assign failed:", e);
       Alert.alert("Couldn't assign", "The assignment didn't save. Check your connection and try again.");
@@ -81,10 +103,57 @@ export default function JobDetail() {
       return;
     }
     try {
-      await updateDoc(doc(db, "jobs", job.id), { startedAt: Date.now() });
+      const update: Partial<Job> = { startedAt: Date.now() };
+      if (!job.checklist || job.checklist.length === 0) {
+        update.checklist = buildChecklist(templateRef.current);
+      }
+      await updateDoc(doc(db, "jobs", job.id), update);
+      // The checklist pops up as soon as the timer starts.
+      setShowChecklist(true);
     } catch (e) {
       console.warn("start cleaning failed:", e);
       Alert.alert("Couldn't start the timer", "Check your connection and try again.");
+    }
+  };
+
+  const cancelCleaning = () => {
+    if (!job) return;
+    Alert.alert(
+      "Cancel this cleaning",
+      `Cancel ${job.address} on ${job.date}? It disappears from everyone's phone but stays in the records.${job.assignedToName ? ` ${job.assignedToName} will be notified.` : ""}`,
+      [
+        { text: "Keep it", style: "cancel" },
+        {
+          text: "Cancel cleaning",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await updateDoc(doc(db, "jobs", job.id), {
+                cancelled: true,
+                cancelledAt: Date.now(),
+                cancelReason: "Cancelled by owner",
+                startedAt: null,
+              });
+              if (job.assignedTo) sendPushToEmployee(job.assignedTo, cancellationMessage(job));
+              router.back();
+            } catch (e) {
+              console.warn("cancel failed:", e);
+              Alert.alert("Couldn't cancel", "Check your connection and try again.");
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const restoreCleaning = async () => {
+    if (!job) return;
+    try {
+      await updateDoc(doc(db, "jobs", job.id), { cancelled: false, cancelledAt: null, cancelReason: null });
+      if (job.assignedTo) sendPushToEmployee(job.assignedTo, assignmentMessage(job));
+    } catch (e) {
+      console.warn("restore failed:", e);
+      Alert.alert("Couldn't restore", "Check your connection and try again.");
     }
   };
 
@@ -195,6 +264,17 @@ export default function JobDetail() {
   const progress = checklist.length > 0 ? checkedCount / checklist.length : 0;
   const activeEmployees = employees.filter(e => e.active);
   const sameDay = job.sameDayTurnover === true;
+  const assignedEmployee = employees.find(e => e.id === job.assignedTo);
+  const assignedColor = job.assignedTo ? cleanerColor(assignedEmployee || { id: job.assignedTo }) : colors.gold;
+
+  const renderChecklist = (items: ChecklistItem[]) => items.map((item, i) => (
+    <TouchableOpacity key={i} style={styles.checkRow} onPress={() => toggleChecklistItem(i)}>
+      <View style={[styles.checkCircle, item.done && styles.checkCircleActive]}>
+        {item.done && <Ionicons name="checkmark" size={14} color={colors.white} />}
+      </View>
+      <Text style={[styles.checkItem, item.done && styles.checkItemDone]}>{item.text}</Text>
+    </TouchableOpacity>
+  ));
 
   return (
     <View style={styles.container}>
@@ -204,6 +284,7 @@ export default function JobDetail() {
       <View style={styles.heroPills}>
         <Pill label={job.type} tone="teal" />
         {sameDay && <Pill label="Same-day turnover" tone="gold" icon="alert-circle" />}
+        {job.cancelled && <Pill label="Cancelled" tone="danger" icon="close-circle" />}
       </View>
       <View style={styles.heroMeta}>
         <Ionicons name="calendar-clear-outline" size={14} color={colors.muted} />
@@ -222,7 +303,7 @@ export default function JobDetail() {
             style={[styles.assignOption, job.assignedTo === emp.id && styles.assignOptionActive]}
             onPress={() => assign(emp)}
           >
-            <Avatar name={emp.name} photo={emp.photo} size={34} />
+            <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} size={34} />
             <View style={{ flex: 1 }}>
               <Text style={styles.assignName}>{emp.name}</Text>
               {isOwner && <Text style={styles.assignRate}>{formatMoney(emp.hourlyRate)}/hr</Text>}
@@ -240,7 +321,31 @@ export default function JobDetail() {
         )}
       </SheetModal>
 
+      <SheetModal visible={showChecklist} title="Cleaning checklist" onClose={() => setShowChecklist(false)}>
+        <View style={styles.sheetProgressRow}>
+          <Text style={styles.sheetProgressText}>{checkedCount} of {checklist.length} done</Text>
+          <View style={[styles.progressTrack, { flex: 1, marginTop: 0, marginBottom: 0 }]}>
+            <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
+          </View>
+        </View>
+        {renderChecklist(checklist)}
+        <BrandButton
+          label={checkedCount === checklist.length && checklist.length > 0 ? "All done — close" : "Keep cleaning"}
+          icon={checkedCount === checklist.length && checklist.length > 0 ? "checkmark-done" : "sparkles"}
+          onPress={() => setShowChecklist(false)}
+          style={{ marginTop: 14 }}
+        />
+      </SheetModal>
+
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+        {job.cancelled && (
+          <View style={styles.cancelledBanner}>
+            <Ionicons name="close-circle" size={17} color={colors.danger} />
+            <Text style={styles.cancelledBannerText}>
+              This cleaning was cancelled{job.cancelReason ? ` (${job.cancelReason.toLowerCase()})` : ""}. It&apos;s hidden from the job list.
+            </Text>
+          </View>
+        )}
         {sameDay && (
           <View style={styles.sameDayBanner}>
             <Ionicons name="alert-circle" size={17} color={colors.goldDark} />
@@ -251,19 +356,22 @@ export default function JobDetail() {
         <Card>
           <View style={styles.assignHeader}>
             <Text style={type.section}>Assigned cleaner</Text>
-            <TouchableOpacity onPress={() => setShowAssign(true)} hitSlop={6}>
-              <Text style={styles.changeLink}>{job.assignedToName ? "Change" : "Assign"}</Text>
-            </TouchableOpacity>
+            {!job.cancelled && (
+              <TouchableOpacity onPress={() => setShowAssign(true)} hitSlop={6}>
+                <Text style={styles.changeLink}>{job.assignedToName ? "Change" : "Assign"}</Text>
+              </TouchableOpacity>
+            )}
           </View>
           <View style={styles.assignBody}>
             {job.assignedToName ? (
               <>
                 <Avatar
                   name={job.assignedToName}
-                  photo={employees.find(e => e.id === job.assignedTo)?.photo}
+                  photo={assignedEmployee?.photo}
+                  color={assignedColor}
                   size={38}
                 />
-                <Text style={styles.assignedName}>{job.assignedToName}</Text>
+                <Text style={[styles.assignedName, { color: assignedColor }]}>{job.assignedToName}</Text>
               </>
             ) : (
               <>
@@ -276,7 +384,7 @@ export default function JobDetail() {
           </View>
         </Card>
 
-        <Card>
+        {!job.cancelled && <Card>
           <Text style={type.section}>Time tracking</Text>
           {job.startedAt ? (
             <View style={styles.timerBlock}>
@@ -285,6 +393,7 @@ export default function JobDetail() {
                 <Text style={styles.liveText}>{job.assignedToName} is cleaning</Text>
               </View>
               <Text style={styles.timerText}>{formatElapsed(job.startedAt, now)}</Text>
+              <BrandButton label="Open checklist" icon="list" variant="outline" onPress={() => setShowChecklist(true)} style={{ marginBottom: 10 }} />
               <BrandButton label="Finish cleaning" icon="checkmark-circle" onPress={finishCleaning} />
               <TouchableOpacity style={styles.cancelTimerBtn} onPress={cancelTimer}>
                 <Text style={styles.cancelTimerText}>Discard timer</Text>
@@ -305,7 +414,7 @@ export default function JobDetail() {
               <BrandButton label="Start cleaning" icon="play" onPress={startCleaning} style={styles.startBtn} />
             </View>
           )}
-        </Card>
+        </Card>}
 
         <Card>
           <View style={styles.checklistHeader}>
@@ -315,21 +424,33 @@ export default function JobDetail() {
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
           </View>
-          {checklist.map((item, i) => (
-            <TouchableOpacity key={i} style={styles.checkRow} onPress={() => toggleChecklistItem(i)}>
-              <View style={[styles.checkCircle, item.done && styles.checkCircleActive]}>
-                {item.done && <Ionicons name="checkmark" size={14} color={colors.white} />}
-              </View>
-              <Text style={[styles.checkItem, item.done && styles.checkItemDone]}>{item.text}</Text>
-            </TouchableOpacity>
-          ))}
+          {renderChecklist(checklist)}
         </Card>
+        {isOwner && (
+          job.cancelled ? (
+            <BrandButton label="Restore this cleaning" icon="refresh" variant="outline" onPress={restoreCleaning} />
+          ) : (
+            <TouchableOpacity style={styles.cancelLink} onPress={cancelCleaning} hitSlop={6}>
+              <Ionicons name="close-circle-outline" size={16} color={colors.danger} />
+              <Text style={styles.cancelLinkText}>Cancel this cleaning</Text>
+            </TouchableOpacity>
+          )
+        )}
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  cancelledBanner: {
+    flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.dangerSoft,
+    borderRadius: radius.md, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: "#F3C8C8",
+  },
+  cancelledBannerText: { flex: 1, fontSize: 13.5, color: colors.danger, lineHeight: 19, fontWeight: "600" },
+  sheetProgressRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 6 },
+  sheetProgressText: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
+  cancelLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 14 },
+  cancelLinkText: { fontSize: 14, fontWeight: "600", color: colors.danger },
   container: { flex: 1, backgroundColor: colors.bg, paddingTop: 56, paddingHorizontal: 20 },
   back: { flexDirection: "row", alignItems: "center", marginBottom: 10, alignSelf: "flex-start" },
   backText: { fontSize: 15, fontWeight: "600", color: colors.tealDark },

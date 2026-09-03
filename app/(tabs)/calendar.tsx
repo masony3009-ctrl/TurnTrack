@@ -4,10 +4,11 @@ import { collection, onSnapshot } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Calendar } from "react-native-calendars";
-import { Card, Pill, ScreenHeader } from "../../components/ui";
+import { useProfile } from "../../components/ProfileProvider";
+import { Card, ColorDot, Pill, ScreenHeader } from "../../components/ui";
 import { db } from "../../firebase";
-import { colors, radius, shadow } from "../../theme";
-import { hasSameDayTurnover, parseJobDateToKey } from "../../turnover";
+import { cleanerColor, colors, radius, shadow, unassignedColor } from "../../theme";
+import { hasSameDayTurnover, isJobVisible, parseJobDateToKey } from "../../turnover";
 import { Job } from "../../types";
 
 export default function CalendarScreen() {
@@ -15,6 +16,10 @@ export default function CalendarScreen() {
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedJobs, setSelectedJobs] = useState<Job[]>([]);
   const router = useRouter();
+  const { employees } = useProfile();
+
+  const colorFor = (job: Job) =>
+    job.assignedTo ? cleanerColor(employees.find(e => e.id === job.assignedTo) || { id: job.assignedTo }) : unassignedColor;
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "jobs"), (snapshot) => {
@@ -22,20 +27,20 @@ export default function CalendarScreen() {
         id: d.id,
         ...d.data()
       })) as Job[];
-      setJobs(loaded);
+      setJobs(loaded.filter(isJobVisible));
     });
     return unsub;
   }, []);
 
+  // One dot per job, colored by the cleaner it's assigned to, so a day with
+  // three cleanings shows three dots and you can see who's where.
   const markedDates: { [key: string]: any } = {};
   jobs.forEach(job => {
     const parsed = parseJobDateToKey(job.date);
-    if (parsed) {
-      markedDates[parsed] = {
-        marked: true,
-        dotColor: hasSameDayTurnover(job) ? colors.gold : colors.teal,
-      };
-    }
+    if (!parsed) return;
+    const dots = markedDates[parsed]?.dots || [];
+    dots.push({ key: job.id, color: colorFor(job) });
+    markedDates[parsed] = { dots };
   });
 
   if (selectedDate) {
@@ -57,6 +62,7 @@ export default function CalendarScreen() {
       <ScreenHeader title="Calendar" subtitle="Tap a day to see its cleanings" />
       <View style={styles.calendarWrap}>
         <Calendar
+          markingType="multi-dot"
           markedDates={markedDates}
           onDayPress={handleDayPress}
           theme={{
@@ -79,16 +85,29 @@ export default function CalendarScreen() {
         />
       </View>
       <ScrollView style={{ marginTop: 14 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+        <View style={styles.legend}>
+          {employees.filter(e => e.active).map(emp => (
+            <View key={emp.id} style={styles.legendItem}>
+              <ColorDot color={cleanerColor(emp)} />
+              <Text style={styles.legendText}>{emp.name.split(" ")[0]}</Text>
+            </View>
+          ))}
+          <View style={styles.legendItem}>
+            <ColorDot color={unassignedColor} />
+            <Text style={styles.legendText}>Unassigned</Text>
+          </View>
+        </View>
         {selectedJobs.length > 0 ? (
           selectedJobs.map(job => {
             const sameDay = hasSameDayTurnover(job);
+            const jobColor = colorFor(job);
             return (
               <TouchableOpacity
                 key={job.id}
                 onPress={() => router.push({ pathname: "/job", params: { id: job.id } })}
                 activeOpacity={0.7}
               >
-                <Card tone={sameDay ? "gold" : "default"}>
+                <Card tone={sameDay ? "gold" : "default"} style={{ borderLeftWidth: 4, borderLeftColor: jobColor }}>
                   <View style={styles.pillRow}>
                     <Pill label={job.type} tone="teal" />
                     {sameDay && <Pill label="Same-day" tone="gold" icon="alert-circle" />}
@@ -98,9 +117,9 @@ export default function CalendarScreen() {
                     <Ionicons
                       name={job.assignedToName ? "person-circle" : "person-circle-outline"}
                       size={17}
-                      color={job.assignedToName ? colors.tealDark : colors.gold}
+                      color={jobColor}
                     />
-                    <Text style={job.assignedToName ? styles.assignee : styles.unassigned}>
+                    <Text style={job.assignedToName ? [styles.assignee, { color: jobColor }] : styles.unassigned}>
                       {job.assignedToName || "Unassigned"}
                     </Text>
                   </View>
@@ -122,6 +141,9 @@ export default function CalendarScreen() {
 }
 
 const styles = StyleSheet.create({
+  legend: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: 12, paddingHorizontal: 4 },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
+  legendText: { fontSize: 12, fontWeight: "600", color: colors.muted },
   container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
   calendarWrap: {
     borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line,

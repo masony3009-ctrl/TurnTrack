@@ -15,8 +15,14 @@ A cross-platform mobile app (iOS & Android) built to automate job scheduling for
 - **Time tracking** — Start cleaning / Finish cleaning timer on each job; finishing logs a time entry (minutes × the cleaner's hourly rate) and marks the job done
 - **Checklist** — each job carries its own tappable checklist with progress tracking
 - **Payroll screen** — unpaid hours and amount owed per cleaner, mark-paid-via-Zelle (with a copy-Zelle-contact button), manual time corrections, and paid history
+- **Assignment pushes** — assigning a job sends a push notification to the cleaner's phone(s); tapping it opens the job. Reassigning tells the previous cleaner, cancelling tells the assignee
+- **Checklist pop-up** — tapping Start cleaning opens the checklist as a sheet. The owner edits the template from the list icon on the Jobs tab (one item per line, stored at `settings/checklist`)
+- **Cancellations** — the owner can cancel a job from its detail screen (or the email script can set `cancelled: true`). Cancelled jobs are hidden everywhere but kept in Firestore
+- **Auto-cleanup** — jobs leave the phones 2 days after their cleaning date (`HIDE_AFTER_DAYS` in `turnover.ts`) but stay in Firestore
+- **Cleaner colors** — each cleaner has a color (Team tab). Calendar dots, job cards, and avatars use it, with a legend under the calendar
+- **Owner access** — the owner can open any cleaner's view without their PIN: "View as" on the Team tab, or the owner PIN on the sign-in screen
 
-Firestore collections: `jobs`, `pushTokens`, `employees`, `timeEntries`. The security rules must allow read/write on all four.
+Firestore collections: `jobs`, `pushTokens`, `employees`, `timeEntries`, `devices` (one per phone: role, employee, push token), `settings` (`owner` PIN, `checklist` template). The security rules must allow read/write on all of them.
 
 ## Tech Stack
 - **React Native** + **TypeScript** — cross-platform mobile (iOS & Android)

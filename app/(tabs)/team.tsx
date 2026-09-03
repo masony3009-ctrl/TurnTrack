@@ -4,10 +4,10 @@ import { useEffect, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { pickProfilePhoto } from "../../components/photo";
 import { useProfile } from "../../components/ProfileProvider";
-import { Avatar, BrandButton, Card, EmptyState, ErrorState, Fab, FormInput, Pill, ScreenHeader, SheetModal } from "../../components/ui";
+import { Avatar, BrandButton, Card, ColorPicker, EmptyState, ErrorState, Fab, FormInput, Pill, ScreenHeader, SheetModal } from "../../components/ui";
 import { db } from "../../firebase";
 import { formatMoney, parseRate } from "../../payroll";
-import { colors, radius } from "../../theme";
+import { cleanerColor, colors, pickUnusedColor, radius } from "../../theme";
 import { Employee } from "../../types";
 
 export default function TeamScreen() {
@@ -20,7 +20,8 @@ export default function TeamScreen() {
   const [phone, setPhone] = useState("");
   const [zelle, setZelle] = useState("");
   const [photo, setPhoto] = useState<string | null>(null);
-  const { state } = useProfile();
+  const [color, setColor] = useState<string>("");
+  const { state, viewAs } = useProfile();
   const isOwner = state.status === "owner";
   const self = state.status === "cleaner" ? state.employee : null;
 
@@ -52,6 +53,7 @@ export default function TeamScreen() {
     setPhone("");
     setZelle("");
     setPhoto(null);
+    setColor(pickUnusedColor(employees));
     setShowForm(true);
   };
 
@@ -62,6 +64,7 @@ export default function TeamScreen() {
     setPhone(emp.phone || "");
     setZelle(emp.zelle || "");
     setPhoto(emp.photo || null);
+    setColor(cleanerColor(emp));
     setShowForm(true);
   };
 
@@ -102,6 +105,7 @@ export default function TeamScreen() {
       phone: phone.trim(),
       zelle: zelle.trim(),
       photo,
+      color: color || pickUnusedColor(employees),
     };
     try {
       if (editingId) {
@@ -154,7 +158,7 @@ export default function TeamScreen() {
         onClose={() => setShowForm(false)}
       >
         <View style={styles.photoRow}>
-          <Avatar name={name || "?"} photo={photo} size={58} />
+          <Avatar name={name || "?"} photo={photo} color={color || undefined} size={58} />
           <View style={styles.photoActions}>
             <BrandButton
               label={photo ? "Change photo" : "Add photo"}
@@ -175,6 +179,9 @@ export default function TeamScreen() {
         )}
         {isOwner && (
           <FormInput label="Hourly rate" placeholder="e.g. 20" value={rate} onChangeText={setRate} keyboardType="decimal-pad" />
+        )}
+        {isOwner && (
+          <ColorPicker label="Calendar color" value={color} onChange={setColor} />
         )}
         <FormInput label="Phone (optional)" placeholder="(480) 555-1234" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
         <FormInput label="Zelle phone or email (optional)" placeholder="Where pay gets sent" value={zelle} onChangeText={setZelle} autoCapitalize="none" />
@@ -244,7 +251,7 @@ export default function TeamScreen() {
             >
               <Card style={!emp.active ? styles.cardInactive : undefined}>
                 <View style={styles.cardTop}>
-                  <Avatar name={emp.name} photo={emp.photo} muted={!emp.active} size={44} />
+                  <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} muted={!emp.active} size={44} />
                   <View style={styles.nameBlock}>
                     <Text style={styles.name}>{emp.name}</Text>
                     {canSeePay(emp) && <Text style={styles.rate}>{formatMoney(emp.hourlyRate)}/hr</Text>}
@@ -278,10 +285,18 @@ export default function TeamScreen() {
                   </View>
                 )}
                 {isOwner && (
-                  <TouchableOpacity style={styles.toggleBtn} onPress={() => toggleActive(emp)}>
-                    <Ionicons name={emp.active ? "pause-outline" : "play-outline"} size={13} color={colors.tealDark} />
-                    <Text style={styles.toggleBtnText}>{emp.active ? "Deactivate" : "Reactivate"}</Text>
-                  </TouchableOpacity>
+                  <View style={styles.ownerActions}>
+                    <TouchableOpacity style={styles.toggleBtn} onPress={() => toggleActive(emp)}>
+                      <Ionicons name={emp.active ? "pause-outline" : "play-outline"} size={13} color={colors.tealDark} />
+                      <Text style={styles.toggleBtnText}>{emp.active ? "Deactivate" : "Reactivate"}</Text>
+                    </TouchableOpacity>
+                    {emp.active && (
+                      <TouchableOpacity style={styles.toggleBtn} onPress={() => viewAs(emp)}>
+                        <Ionicons name="eye-outline" size={13} color={colors.tealDark} />
+                        <Text style={styles.toggleBtnText}>View as {emp.name.split(" ")[0]}</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 )}
               </Card>
             </TouchableOpacity>
@@ -295,6 +310,7 @@ export default function TeamScreen() {
 }
 
 const styles = StyleSheet.create({
+  ownerActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
   cardInactive: { opacity: 0.55 },
   cardTop: { flexDirection: "row", alignItems: "center", gap: 12 },

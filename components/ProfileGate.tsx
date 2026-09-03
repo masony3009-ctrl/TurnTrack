@@ -19,6 +19,9 @@ export function ProfileGate() {
   const [pinConfirm, setPinConfirm] = useState("");
   const [pinError, setPinError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Owner opening a cleaner's profile with the owner PIN instead of the
+  // cleaner's own PIN. Useful on a cleaner's phone before they've set one.
+  const [useOwnerPin, setUseOwnerPin] = useState(false);
 
   const activeCleaners = employees.filter(e => e.active);
 
@@ -27,6 +30,7 @@ export function ProfileGate() {
     setPinConfirm("");
     setPinError("");
     setBusy(false);
+    setUseOwnerPin(false);
   };
 
   const openCleaner = (employee: Employee) => {
@@ -54,7 +58,8 @@ export function ProfileGate() {
       setPinError("The PIN must be 4 to 8 digits.");
       return;
     }
-    if (target.creating && pinConfirm.trim() !== entered) {
+    const creating = target.creating && !(target.kind === "cleaner" && useOwnerPin);
+    if (creating && pinConfirm.trim() !== entered) {
       setPinError("The PINs don't match.");
       return;
     }
@@ -75,7 +80,15 @@ export function ProfileGate() {
         await assignDevice({ role: "owner" });
       } else {
         const emp = target.employee;
-        if (target.creating) {
+        if (useOwnerPin) {
+          const snap = await getDoc(doc(db, "settings", "owner"));
+          const ownerPin = snap.data()?.pin;
+          if (!ownerPin || entered !== ownerPin) {
+            setPinError(ownerPin ? "Wrong owner PIN — try again." : "No owner PIN has been set up yet.");
+            setBusy(false);
+            return;
+          }
+        } else if (target.creating) {
           await updateDoc(doc(db, "employees", emp.id), { pin: entered });
         } else {
           const snap = await getDoc(doc(db, "employees", emp.id));
@@ -153,7 +166,7 @@ export function ProfileGate() {
           <Text style={styles.checkingText}>Checking…</Text>
         ) : (
           <>
-            {target?.creating && (
+            {target?.creating && !useOwnerPin && (
               <Text style={styles.pinIntro}>
                 {target.kind === "owner"
                   ? "First time here — set the PIN that protects the owner side of the app. Share it only with people who should see payroll."
@@ -161,14 +174,14 @@ export function ProfileGate() {
               </Text>
             )}
             <FormInput
-              label={target?.creating ? "New PIN (4–8 digits)" : "PIN"}
+              label={useOwnerPin ? "Owner PIN" : target?.creating ? "New PIN (4–8 digits)" : "PIN"}
               placeholder="••••"
               value={pin}
               onChangeText={setPin}
               keyboardType="number-pad"
               secure
             />
-            {target?.creating && (
+            {target?.creating && !useOwnerPin && (
               <FormInput
                 label="Confirm PIN"
                 placeholder="••••"
@@ -182,10 +195,22 @@ export function ProfileGate() {
         )}
         {pinError ? <Text style={styles.pinErrorText}>{pinError}</Text> : null}
         <BrandButton
-          label={busy ? "One sec…" : target?.creating ? "Set PIN & sign in" : "Sign in"}
+          label={busy ? "One sec…" : target?.creating && !useOwnerPin ? "Set PIN & sign in" : "Sign in"}
           icon="lock-closed"
           onPress={submit}
         />
+        {target?.kind === "cleaner" && (
+          <TouchableOpacity
+            style={styles.ownerLink}
+            onPress={() => { setUseOwnerPin(!useOwnerPin); setPinError(""); setPin(""); setPinConfirm(""); }}
+            hitSlop={6}
+          >
+            <Ionicons name={useOwnerPin ? "person-outline" : "shield-checkmark-outline"} size={14} color={colors.tealDark} />
+            <Text style={styles.ownerLinkText}>
+              {useOwnerPin ? "Use the cleaner's PIN instead" : "Owner? Open this profile with the owner PIN"}
+            </Text>
+          </TouchableOpacity>
+        )}
       </SheetModal>
     </View>
   );
@@ -221,4 +246,6 @@ const styles = StyleSheet.create({
   checkingText: { fontSize: 14, color: colors.muted, marginBottom: 14 },
   pinIntro: { fontSize: 13.5, color: colors.muted, lineHeight: 19, marginBottom: 14 },
   pinErrorText: { fontSize: 13.5, fontWeight: "600", color: colors.danger, marginBottom: 12 },
+  ownerLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 14 },
+  ownerLinkText: { fontSize: 13, fontWeight: "600", color: colors.tealDark },
 });
