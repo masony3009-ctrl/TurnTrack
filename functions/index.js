@@ -5,28 +5,36 @@ const { defineSecret } = require("firebase-functions/params");
 // secret (see SECURITY_SETUP.md) and never ships to the client app.
 const ANTHROPIC_API_KEY = defineSecret("ANTHROPIC_API_KEY");
 
-const PROMPT = (today) => `This is a screenshot of an Airbnb host calendar.
+const PROMPT = (today) => `This is an Airbnb host calendar screenshot.
 
-The calendar shows guest bookings as dark/black horizontal bars spanning multiple days. Each bar has the guest's name on it.
+The calendar shows guest bookings as solid BLACK horizontal bars spanning multiple days. Each bar has a guest name on it.
 
-Please identify:
-1. The property name shown at the top of the screen
-2. The month shown
-3. For each booking bar, identify the CHECKOUT date which is the day AFTER the booking bar ends
+IMPORTANT RULES:
+- A cleaning is needed on the EXACT DAY the black bar ENDS
+- The last day of the black bar is the checkout/cleaning day
+- Do NOT add a cleaning for days in the MIDDLE of a black bar
+- Do NOT add a cleaning if the black bar continues past the visible screen
+- Only add cleanings where a black bar visibly ENDS and is followed by empty/white days
+- Mark sameDayTurnover true when one guest checks out on a date and another black bar starts on that exact same date
 
-For example if a booking bar ends on the 9th, the checkout/cleaning date is the 9th (the last day of the bar is checkout day).
+Looking at the screenshot:
+- What is the property name at the top?
+- What month is shown?
+- For each black bar that has a visible END point, what is the last day of that bar?
+- For each checkout, does a different booking start on that same date?
 
 Today is ${today}.
 
-Respond ONLY with valid JSON, no markdown, no explanation:
+Respond ONLY with valid JSON, no markdown:
 {
-  "property": "exact property name from top of screen",
+  "property": "exact property name",
   "month": "May 2026",
   "checkouts": [
-    {"date": "Sat, May 9 2026", "guest": "Guest Name"},
-    {"date": "Tue, May 19 2026", "guest": "Guest Name"}
+    {"date": "Sat, May 9 2026", "guest": "Guest Name", "sameDayTurnover": false}
   ]
-}`;
+}
+
+If a booking bar does not have a clear end point visible in the screenshot, do NOT include it.`;
 
 exports.scanCalendar = onCall(
   { secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, memory: "256MiB" },

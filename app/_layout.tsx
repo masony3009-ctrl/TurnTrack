@@ -30,8 +30,10 @@ function useNotificationTaps(ready: boolean) {
   useEffect(() => {
     if (Platform.OS === "web" || !ready) return;
 
+    // navigate() lands on the existing job screen if it's already on top
+    // instead of stacking a second copy.
     const open = (jobId: string | null) => {
-      if (jobId) router.push({ pathname: "/job", params: { id: jobId } });
+      if (jobId) router.navigate({ pathname: "/job", params: { id: jobId } });
     };
 
     const sub = Notifications.addNotificationResponseReceivedListener(response => {

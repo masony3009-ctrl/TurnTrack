@@ -1,9 +1,9 @@
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import { addDoc, collection, doc, getDocs, query, setDoc, where } from "firebase/firestore";
+import { collection, doc, getDocs, query, setDoc, where } from "firebase/firestore";
 import { Platform } from "react-native";
 import { db } from "./firebase";
-import { hasSameDayTurnover, parseJobDateToDate } from "./turnover";
+import { hasSameDayTurnover, jobDate, jobDateKey } from "./turnover";
 import { Job } from "./types";
 
 const isWeb = Platform.OS === "web";
@@ -23,9 +23,8 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// Registers for push and records the token both in the legacy pushTokens
-// collection and on this phone's device record, so jobs can be pushed to
-// whichever cleaner is signed in on this phone.
+// Registers for push and records the token on this phone's device record,
+// so jobs can be pushed to whichever cleaner is signed in on this phone.
 export async function registerForPushNotifications(deviceId?: string | null) {
   if (isWeb) return null;
   if (!Device.isDevice) return null;
@@ -58,11 +57,6 @@ export async function registerForPushNotifications(deviceId?: string | null) {
   ownToken = token;
 
   try {
-    const tokensRef = collection(db, "pushTokens");
-    const existing = await getDocs(query(tokensRef, where("token", "==", token)));
-    if (existing.empty) {
-      await addDoc(tokensRef, { token });
-    }
     if (deviceId) {
       await setDoc(doc(db, "devices", deviceId), { pushToken: token }, { merge: true });
     }
@@ -138,25 +132,42 @@ export function cancellationMessage(job: Job): PushMessage {
   };
 }
 
+// Local reminders for upcoming jobs. Reschedules only when the set of
+// relevant jobs actually changes (not on every checklist tick), and a newer
+// run always wins over one still in flight so cancelAll can't race.
+let scheduleGeneration = 0;
+let lastScheduleFingerprint = "";
+const MAX_REMINDER_JOBS = 30; // iOS keeps at most 64 pending local notifications
+
 export async function scheduleTodaysJobNotifications(jobs: Job[]) {
   if (isWeb) return;
-  await Notifications.cancelAllScheduledNotificationsAsync();
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const next30Days = jobs.filter(job => {
-    if (job.cancelled) return false;
-    const jobDate = parseJobDateToDate(job.date);
-    if (!jobDate) return false;
-    jobDate.setHours(0, 0, 0, 0);
-    const daysAhead = (jobDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
-    return daysAhead >= 0 && daysAhead <= 30;
-  });
+  const upcoming = jobs
+    .filter(job => !job.cancelled && !job.done)
+    .map(job => ({ job, date: jobDate(job) }))
+    .filter((x): x is { job: Job; date: Date } => {
+      if (!x.date) return false;
+      const daysAhead = (x.date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
+      return daysAhead >= 0 && daysAhead <= 30;
+    })
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .slice(0, MAX_REMINDER_JOBS);
 
-  for (const job of next30Days) {
-    const jobDate = parseJobDateToDate(job.date);
-    if (!jobDate) continue;
+  const fingerprint = upcoming
+    .map(({ job }) => [job.id, jobDateKey(job), job.address, job.type, job.assignedToName || "", job.sameDayTurnover ? 1 : 0].join("|"))
+    .join("\n");
+  if (fingerprint === lastScheduleFingerprint) return;
+  lastScheduleFingerprint = fingerprint;
+
+  const generation = ++scheduleGeneration;
+  await Notifications.cancelAllScheduledNotificationsAsync();
+
+  const now = new Date();
+  for (const { job, date } of upcoming) {
+    if (generation !== scheduleGeneration) return;
 
     const sameDay = hasSameDayTurnover(job);
     const assignee = job.assignedToName ? ` (${job.assignedToName})` : " (unassigned)";
@@ -165,14 +176,9 @@ export async function scheduleTodaysJobNotifications(jobs: Job[]) {
       : `${job.address} — ${job.type}${assignee}`;
     const data = { jobId: job.id };
 
-    const morningNotif = new Date(jobDate);
-    morningNotif.setHours(8, 0, 0, 0);
-
-    const now = new Date();
-    const isToday = jobDate.toDateString() === now.toDateString();
-
-    if (isToday && morningNotif <= now) {
-      const soonNotif = new Date(now.getTime() + 5 * 60 * 1000);
+    const morning = new Date(date);
+    morning.setHours(8, 0, 0, 0);
+    if (morning > now) {
       await Notifications.scheduleNotificationAsync({
         content: {
           title: sameDay ? "Same-day turnover today!" : "Cleaning today!",
@@ -180,29 +186,13 @@ export async function scheduleTodaysJobNotifications(jobs: Job[]) {
           sound: true,
           data,
         },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.DATE,
-          date: soonNotif,
-        },
-      });
-    } else if (morningNotif > now) {
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: sameDay ? "Same-day turnover today!" : "Cleaning today!",
-          body: jobSummary,
-          sound: true,
-          data,
-        },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.DATE,
-          date: morningNotif,
-        },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: morning },
       });
     }
 
-    const midnightNotif = new Date(jobDate);
-    midnightNotif.setHours(0, 1, 0, 0);
-    if (midnightNotif > now) {
+    const midnight = new Date(date);
+    midnight.setHours(0, 1, 0, 0);
+    if (midnight > now) {
       await Notifications.scheduleNotificationAsync({
         content: {
           title: sameDay ? "Same-day turnover scheduled today" : "Cleaning scheduled today",
@@ -210,10 +200,7 @@ export async function scheduleTodaysJobNotifications(jobs: Job[]) {
           sound: true,
           data,
         },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.DATE,
-          date: midnightNotif,
-        },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: midnight },
       });
     }
   }

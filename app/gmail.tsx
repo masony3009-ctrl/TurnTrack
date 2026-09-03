@@ -5,6 +5,8 @@ import { addDoc, collection } from "firebase/firestore";
 import { useState } from "react";
 import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { db } from "../firebase";
+import { formatDateLabel, parseJobDateToKey } from "../turnover";
+import { newJobDoc } from "../types";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -47,11 +49,11 @@ export default function GmailScreen() {
         );
         const msgData = await msgRes.json();
         const snippet = msgData.snippet || "";
-        const dateMatch = snippet.match(/\b(\w+ \d{1,2},? \d{4})\b/);
+        const dateKey = parseJobDateToKey(snippet);
         const addressMatch = snippet.match(/\d+\s+\w+\s+(St|Ave|Rd|Blvd|Dr|Ln|Way)/i);
-        if (dateMatch) {
+        if (dateKey) {
           detected.push({
-            date: dateMatch[1],
+            date: formatDateLabel(dateKey),
             address: addressMatch ? addressMatch[0] : "Address not found",
             type: "Turnover",
           });
@@ -75,7 +77,7 @@ export default function GmailScreen() {
   };
 
   const saveJob = async (job: DetectedJob) => {
-    await addDoc(collection(db, "jobs"), { ...job, done: false });
+    await addDoc(collection(db, "jobs"), newJobDoc(job));
     Alert.alert("Saved!", `${job.address} added to your jobs.`);
   };
 

@@ -1,3 +1,5 @@
+import { formatDateLabel, parseJobDateToKey } from "./turnover";
+
 export type ChecklistItem = {
   text: string;
   done: boolean;
@@ -5,7 +7,11 @@ export type ChecklistItem = {
 
 export type Job = {
   id: string;
+  // Human label, e.g. "Sat, May 9 2026". Kept for the email script and
+  // older records; the app reads dateKey first.
   date: string;
+  // Canonical "YYYY-MM-DD". Set on every job the app creates.
+  dateKey?: string | null;
   address: string;
   type: string;
   done: boolean;
@@ -19,6 +25,7 @@ export type Job = {
   cancelled?: boolean;
   cancelledAt?: number | null;
   cancelReason?: string | null;
+  createdAt?: number;
   timeSummary?: {
     employeeName: string;
     minutes: number;
@@ -79,6 +86,38 @@ export const DEFAULT_CHECKLIST: string[] = [
 export function buildChecklist(template?: string[] | null): ChecklistItem[] {
   const source = template && template.length > 0 ? template : DEFAULT_CHECKLIST;
   return source.map(text => ({ text, done: false }));
+}
+
+export type NewJobInput = {
+  dateKey?: string | null;
+  date?: string;
+  address: string;
+  type: string;
+  sameDayTurnover?: boolean;
+};
+
+// The one place a job document is shaped. Every producer in the app goes
+// through here so new fields can't be missed by one of them.
+export function newJobDoc(input: NewJobInput, template?: string[] | null): Omit<Job, "id"> {
+  const dateKey = input.dateKey || (input.date ? parseJobDateToKey(input.date) : null);
+  const date = dateKey ? formatDateLabel(dateKey) : (input.date || "").trim();
+  return {
+    date,
+    dateKey,
+    address: input.address.trim(),
+    type: input.type.trim() || "Turnover",
+    done: false,
+    completedAt: null,
+    sameDayTurnover: input.sameDayTurnover === true,
+    assignedTo: null,
+    assignedToName: null,
+    startedAt: null,
+    checklist: buildChecklist(template),
+    cancelled: false,
+    cancelledAt: null,
+    cancelReason: null,
+    createdAt: Date.now(),
+  };
 }
 
 // Turns the owner's pasted text (one item per line) into a clean template.

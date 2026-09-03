@@ -4,21 +4,20 @@ import { addDoc, collection, deleteDoc, doc, onSnapshot, writeBatch } from "fire
 import { useEffect, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useProfile } from "../../components/ProfileProvider";
-import { Avatar, BrandButton, Card, EmptyState, ErrorState, FormInput, ScreenHeader, SheetModal } from "../../components/ui";
+import { alertSoon, Avatar, BrandButton, Card, EmptyState, ErrorState, FormInput, ScreenHeader, SheetModal } from "../../components/ui";
 import { db } from "../../firebase";
 import { computeEarned, formatDuration, formatEntryDate, formatMoney } from "../../payroll";
-import { colors, radius, shadow } from "../../theme";
+import { cleanerColor, colors, radius, shadow } from "../../theme";
 import { Employee, TimeEntry } from "../../types";
 
 export default function PayrollScreen() {
   const [entries, setEntries] = useState<TimeEntry[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
   const [loadError, setLoadError] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [manualFor, setManualFor] = useState<Employee | null>(null);
   const [manualMinutes, setManualMinutes] = useState("");
   const [manualNote, setManualNote] = useState("");
-  const { state } = useProfile();
+  const { state, employees } = useProfile();
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "timeEntries"), (snapshot) => {
@@ -33,17 +32,6 @@ export default function PayrollScreen() {
     return unsub;
   }, []);
 
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, "employees"), (snapshot) => {
-      const loaded = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Employee[];
-      loaded.sort((a, b) => a.name.localeCompare(b.name));
-      setEmployees(loaded);
-    }, (error) => {
-      console.warn("employees listener error:", error);
-      setLoadError(true);
-    });
-    return unsub;
-  }, []);
 
   const unpaid = entries.filter(e => !e.paid);
   const paid = entries.filter(e => e.paid);
@@ -136,6 +124,7 @@ export default function PayrollScreen() {
         note: manualNote.trim(),
       });
       setManualFor(null);
+      alertSoon("Time added", `${formatDuration(minutes)} logged for ${manualFor.name}.`);
     } catch (e) {
       console.warn("manual entry failed:", e);
       Alert.alert("Couldn't add time", "The entry didn't save. Check your connection and try again.");
@@ -190,7 +179,7 @@ export default function PayrollScreen() {
         {loadError && (
           <ErrorState
             title="Can't load payroll"
-            body="Firestore blocked access to the employees or timeEntries collection. Update the security rules in the Firebase console, then reopen this screen."
+            body="Firestore blocked access to the timeEntries collection. Update the security rules in the Firebase console, then reopen this screen."
           />
         )}
         {!loadError && employees.length === 0 && (
@@ -208,7 +197,7 @@ export default function PayrollScreen() {
           return (
             <Card key={emp.id}>
               <View style={styles.empTop}>
-                <Avatar name={emp.name} photo={emp.photo} size={38} />
+                <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} size={38} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.empName}>{emp.name}</Text>
                   <Text style={styles.empSub}>

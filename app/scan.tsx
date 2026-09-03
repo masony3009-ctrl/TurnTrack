@@ -4,6 +4,8 @@ import { addDoc, collection } from "firebase/firestore";
 import { useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { db } from "../firebase";
+import { formatDateLabel, parseJobDateToKey } from "../turnover";
+import { newJobDoc } from "../types";
 
 type DetectedJob = {
   date: string;
@@ -12,13 +14,8 @@ type DetectedJob = {
 };
 
 function scanText(text: string): DetectedJob | null {
-  const dateMatch = text.match(
-    /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\b/i
-  ) || text.match(
-    /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/
-  ) || text.match(
-    /\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\b/i
-  );
+  // Same date grammar the rest of the app understands.
+  const dateKey = parseJobDateToKey(text);
 
   const addressMatch = text.match(
     /\d+\s+[A-Za-z0-9\s]+(?:St|Ave|Rd|Blvd|Dr|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)\.?/i
@@ -28,9 +25,9 @@ function scanText(text: string): DetectedJob | null {
   const isAirbnb = text.toLowerCase().includes("airbnb");
   const type = isTurno ? "Turno Turnover" : isAirbnb ? "Airbnb Turnover" : "Turnover";
 
-  if (dateMatch) {
+  if (dateKey) {
     return {
-      date: dateMatch[0],
+      date: formatDateLabel(dateKey),
       address: addressMatch ? addressMatch[0] : "Address not found",
       type,
     };
@@ -60,7 +57,7 @@ export default function ScanScreen() {
 
   const saveJob = async () => {
     if (!detected) return;
-    await addDoc(collection(db, "jobs"), { ...detected, done: false });
+    await addDoc(collection(db, "jobs"), newJobDoc(detected));
     Alert.alert("Saved!", `${detected.address} added to your jobs.`);
     setDetected(null);
     setRawText("");

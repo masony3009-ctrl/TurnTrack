@@ -1,14 +1,17 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { addDoc, collection, doc, onSnapshot, updateDoc } from "firebase/firestore";
-import { useEffect, useRef, useState } from "react";
+import { collection, doc, onSnapshot, updateDoc, writeBatch } from "firebase/firestore";
+import { useEffect, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { tapImpact, tapSelect, tapSuccess, tapWarning } from "../components/haptics";
+import { openInMaps } from "../components/maps";
 import { useProfile } from "../components/ProfileProvider";
-import { Avatar, BrandButton, Card, Pill, SheetModal } from "../components/ui";
+import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ChecklistRow, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
 import { db } from "../firebase";
 import { assignmentMessage, cancellationMessage, sendPushToEmployee, unassignedMessage } from "../notifications";
-import { computeEarned, formatDuration, formatElapsed, formatMoney, minutesBetween } from "../payroll";
-import { cleanerColor, colors, radius, type } from "../theme";
+import { computeEarned, formatDuration, formatMoney, minutesBetween } from "../payroll";
+import { cleanerColor, colors, radius, type, unassignedColor } from "../theme";
+import { daysFromToday, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
 import { buildChecklist, ChecklistItem, DEFAULT_CHECKLIST, Employee, Job } from "../types";
 
 export default function JobDetail() {
@@ -16,19 +19,19 @@ export default function JobDetail() {
   const router = useRouter();
   const [job, setJob] = useState<Job | null>(null);
   const [missing, setMissing] = useState(false);
-  const [employees, setEmployees] = useState<Employee[]>([]);
   const [showAssign, setShowAssign] = useState(false);
   const [showChecklist, setShowChecklist] = useState(false);
-  const [now, setNow] = useState(Date.now());
-  const checklistInitialized = useRef(false);
-  const templateRef = useRef<string[]>(DEFAULT_CHECKLIST);
-  const { state } = useProfile();
+  const [template, setTemplate] = useState<string[]>(DEFAULT_CHECKLIST);
+  const [busy, setBusy] = useState(false);
+  const { state, employees } = useProfile();
   const isOwner = state.status === "owner";
+  const selfId = state.status === "cleaner" ? state.employee.id : null;
+  const selfName = state.status === "cleaner" ? state.employee.name : null;
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "settings", "checklist"), (snapshot) => {
       const items = snapshot.data()?.items;
-      templateRef.current = Array.isArray(items) && items.length > 0 ? items : DEFAULT_CHECKLIST;
+      setTemplate(Array.isArray(items) && items.length > 0 ? items : DEFAULT_CHECKLIST);
     }, (error) => {
       console.warn("checklist template listener error:", error);
     });
@@ -43,12 +46,7 @@ export default function JobDetail() {
         setJob(null);
         return;
       }
-      const data = { id: snapshot.id, ...snapshot.data() } as Job;
-      setJob(data);
-      if (!data.checklist && !checklistInitialized.current) {
-        checklistInitialized.current = true;
-        updateDoc(doc(db, "jobs", id), { checklist: buildChecklist(templateRef.current) });
-      }
+      setJob({ id: snapshot.id, ...snapshot.data() } as Job);
     }, (error) => {
       console.warn("job listener error:", error);
       setMissing(true);
@@ -56,22 +54,28 @@ export default function JobDetail() {
     return unsub;
   }, [id]);
 
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, "employees"), (snapshot) => {
-      const loaded = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Employee[];
-      loaded.sort((a, b) => a.name.localeCompare(b.name));
-      setEmployees(loaded);
-    }, (error) => {
-      console.warn("employees listener error:", error);
-    });
-    return unsub;
-  }, []);
+  const goBack = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace("/");
+  };
 
-  useEffect(() => {
-    if (!job?.startedAt) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [job?.startedAt]);
+  // Permissions. Firestore is open, so this is the only gate: the owner can
+  // do anything; a cleaner can work only the job assigned to them, and can
+  // take an unassigned one.
+  const isMine = !!selfId && job?.assignedTo === selfId;
+  const canWork = isOwner || isMine;
+  const canTake = !isOwner && !!selfId && !!job && !job.assignedTo && !job.cancelled;
+
+  // Checklist shown from the template when the job has none yet; the list is
+  // only written to the job when someone actually starts or ticks it.
+  const checklist: ChecklistItem[] = job?.checklist && job.checklist.length > 0 ? job.checklist : buildChecklist(template);
+  const checkedCount = checklist.filter(item => item.done).length;
+  const progress = checklist.length > 0 ? checkedCount / checklist.length : 0;
+  const allDone = checklist.length > 0 && checkedCount === checklist.length;
+
+  const notify = (employeeId: string | null | undefined, message: ReturnType<typeof assignmentMessage>) => {
+    if (employeeId) sendPushToEmployee(employeeId, message);
+  };
 
   const assign = async (emp: Employee | null) => {
     if (!job) return;
@@ -86,231 +90,294 @@ export default function JobDetail() {
         assignedToName: emp ? emp.name : null,
       });
       setShowAssign(false);
-      // Tell the new cleaner, and the old one if there was one. Pushes go to
-      // whichever phones are signed in as them; failures are logged, not shown.
-      if (emp) sendPushToEmployee(emp.id, assignmentMessage({ ...job, assignedTo: emp.id, assignedToName: emp.name }));
-      if (previousId) sendPushToEmployee(previousId, unassignedMessage(job));
+      tapSuccess();
+      if (emp) notify(emp.id, assignmentMessage({ ...job, assignedTo: emp.id, assignedToName: emp.name }));
+      notify(previousId, unassignedMessage(job));
     } catch (e) {
       console.warn("assign failed:", e);
       Alert.alert("Couldn't assign", "The assignment didn't save. Check your connection and try again.");
     }
   };
 
+  const takeJob = async () => {
+    if (!job || !selfId || !selfName) return;
+    try {
+      await updateDoc(doc(db, "jobs", job.id), { assignedTo: selfId, assignedToName: selfName });
+      tapSuccess();
+    } catch (e) {
+      console.warn("take job failed:", e);
+      Alert.alert("Couldn't take the job", "Check your connection and try again.");
+    }
+  };
+
   const startCleaning = async () => {
-    if (!job) return;
+    if (!job || busy) return;
     if (!job.assignedTo) {
+      if (canTake) {
+        // Cleaner takes an unassigned job and starts in one step.
+        setBusy(true);
+        try {
+          await updateDoc(doc(db, "jobs", job.id), {
+            assignedTo: selfId,
+            assignedToName: selfName,
+            startedAt: Date.now(),
+            ...(job.checklist && job.checklist.length > 0 ? {} : { checklist: buildChecklist(template) }),
+          });
+          tapImpact();
+          setShowChecklist(true);
+        } catch (e) {
+          console.warn("start cleaning failed:", e);
+          Alert.alert("Couldn't start the timer", "Check your connection and try again.");
+        }
+        setBusy(false);
+        return;
+      }
       Alert.alert("No cleaner assigned", "Assign this job to a cleaner first so the time gets tracked to them.");
       return;
     }
+    if (!canWork) {
+      Alert.alert("Not your job", `This cleaning is assigned to ${job.assignedToName}. Ask the owner to reassign it if that's wrong.`);
+      return;
+    }
+    setBusy(true);
     try {
-      const update: Partial<Job> = { startedAt: Date.now() };
-      if (!job.checklist || job.checklist.length === 0) {
-        update.checklist = buildChecklist(templateRef.current);
-      }
-      await updateDoc(doc(db, "jobs", job.id), update);
-      // The checklist pops up as soon as the timer starts.
+      await updateDoc(doc(db, "jobs", job.id), {
+        startedAt: Date.now(),
+        ...(job.checklist && job.checklist.length > 0 ? {} : { checklist: buildChecklist(template) }),
+      });
+      tapImpact();
       setShowChecklist(true);
     } catch (e) {
       console.warn("start cleaning failed:", e);
       Alert.alert("Couldn't start the timer", "Check your connection and try again.");
     }
+    setBusy(false);
+  };
+
+  const cancelTimer = () => {
+    if (!job || !canWork) return;
+    Alert.alert("Discard timer", "Throw away this timer without logging any time?", [
+      { text: "Keep timing", style: "cancel" },
+      {
+        text: "Discard",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await updateDoc(doc(db, "jobs", job.id), { startedAt: null });
+            tapWarning();
+          } catch (e) {
+            console.warn("discard timer failed:", e);
+          }
+        },
+      },
+    ]);
+  };
+
+  // Writes the time entry and closes the job in ONE batch so a retry can
+  // never double-log. Returns false if the cleaner record is gone.
+  const logTimeAndClose = async (opts: { cancel?: boolean }) => {
+    if (!job || !job.startedAt) return false;
+    const emp = employees.find(e => e.id === job.assignedTo);
+    if (!emp) {
+      Alert.alert(
+        "Cleaner not found",
+        "The assigned cleaner no longer exists, so no pay can be calculated. Reassign the job and try again, or discard the timer."
+      );
+      return false;
+    }
+    const endedAt = Date.now();
+    const minutes = minutesBetween(job.startedAt, endedAt);
+    const earned = computeEarned(minutes, emp.hourlyRate);
+    const employeeName = job.assignedToName || emp.name;
+    const batch = writeBatch(db);
+    batch.set(doc(collection(db, "timeEntries")), {
+      jobId: job.id,
+      jobAddress: job.address,
+      jobDate: job.date,
+      employeeId: emp.id,
+      employeeName,
+      startedAt: job.startedAt,
+      endedAt,
+      minutes,
+      hourlyRate: emp.hourlyRate,
+      earned,
+      paid: false,
+      paidAt: null,
+      method: null,
+    });
+    batch.update(doc(db, "jobs", job.id), {
+      startedAt: null,
+      done: !opts.cancel,
+      completedAt: opts.cancel ? null : endedAt,
+      timeSummary: { employeeName, minutes, earned },
+      ...(opts.cancel ? { cancelled: true, cancelledAt: endedAt, cancelReason: "Cancelled by owner" } : {}),
+    });
+    await batch.commit();
+    return { employeeName, minutes, earned };
+  };
+
+  const finishCleaning = async () => {
+    if (!job || !job.startedAt || busy || !canWork) return;
+    const unchecked = checklist.length - checkedCount;
+    const proceed = async () => {
+      setBusy(true);
+      try {
+        const result = await logTimeAndClose({});
+        if (result) {
+          tapSuccess();
+          setShowChecklist(false);
+          alertSoon(
+            "Cleaning finished",
+            `${result.employeeName} worked ${formatDuration(result.minutes)} and earned ${formatMoney(result.earned)}. It's been added to payroll.`
+          );
+        }
+      } catch (e) {
+        console.warn("finish cleaning failed:", e);
+        Alert.alert(
+          "Couldn't save the time",
+          "Nothing was saved and the timer is still running. Check your connection, then tap Finish again."
+        );
+      }
+      setBusy(false);
+    };
+    if (unchecked > 0) {
+      Alert.alert(
+        `${unchecked} item${unchecked === 1 ? "" : "s"} unchecked`,
+        "Finish anyway, or go back to the checklist?",
+        [
+          { text: "Review checklist", onPress: () => setShowChecklist(true) },
+          { text: "Finish anyway", style: "destructive", onPress: proceed },
+        ]
+      );
+      return;
+    }
+    proceed();
   };
 
   const cancelCleaning = () => {
-    if (!job) return;
+    if (!job || !isOwner) return;
+    const finish = async (mode: "log" | "discard" | "plain") => {
+      try {
+        if (mode === "log") {
+          const result = await logTimeAndClose({ cancel: true });
+          if (!result) return;
+        } else {
+          await updateDoc(doc(db, "jobs", job.id), {
+            cancelled: true,
+            cancelledAt: Date.now(),
+            cancelReason: "Cancelled by owner",
+            startedAt: null,
+          });
+        }
+        notify(job.assignedTo, cancellationMessage(job));
+        tapWarning();
+        goBack();
+      } catch (e) {
+        console.warn("cancel failed:", e);
+        Alert.alert("Couldn't cancel", "Check your connection and try again.");
+      }
+    };
+    if (job.startedAt) {
+      const minutes = minutesBetween(job.startedAt, Date.now());
+      Alert.alert(
+        "Timer is running",
+        `${job.assignedToName || "The cleaner"} has ${formatDuration(minutes)} on the clock. Log that time to payroll before cancelling?`,
+        [
+          { text: "Keep the job", style: "cancel" },
+          { text: "Discard time & cancel", style: "destructive", onPress: () => finish("discard") },
+          { text: "Log time & cancel", onPress: () => finish("log") },
+        ]
+      );
+      return;
+    }
     Alert.alert(
       "Cancel this cleaning",
       `Cancel ${job.address} on ${job.date}? It disappears from everyone's phone but stays in the records.${job.assignedToName ? ` ${job.assignedToName} will be notified.` : ""}`,
       [
         { text: "Keep it", style: "cancel" },
-        {
-          text: "Cancel cleaning",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await updateDoc(doc(db, "jobs", job.id), {
-                cancelled: true,
-                cancelledAt: Date.now(),
-                cancelReason: "Cancelled by owner",
-                startedAt: null,
-              });
-              if (job.assignedTo) sendPushToEmployee(job.assignedTo, cancellationMessage(job));
-              router.back();
-            } catch (e) {
-              console.warn("cancel failed:", e);
-              Alert.alert("Couldn't cancel", "Check your connection and try again.");
-            }
-          },
-        },
+        { text: "Cancel cleaning", style: "destructive", onPress: () => finish("plain") },
       ]
     );
   };
 
   const restoreCleaning = async () => {
-    if (!job) return;
+    if (!job || !isOwner) return;
     try {
       await updateDoc(doc(db, "jobs", job.id), { cancelled: false, cancelledAt: null, cancelReason: null });
-      if (job.assignedTo) sendPushToEmployee(job.assignedTo, assignmentMessage(job));
+      notify(job.assignedTo, assignmentMessage(job));
+      tapSuccess();
     } catch (e) {
       console.warn("restore failed:", e);
       Alert.alert("Couldn't restore", "Check your connection and try again.");
     }
   };
 
-  const cancelTimer = () => {
-    if (!job) return;
-    Alert.alert("Cancel timer", "Discard this timer without logging any time?", [
-      { text: "Keep timing", style: "cancel" },
-      {
-        text: "Discard",
-        style: "destructive",
-        onPress: async () => {
-          await updateDoc(doc(db, "jobs", job.id), { startedAt: null });
-        },
-      },
-    ]);
-  };
-
-  const finishCleaning = async () => {
-    if (!job || !job.startedAt) return;
-    const emp = employees.find(e => e.id === job.assignedTo);
-    const rate = emp ? emp.hourlyRate : 0;
-    const endedAt = Date.now();
-    const minutes = minutesBetween(job.startedAt, endedAt);
-    const earned = computeEarned(minutes, rate);
-    const employeeName = job.assignedToName || emp?.name || "Unknown";
-
-    if (!emp) {
-      Alert.alert(
-        "Cleaner not found",
-        "The assigned cleaner no longer exists, so no pay can be calculated. Reassign the job and finish again, or discard the timer."
-      );
-      return;
-    }
-
-    try {
-      await addDoc(collection(db, "timeEntries"), {
-        jobId: job.id,
-        jobAddress: job.address,
-        jobDate: job.date,
-        employeeId: emp.id,
-        employeeName,
-        startedAt: job.startedAt,
-        endedAt,
-        minutes,
-        hourlyRate: rate,
-        earned,
-        paid: false,
-        paidAt: null,
-        method: null,
-      });
-      await updateDoc(doc(db, "jobs", job.id), {
-        startedAt: null,
-        done: true,
-        completedAt: endedAt,
-        timeSummary: { employeeName, minutes, earned },
-      });
-      Alert.alert(
-        "Cleaning finished",
-        `${employeeName} worked ${formatDuration(minutes)} and earned ${formatMoney(earned)}. It's been added to payroll.`
-      );
-    } catch (e) {
-      console.warn("finish cleaning failed:", e);
-      Alert.alert(
-        "Couldn't save the time",
-        "The time entry didn't save, so the timer is still running. Check your connection and the Firestore security rules (timeEntries collection), then tap Finish again."
-      );
-    }
-  };
-
   const toggleChecklistItem = async (index: number) => {
-    if (!job?.checklist) return;
-    const updated = job.checklist.map((item, i) =>
-      i === index ? { ...item, done: !item.done } : item
-    );
-    await updateDoc(doc(db, "jobs", job.id), { checklist: updated });
+    if (!job || !canWork) return;
+    const updated = checklist.map((item, i) => (i === index ? { ...item, done: !item.done } : item));
+    tapSelect();
+    try {
+      await updateDoc(doc(db, "jobs", job.id), { checklist: updated });
+    } catch (e) {
+      console.warn("checklist update failed:", e);
+    }
   };
-
-  const BackRow = (
-    <TouchableOpacity onPress={() => router.back()} style={styles.back} hitSlop={8}>
-      <Ionicons name="chevron-back" size={20} color={colors.tealDark} />
-      <Text style={styles.backText}>Jobs</Text>
-    </TouchableOpacity>
-  );
 
   if (missing) {
     return (
       <View style={styles.container}>
-        {BackRow}
-        <Text style={type.wordmark}>TurnTrack</Text>
-        <Text style={[type.title, { marginTop: 2 }]}>Job not found</Text>
-        <Text style={styles.missingText}>This job was deleted or couldn&apos;t be loaded. Go back to see the current list.</Text>
+        <ScreenHeader onBack={goBack} title="Job not found" subtitle="This job was deleted or couldn't be loaded." />
       </View>
     );
   }
-
   if (!job) {
     return (
       <View style={styles.container}>
-        {BackRow}
-        <Text style={type.wordmark}>TurnTrack</Text>
-        <Text style={[type.title, { marginTop: 2 }]}>Loading job…</Text>
+        <ScreenHeader onBack={goBack} title="Loading…" />
       </View>
     );
   }
 
-  const checklist = job.checklist || [];
-  const checkedCount = checklist.filter(item => item.done).length;
-  const progress = checklist.length > 0 ? checkedCount / checklist.length : 0;
-  const activeEmployees = employees.filter(e => e.active);
+  const key = jobDateKey(job);
+  const days = daysFromToday(job);
+  const rel = relativeDayLabel(days);
   const sameDay = job.sameDayTurnover === true;
+  const running = !!job.startedAt;
+  const activeEmployees = employees.filter(e => e.active);
   const assignedEmployee = employees.find(e => e.id === job.assignedTo);
-  const assignedColor = job.assignedTo ? cleanerColor(assignedEmployee || { id: job.assignedTo }) : colors.gold;
+  const assignedColor = job.assignedTo ? cleanerColor(assignedEmployee || { id: job.assignedTo }) : unassignedColor;
+  const dateHeading = key ? formatDayHeading(key) : job.date;
 
-  const renderChecklist = (items: ChecklistItem[]) => items.map((item, i) => (
-    <TouchableOpacity key={i} style={styles.checkRow} onPress={() => toggleChecklistItem(i)}>
-      <View style={[styles.checkCircle, item.done && styles.checkCircleActive]}>
-        {item.done && <Ionicons name="checkmark" size={14} color={colors.white} />}
-      </View>
-      <Text style={[styles.checkItem, item.done && styles.checkItemDone]}>{item.text}</Text>
-    </TouchableOpacity>
+  const renderChecklist = () => checklist.map((item, i) => (
+    <ChecklistRow key={i} text={item.text} done={item.done} onPress={canWork ? () => toggleChecklistItem(i) : undefined} />
   ));
 
   return (
     <View style={styles.container}>
-      {BackRow}
-      <Text style={type.wordmark}>TurnTrack</Text>
-      <Text style={styles.heroTitle}>{job.address}</Text>
-      <View style={styles.heroPills}>
-        <Pill label={job.type} tone="teal" />
-        {sameDay && <Pill label="Same-day turnover" tone="gold" icon="alert-circle" />}
-        {job.cancelled && <Pill label="Cancelled" tone="danger" icon="close-circle" />}
-      </View>
-      <View style={styles.heroMeta}>
-        <Ionicons name="calendar-clear-outline" size={14} color={colors.muted} />
-        <Text style={styles.heroMetaText}>{job.date}</Text>
-      </View>
+      <ScreenHeader
+        onBack={goBack}
+        backLabel="Back"
+        title={job.address}
+        subtitle={rel ? `${dateHeading} · ${rel}` : dateHeading}
+      />
 
       <SheetModal visible={showAssign} title="Assign to" onClose={() => setShowAssign(false)}>
         {activeEmployees.length === 0 && (
-          <Text style={styles.noEmployeesText}>
-            No active cleaners yet. Add one on the Team tab first.
-          </Text>
+          <Text style={styles.sheetHint}>No active cleaners yet. Add one on the Team tab first.</Text>
         )}
         {activeEmployees.map(emp => (
           <TouchableOpacity
             key={emp.id}
             style={[styles.assignOption, job.assignedTo === emp.id && styles.assignOptionActive]}
             onPress={() => assign(emp)}
+            activeOpacity={0.7}
           >
-            <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} size={34} />
+            <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} size={36} />
             <View style={{ flex: 1 }}>
               <Text style={styles.assignName}>{emp.name}</Text>
-              {isOwner && <Text style={styles.assignRate}>{formatMoney(emp.hourlyRate)}/hr</Text>}
+              <Text style={styles.assignRate}>{formatMoney(emp.hourlyRate)}/hr</Text>
             </View>
-            {job.assignedTo === emp.id && (
-              <Ionicons name="checkmark-circle" size={22} color={colors.teal} />
-            )}
+            {job.assignedTo === emp.id && <Ionicons name="checkmark-circle" size={22} color={colors.teal} />}
           </TouchableOpacity>
         ))}
         {job.assignedTo && (
@@ -324,20 +391,30 @@ export default function JobDetail() {
       <SheetModal visible={showChecklist} title="Cleaning checklist" onClose={() => setShowChecklist(false)}>
         <View style={styles.sheetProgressRow}>
           <Text style={styles.sheetProgressText}>{checkedCount} of {checklist.length} done</Text>
-          <View style={[styles.progressTrack, { flex: 1, marginTop: 0, marginBottom: 0 }]}>
-            <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
-          </View>
+          <View style={{ flex: 1 }}><ProgressBar value={progress} /></View>
         </View>
-        {renderChecklist(checklist)}
-        <BrandButton
-          label={checkedCount === checklist.length && checklist.length > 0 ? "All done — close" : "Keep cleaning"}
-          icon={checkedCount === checklist.length && checklist.length > 0 ? "checkmark-done" : "sparkles"}
-          onPress={() => setShowChecklist(false)}
-          style={{ marginTop: 14 }}
-        />
+        {renderChecklist()}
+        {running && canWork ? (
+          <BrandButton
+            label={allDone ? "All done — finish cleaning" : "Finish cleaning"}
+            icon="checkmark-circle"
+            variant={allDone ? "primary" : "outline"}
+            onPress={() => { setShowChecklist(false); setTimeout(finishCleaning, 450); }}
+            style={{ marginTop: 14 }}
+          />
+        ) : null}
+        <BrandButton label="Keep cleaning" icon="sparkles" variant="ghost" onPress={() => setShowChecklist(false)} style={{ marginTop: 6 }} />
       </SheetModal>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 150 }}>
+        <View style={styles.pillRow}>
+          {running ? <Pill label="In progress" tone="solid" icon="time" /> : null}
+          {job.done && !running ? <Pill label="Done" tone="neutral" icon="checkmark" /> : null}
+          {job.cancelled ? <Pill label="Cancelled" tone="danger" icon="close-circle" /> : null}
+          {sameDay ? <Pill label="Same-day turnover" tone="gold" icon="alert-circle" /> : null}
+          <Pill label={job.type} tone="neutral" />
+        </View>
+
         {job.cancelled && (
           <View style={styles.cancelledBanner}>
             <Ionicons name="close-circle" size={17} color={colors.danger} />
@@ -346,86 +423,88 @@ export default function JobDetail() {
             </Text>
           </View>
         )}
-        {sameDay && (
+        {sameDay && !job.cancelled && (
           <View style={styles.sameDayBanner}>
             <Ionicons name="alert-circle" size={17} color={colors.goldDark} />
-            <Text style={styles.sameDayBannerText}>Checkout and new check-in happen on this date — clean must be done between guests.</Text>
+            <Text style={styles.sameDayBannerText}>Checkout and a new check-in happen on this date. The clean has to be done between guests.</Text>
           </View>
         )}
 
-        <Card>
-          <View style={styles.assignHeader}>
+        <Card onPress={() => openInMaps(job.address)}>
+          <View style={styles.addressRow}>
+            <View style={styles.addressIcon}>
+              <Ionicons name="location" size={20} color={colors.tealDark} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={type.section}>Property</Text>
+              <Text style={styles.addressText}>{job.address}</Text>
+              <Text style={styles.addressHint}>Tap to open in Maps</Text>
+            </View>
+            <Ionicons name="navigate-circle-outline" size={26} color={colors.teal} />
+          </View>
+        </Card>
+
+        <Card accent={assignedColor}>
+          <View style={styles.cardHeaderRow}>
             <Text style={type.section}>Assigned cleaner</Text>
-            {!job.cancelled && (
-              <TouchableOpacity onPress={() => setShowAssign(true)} hitSlop={6}>
+            {isOwner && !job.cancelled && (
+              <TouchableOpacity onPress={() => setShowAssign(true)} hitSlop={8}>
                 <Text style={styles.changeLink}>{job.assignedToName ? "Change" : "Assign"}</Text>
               </TouchableOpacity>
             )}
           </View>
-          <View style={styles.assignBody}>
-            {job.assignedToName ? (
-              <>
-                <Avatar
-                  name={job.assignedToName}
-                  photo={assignedEmployee?.photo}
-                  color={assignedColor}
-                  size={38}
-                />
-                <Text style={[styles.assignedName, { color: assignedColor }]}>{job.assignedToName}</Text>
-              </>
-            ) : (
-              <>
-                <View style={styles.unassignedCircle}>
-                  <Ionicons name="person-add-outline" size={17} color={colors.goldDark} />
-                </View>
-                <Text style={styles.unassignedText}>Nobody assigned yet</Text>
-              </>
-            )}
+          <View style={{ marginTop: 10 }}>
+            <AssigneeRow name={job.assignedToName} color={assignedColor} photo={assignedEmployee?.photo} size={38} />
           </View>
+          {canTake && (
+            <BrandButton label="Take this job" icon="hand-right-outline" variant="outline" compact onPress={takeJob} style={{ marginTop: 12, alignSelf: "flex-start" }} />
+          )}
         </Card>
 
-        {!job.cancelled && <Card>
-          <Text style={type.section}>Time tracking</Text>
-          {job.startedAt ? (
-            <View style={styles.timerBlock}>
-              <View style={styles.liveRow}>
-                <View style={styles.liveDot} />
-                <Text style={styles.liveText}>{job.assignedToName} is cleaning</Text>
+        {!job.cancelled && (
+          <Card>
+            <Text style={type.section}>Time tracking</Text>
+            {running && job.startedAt ? (
+              <View style={styles.timerBlock}>
+                <View style={styles.liveRow}>
+                  <View style={styles.liveDot} />
+                  <Text style={styles.liveText}>{job.assignedToName} is cleaning</Text>
+                </View>
+                <ElapsedTimer startedAt={job.startedAt} />
+                {canWork && (
+                  <TouchableOpacity style={styles.discardBtn} onPress={cancelTimer} hitSlop={8}>
+                    <Text style={styles.discardText}>Discard timer</Text>
+                  </TouchableOpacity>
+                )}
               </View>
-              <Text style={styles.timerText}>{formatElapsed(job.startedAt, now)}</Text>
-              <BrandButton label="Open checklist" icon="list" variant="outline" onPress={() => setShowChecklist(true)} style={{ marginBottom: 10 }} />
-              <BrandButton label="Finish cleaning" icon="checkmark-circle" onPress={finishCleaning} />
-              <TouchableOpacity style={styles.cancelTimerBtn} onPress={cancelTimer}>
-                <Text style={styles.cancelTimerText}>Discard timer</Text>
-              </TouchableOpacity>
-            </View>
-          ) : job.timeSummary ? (
-            <View style={styles.timerBlock}>
+            ) : job.timeSummary ? (
               <View style={styles.summaryStrip}>
                 <Ionicons name="checkmark-circle" size={19} color={colors.teal} />
                 <Text style={styles.summaryText}>
-                  {job.timeSummary.employeeName} — {formatDuration(job.timeSummary.minutes)} — {formatMoney(job.timeSummary.earned)}
+                  {job.timeSummary.employeeName} · {formatDuration(job.timeSummary.minutes)} · {formatMoney(job.timeSummary.earned)}
                 </Text>
               </View>
-              <BrandButton label="Start another session" icon="play" variant="outline" onPress={startCleaning} />
-            </View>
-          ) : (
-            <View style={styles.timerBlock}>
-              <BrandButton label="Start cleaning" icon="play" onPress={startCleaning} style={styles.startBtn} />
-            </View>
-          )}
-        </Card>}
+            ) : (
+              <Text style={styles.timerHint}>
+                {canWork
+                  ? "Tap Start cleaning below when you arrive. The checklist pops up and the clock starts."
+                  : job.assignedToName
+                    ? `Only ${job.assignedToName.split(" ")[0]} or the owner can start this timer.`
+                    : "Assign a cleaner to start tracking time."}
+              </Text>
+            )}
+          </Card>
+        )}
 
         <Card>
-          <View style={styles.checklistHeader}>
+          <View style={styles.cardHeaderRow}>
             <Text style={type.section}>Checklist</Text>
             <Text style={styles.checklistCount}>{checkedCount}/{checklist.length}</Text>
           </View>
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
-          </View>
-          {renderChecklist(checklist)}
+          <ProgressBar value={progress} />
+          {renderChecklist()}
         </Card>
+
         {isOwner && (
           job.cancelled ? (
             <BrandButton label="Restore this cleaning" icon="refresh" variant="outline" onPress={restoreCleaning} />
@@ -437,80 +516,74 @@ export default function JobDetail() {
           )
         )}
       </ScrollView>
+
+      {!job.cancelled && (canWork || canTake) && (
+        <BottomBar>
+          {running ? (
+            <View style={styles.barRow}>
+              <BrandButton label="Checklist" icon="list" variant="outline" onPress={() => setShowChecklist(true)} style={{ flex: 1 }} />
+              <BrandButton label={busy ? "Saving…" : "Finish cleaning"} icon="checkmark-circle" onPress={finishCleaning} disabled={busy} style={{ flex: 1.4 }} />
+            </View>
+          ) : (
+            <BrandButton
+              label={busy ? "Starting…" : canWork ? (job.timeSummary ? "Start another session" : "Start cleaning") : "Take this job & start"}
+              icon="play"
+              onPress={startCleaning}
+              disabled={busy}
+            />
+          )}
+        </BottomBar>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
+  pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 12 },
+  sheetHint: { fontSize: 14, color: colors.muted, marginBottom: 12 },
   cancelledBanner: {
     flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.dangerSoft,
     borderRadius: radius.md, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: "#F3C8C8",
   },
   cancelledBannerText: { flex: 1, fontSize: 13.5, color: colors.danger, lineHeight: 19, fontWeight: "600" },
-  sheetProgressRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 6 },
-  sheetProgressText: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
-  cancelLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 14 },
-  cancelLinkText: { fontSize: 14, fontWeight: "600", color: colors.danger },
-  container: { flex: 1, backgroundColor: colors.bg, paddingTop: 56, paddingHorizontal: 20 },
-  back: { flexDirection: "row", alignItems: "center", marginBottom: 10, alignSelf: "flex-start" },
-  backText: { fontSize: 15, fontWeight: "600", color: colors.tealDark },
-  missingText: { fontSize: 15, color: colors.muted, marginTop: 8 },
-  heroTitle: { fontSize: 23, fontWeight: "700", color: colors.ink, marginTop: 2, marginBottom: 8 },
-  heroPills: { flexDirection: "row", gap: 6, flexWrap: "wrap", marginBottom: 7 },
-  heroMeta: { flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 16 },
-  heroMetaText: { fontSize: 13.5, color: colors.muted },
   sameDayBanner: {
     flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.goldSoft,
-    borderRadius: radius.md, padding: 12, marginBottom: 12,
-    borderWidth: 1, borderColor: "#F0DDBA",
+    borderRadius: radius.md, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: "#F0DDBA",
   },
-  sameDayBannerText: { flex: 1, fontSize: 13, fontWeight: "600", color: colors.goldDark, lineHeight: 18 },
-  assignHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  changeLink: { fontSize: 13.5, fontWeight: "600", color: colors.tealDark },
-  assignBody: { flexDirection: "row", alignItems: "center", gap: 11, marginTop: 11 },
-  assignedName: { fontSize: 16, fontWeight: "700", color: colors.ink },
-  unassignedCircle: {
-    width: 38, height: 38, borderRadius: 19, backgroundColor: colors.goldSoft,
-    alignItems: "center", justifyContent: "center",
-  },
-  unassignedText: { fontSize: 15, fontWeight: "600", color: colors.goldDark },
-  timerBlock: { marginTop: 12 },
-  liveRow: { flexDirection: "row", alignItems: "center", gap: 7, marginBottom: 4 },
-  liveDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.gold },
-  liveText: { fontSize: 13.5, fontWeight: "600", color: colors.muted },
-  timerText: { fontSize: 46, fontWeight: "700", color: colors.ink, fontVariant: ["tabular-nums"], marginBottom: 14 },
-  startBtn: { paddingVertical: 15 },
-  cancelTimerBtn: { alignItems: "center", padding: 10, marginTop: 4 },
-  cancelTimerText: { color: colors.danger, fontSize: 13.5, fontWeight: "600" },
+  sameDayBannerText: { flex: 1, fontSize: 13.5, color: colors.goldDark, lineHeight: 19, fontWeight: "600" },
+  addressRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  addressIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.tealSoft, alignItems: "center", justifyContent: "center" },
+  addressText: { fontSize: 16, fontWeight: "700", color: colors.ink, marginTop: 3 },
+  addressHint: { fontSize: 12, color: colors.tealDark, fontWeight: "600", marginTop: 2 },
+  cardHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  changeLink: { fontSize: 14, fontWeight: "700", color: colors.tealDark },
+  timerBlock: { marginTop: 10, alignItems: "flex-start" },
+  liveRow: { flexDirection: "row", alignItems: "center", gap: 7, marginBottom: 6 },
+  liveDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.teal },
+  liveText: { fontSize: 13.5, fontWeight: "600", color: colors.tealDark },
+  discardBtn: { marginTop: 8, minHeight: 36, justifyContent: "center" },
+  discardText: { fontSize: 13.5, fontWeight: "600", color: colors.danger },
   summaryStrip: {
     flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.tealFaint,
-    borderRadius: radius.sm, padding: 11, marginBottom: 12,
+    borderRadius: radius.sm, padding: 11, marginTop: 10,
   },
-  summaryText: { flex: 1, fontSize: 14, fontWeight: "600", color: colors.tealDark },
-  checklistHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  checklistCount: { fontSize: 13.5, fontWeight: "700", color: colors.tealDark },
-  progressTrack: { height: 6, borderRadius: 3, backgroundColor: colors.bg, marginTop: 10, marginBottom: 6, overflow: "hidden" },
-  progressFill: { height: 6, borderRadius: 3, backgroundColor: colors.teal },
-  checkRow: {
-    flexDirection: "row", alignItems: "center", gap: 11, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: colors.bg,
-  },
-  checkCircle: {
-    width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, borderColor: colors.line,
-    alignItems: "center", justifyContent: "center", backgroundColor: colors.card,
-  },
-  checkCircleActive: { backgroundColor: colors.teal, borderColor: colors.teal },
-  checkItem: { flex: 1, fontSize: 14.5, color: colors.ink },
-  checkItemDone: { color: colors.faint, textDecorationLine: "line-through" },
-  noEmployeesText: { fontSize: 14, color: colors.muted, marginBottom: 12, lineHeight: 20 },
+  summaryText: { fontSize: 14, fontWeight: "600", color: colors.tealDark, flex: 1 },
+  timerHint: { fontSize: 13.5, color: colors.muted, lineHeight: 19, marginTop: 8 },
+  checklistCount: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
+  sheetProgressRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 6 },
+  sheetProgressText: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
   assignOption: {
-    flexDirection: "row", alignItems: "center", gap: 11,
+    flexDirection: "row", alignItems: "center", gap: 11, minHeight: 56,
     borderWidth: 1, borderColor: colors.line, borderRadius: radius.md,
     padding: 12, marginBottom: 8, backgroundColor: colors.bg,
   },
-  assignOptionActive: { borderColor: colors.teal, borderWidth: 1.5, backgroundColor: colors.tealFaint },
+  assignOptionActive: { borderColor: colors.teal, backgroundColor: colors.tealFaint },
   assignName: { fontSize: 15, fontWeight: "600", color: colors.ink },
   assignRate: { fontSize: 12.5, color: colors.muted, marginTop: 1 },
-  unassignRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, padding: 11, marginTop: 2 },
+  unassignRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44, marginTop: 4 },
   unassignText: { fontSize: 14, fontWeight: "600", color: colors.danger },
+  cancelLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 48 },
+  cancelLinkText: { fontSize: 14, fontWeight: "600", color: colors.danger },
+  barRow: { flexDirection: "row", gap: 10 },
 });

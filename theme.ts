@@ -68,14 +68,14 @@ export const cleanerPalette: string[] = [
   "#2F8BD6", // sky
   "#6FA321", // lime
   "#C9408F", // magenta
-  "#D98A12", // amber
+  "#8D6E63", // brown (amber dropped: too close to the same-day gold)
   "#2E4A9E", // navy
   "#8C8A1A", // olive
   "#8E3B6B", // plum
   "#3A9E7A", // jade
 ];
 
-export const unassignedColor = colors.gold;
+export const unassignedColor = "#9AA7B0"; // gray: gold is reserved for same-day turnovers
 
 type Colorable = { id: string; color?: string | null } | null | undefined;
 

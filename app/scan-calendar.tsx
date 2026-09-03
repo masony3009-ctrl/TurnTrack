@@ -1,12 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
-import { addDoc, collection } from "firebase/firestore";
-import { useState } from "react";
+import { collection, doc, onSnapshot, writeBatch } from "firebase/firestore";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { BrandButton, Card, Pill } from "../components/ui";
+import { tapSuccess } from "../components/haptics";
+import { BrandButton, Card, Pill, ScreenHeader } from "../components/ui";
 import { db } from "../firebase";
-import { colors, radius, type } from "../theme";
+import { colors, radius } from "../theme";
+import { DEFAULT_CHECKLIST, newJobDoc } from "../types";
 
 type DetectedJob = {
   date: string;
@@ -20,7 +22,17 @@ export default function ScanCalendarScreen() {
   const [loading, setLoading] = useState(false);
   const [detectedJobs, setDetectedJobs] = useState<DetectedJob[]>([]);
   const [propertyName, setPropertyName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [template, setTemplate] = useState<string[]>(DEFAULT_CHECKLIST);
   const router = useRouter();
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "settings", "checklist"), (snap) => {
+      const items = snap.data()?.items;
+      setTemplate(Array.isArray(items) && items.length > 0 ? items : DEFAULT_CHECKLIST);
+    }, () => {});
+    return unsub;
+  }, []);
 
   const pickImage = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -140,19 +152,30 @@ If a booking bar does not have a clear end point visible in the screenshot, do N
     setLoading(false);
   };
 
+  // One batch: all jobs land together or none do, and a double-tap can't
+  // create duplicates.
   const addAllJobs = async () => {
-    for (const job of detectedJobs) {
-      await addDoc(collection(db, "jobs"), {
-        ...job,
-        done: false,
-        completedAt: null,
-        assignedTo: null,
-        assignedToName: null,
-        startedAt: null,
+    if (saving || detectedJobs.length === 0) return;
+    setSaving(true);
+    try {
+      const batch = writeBatch(db);
+      detectedJobs.forEach(job => {
+        batch.set(doc(collection(db, "jobs")), newJobDoc({
+          date: job.date,
+          address: job.address,
+          type: job.type,
+          sameDayTurnover: job.sameDayTurnover,
+        }, template));
       });
+      await batch.commit();
+      tapSuccess();
+      Alert.alert("Added!", `${detectedJobs.length} cleaning job${detectedJobs.length === 1 ? "" : "s"} added to your calendar.`);
+      router.back();
+    } catch (e) {
+      console.warn("add jobs failed:", e);
+      Alert.alert("Couldn't add the jobs", "Nothing was saved. Check your connection and try again.");
     }
-    Alert.alert("Added!", `${detectedJobs.length} cleaning jobs added to your calendar.`);
-    router.back();
+    setSaving(false);
   };
 
   const removeJob = (index: number) => {
@@ -161,13 +184,12 @@ If a booking bar does not have a clear end point visible in the screenshot, do N
 
   return (
     <View style={styles.container}>
-      <TouchableOpacity onPress={() => router.back()} style={styles.back} hitSlop={8}>
-        <Ionicons name="chevron-back" size={20} color={colors.tealDark} />
-        <Text style={styles.backText}>Jobs</Text>
-      </TouchableOpacity>
-      <Text style={type.wordmark}>TurnTrack</Text>
-      <Text style={[type.title, { marginTop: 2 }]}>Scan calendar</Text>
-      <Text style={styles.sub}>Upload a screenshot of your Airbnb calendar and the checkout dates get detected automatically.</Text>
+      <ScreenHeader
+        onBack={() => router.back()}
+        backLabel="Jobs"
+        title="Scan calendar"
+        subtitle="Upload an Airbnb calendar screenshot and the checkout dates get detected automatically."
+      />
 
       <BrandButton
         label={image ? "Choose a different photo" : "Upload calendar screenshot"}
@@ -205,9 +227,10 @@ If a booking bar does not have a clear end point visible in the screenshot, do N
             </Card>
           ))}
           <BrandButton
-            label={`Add all ${detectedJobs.length} jobs`}
+            label={saving ? "Adding…" : `Add all ${detectedJobs.length} job${detectedJobs.length === 1 ? "" : "s"}`}
             icon="checkmark-done"
             onPress={addAllJobs}
+            disabled={saving}
             style={{ marginTop: 6 }}
           />
         </ScrollView>
@@ -217,10 +240,7 @@ If a booking bar does not have a clear end point visible in the screenshot, do N
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg, paddingTop: 56, paddingHorizontal: 20 },
-  back: { flexDirection: "row", alignItems: "center", marginBottom: 10, alignSelf: "flex-start" },
-  backText: { fontSize: 15, fontWeight: "600", color: colors.tealDark },
-  sub: { fontSize: 14, color: colors.muted, marginTop: 4, marginBottom: 18, lineHeight: 20 },
+  container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
   preview: { width: "100%", height: 180, borderRadius: radius.md, marginBottom: 14, backgroundColor: colors.card },
   loadingBox: { flexDirection: "row", alignItems: "center", gap: 12 },
   loadingText: { fontSize: 14, color: colors.muted, flex: 1 },

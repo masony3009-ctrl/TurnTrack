@@ -56,6 +56,14 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     resolveDeviceId().then(setDeviceId);
   }, []);
 
+  // Drop "view as" if the viewed cleaner is deactivated or deleted, so a
+  // later reactivation doesn't snap the owner's phone back into their view.
+  useEffect(() => {
+    if (!viewingAsId || !employees) return;
+    const viewing = employees.find(e => e.id === viewingAsId);
+    if (!viewing || !viewing.active) setViewingAsId(null);
+  }, [viewingAsId, employees]);
+
   useEffect(() => {
     if (!deviceId) return;
     const unsub = onSnapshot(doc(db, "devices", deviceId), (snap) => {

@@ -7,7 +7,7 @@ A cross-platform mobile app (iOS & Android) built to automate job scheduling for
 - Real-time sync between multiple phones via Firebase Firestore
 - Push notifications on the day of each cleaning
 - Calendar view with job details and completion tracking
-- Jobs automatically disappear 24 hours after being marked done
+- Jobs drop off the phones 2 days after their cleaning date (they stay in Firestore)
 
 ## Crew management (Team, assignments, time tracking, payroll)
 - **Team screen** — add cleaners with an hourly rate, phone, and Zelle contact; deactivate or delete them

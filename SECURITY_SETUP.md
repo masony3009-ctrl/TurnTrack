@@ -1,8 +1,16 @@
 # Security Setup
 
-This document covers everything you must do to deploy the security fixes. Until
-these steps are done, the app will not function (the calendar scan calls a Cloud
-Function that doesn't exist yet, and Firestore reads require auth).
+> **Status: drafted, not deployed.** The shipped app still calls Anthropic
+> directly with an `EXPO_PUBLIC_` key, has no Firebase Auth, and runs against
+> open Firestore rules (see `firestore.rules`). The steps below describe the
+> hardened setup and the client changes it requires (`httpsCallable` in
+> `app/scan-calendar.tsx`, anonymous sign-in in `app/_layout.tsx`, a real
+> `apiKey` kept out of git). None of that client code exists yet; doing this
+> also needs the Firebase Blaze plan.
+
+This document covers everything you must do to deploy the security fixes. Once
+these steps are done together with the matching client changes, the calendar
+scan goes through a Cloud Function and Firestore reads require auth.
 
 ## 0. Rotate the old Anthropic key first
 

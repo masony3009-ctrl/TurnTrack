@@ -1,18 +1,31 @@
 import { Ionicons } from "@expo/vector-icons";
-import { addDoc, collection, deleteDoc, doc, onSnapshot, updateDoc } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { addDoc, collection, deleteDoc, doc, getDocs, query, updateDoc, where, writeBatch } from "firebase/firestore";
+import { useMemo, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { pickProfilePhoto } from "../../components/photo";
 import { useProfile } from "../../components/ProfileProvider";
-import { Avatar, BrandButton, Card, ColorPicker, EmptyState, ErrorState, Fab, FormInput, Pill, ScreenHeader, SheetModal } from "../../components/ui";
+import { alertSoon, Avatar, BrandButton, Card, ColorPicker, EmptyState, Fab, FormInput, Pill, ScreenHeader, SheetModal } from "../../components/ui";
+import { tapSuccess } from "../../components/haptics";
 import { db } from "../../firebase";
 import { formatMoney, parseRate } from "../../payroll";
 import { cleanerColor, colors, pickUnusedColor, radius } from "../../theme";
 import { Employee } from "../../types";
 
+// A cleaner who is deactivated or deleted should stop receiving pushes and
+// lose their signed-in phones, so their device records go too.
+async function removeDevicesFor(employeeId: string) {
+  try {
+    const snap = await getDocs(query(collection(db, "devices"), where("employeeId", "==", employeeId)));
+    if (snap.empty) return;
+    const batch = writeBatch(db);
+    snap.docs.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+  } catch (e) {
+    console.warn("remove devices failed:", e);
+  }
+}
+
 export default function TeamScreen() {
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [loadError, setLoadError] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -21,25 +34,15 @@ export default function TeamScreen() {
   const [zelle, setZelle] = useState("");
   const [photo, setPhoto] = useState<string | null>(null);
   const [color, setColor] = useState<string>("");
-  const { state, viewAs } = useProfile();
+  const { state, viewAs, employees: allEmployees } = useProfile();
   const isOwner = state.status === "owner";
   const self = state.status === "cleaner" ? state.employee : null;
 
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, "employees"), (snapshot) => {
-      const loaded = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Employee[];
-      loaded.sort((a, b) => {
-        if (a.active !== b.active) return a.active ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-      setEmployees(loaded);
-      setLoadError(false);
-    }, (error) => {
-      console.warn("employees listener error:", error);
-      setLoadError(true);
-    });
-    return unsub;
-  }, []);
+  // Active cleaners first, then by name (the provider sorts by name only).
+  const employees = useMemo(() => [...allEmployees].sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  }), [allEmployees]);
 
   const visibleEmployees = isOwner ? employees : employees.filter(e => e.active);
   const orderedEmployees = self
@@ -113,7 +116,9 @@ export default function TeamScreen() {
       } else {
         await addDoc(collection(db, "employees"), { ...data, active: true, createdAt: Date.now() });
       }
+      tapSuccess();
       setShowForm(false);
+      if (!editingId) alertSoon("Cleaner added", `${data.name} can now sign in on their phone and create a PIN.`);
     } catch (e) {
       console.warn("save cleaner failed:", e);
       Alert.alert("Couldn't save", "The cleaner didn't save. Check your connection and the Firestore security rules (employees collection), then try again.");
@@ -121,7 +126,13 @@ export default function TeamScreen() {
   };
 
   const toggleActive = async (emp: Employee) => {
-    await updateDoc(doc(db, "employees", emp.id), { active: !emp.active });
+    try {
+      await updateDoc(doc(db, "employees", emp.id), { active: !emp.active });
+      if (emp.active) await removeDevicesFor(emp.id);
+    } catch (e) {
+      console.warn("toggle active failed:", e);
+      Alert.alert("Couldn't update", "Check your connection and try again.");
+    }
   };
 
   const remove = (emp: Employee) => {
@@ -134,8 +145,14 @@ export default function TeamScreen() {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
-            await deleteDoc(doc(db, "employees", emp.id));
-            setShowForm(false);
+            try {
+              await deleteDoc(doc(db, "employees", emp.id));
+              await removeDevicesFor(emp.id);
+              setShowForm(false);
+            } catch (e) {
+              console.warn("delete cleaner failed:", e);
+              Alert.alert("Couldn't delete", "Check your connection and try again.");
+            }
           },
         },
       ]
@@ -222,13 +239,7 @@ export default function TeamScreen() {
       </SheetModal>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 96 }}>
-        {loadError && (
-          <ErrorState
-            title="Can't load the team"
-            body="Firestore blocked access to the employees collection. Update the security rules in the Firebase console, then reopen this screen."
-          />
-        )}
-        {!loadError && orderedEmployees.length === 0 && (
+        {orderedEmployees.length === 0 && (
           <EmptyState
             icon="people-outline"
             title="No cleaners yet"
