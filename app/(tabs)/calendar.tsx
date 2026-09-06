@@ -32,16 +32,17 @@ export default function CalendarScreen() {
     job.assignedTo ? cleanerColor(employees.find(e => e.id === job.assignedTo) || { id: job.assignedTo }) : unassignedColor;
 
   // dateKey -> jobs that day. Derived, so the day list can never go stale.
+  // Cleaners never see unconfirmed website requests.
   const byDay = useMemo(() => {
     const map = new Map<string, Job[]>();
-    jobs.forEach(job => {
+    jobs.filter(job => !selfId || !job.pending).forEach(job => {
       const key = jobDateKey(job);
       if (!key) return;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(job);
     });
     return map;
-  }, [jobs]);
+  }, [jobs, selfId]);
 
   // One dot per job in the cleaner's color; same-day turnovers add a gold dot.
   const markedDates = useMemo(() => {
@@ -125,6 +126,7 @@ export default function CalendarScreen() {
                 onPress={() => router.push({ pathname: "/job", params: { id: job.id } })}
               >
                 <View style={styles.pillRow}>
+                  {job.pending ? <Pill label="Needs confirmation" tone="gold" icon="mail-unread" /> : null}
                   {job.startedAt ? <Pill label="In progress" tone="solid" icon="time" /> : null}
                   {job.done ? <Pill label="Done" tone="neutral" icon="checkmark" /> : null}
                   {sameDay ? <Pill label="Same-day" tone="gold" icon="alert-circle" /> : null}

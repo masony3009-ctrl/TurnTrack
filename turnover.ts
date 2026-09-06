@@ -10,6 +10,7 @@ export type JobLike = {
   dateKey?: string | null;
   sameDayTurnover?: boolean;
   cancelled?: boolean;
+  pending?: boolean;
   startedAt?: number | null;
   done?: boolean;
 };
@@ -181,17 +182,21 @@ export const HIDE_AFTER_DAYS = 2;
 // hides: somebody still needs to finish or discard it so the hours get logged.
 export function isJobVisible(job: JobLike): boolean {
   if (job.cancelled) return false;
+  // An unconfirmed website request stays until the owner confirms or
+  // declines it, however old its requested date is.
+  if (job.pending) return true;
   if (job.startedAt) return true;
   const days = daysFromToday(job);
   if (days === null) return true;
   return days >= -HIDE_AFTER_DAYS;
 }
 
-export type JobGroup = "running" | "overdue" | "today" | "tomorrow" | "week" | "later" | "past" | "unknown";
+export type JobGroup = "pending" | "running" | "overdue" | "today" | "tomorrow" | "week" | "later" | "past" | "unknown";
 
-export const GROUP_ORDER: JobGroup[] = ["running", "overdue", "today", "tomorrow", "week", "later", "past", "unknown"];
+export const GROUP_ORDER: JobGroup[] = ["pending", "running", "overdue", "today", "tomorrow", "week", "later", "past", "unknown"];
 
 export const GROUP_TITLES: Record<JobGroup, string> = {
+  pending: "Website requests to confirm",
   running: "Timer running",
   overdue: "Needs attention",
   today: "Today",
@@ -203,6 +208,7 @@ export const GROUP_TITLES: Record<JobGroup, string> = {
 };
 
 export function jobGroup(job: JobLike): JobGroup {
+  if (job.pending) return "pending";
   if (job.startedAt) return "running";
   const days = daysFromToday(job);
   if (days === null) return "unknown";

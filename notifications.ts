@@ -146,7 +146,7 @@ export async function scheduleTodaysJobNotifications(jobs: Job[]) {
   today.setHours(0, 0, 0, 0);
 
   const upcoming = jobs
-    .filter(job => !job.cancelled && !job.done)
+    .filter(job => !job.cancelled && !job.done && !job.pending)
     .map(job => ({ job, date: jobDate(job) }))
     .filter((x): x is { job: Job; date: Date } => {
       if (!x.date) return false;

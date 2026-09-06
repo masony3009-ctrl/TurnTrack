@@ -31,6 +31,13 @@ export type Job = {
     minutes: number;
     earned: number;
   } | null;
+  // Website requests arrive as pending: the owner confirms them into real
+  // jobs. Cleaners never see a pending job.
+  pending?: boolean;
+  source?: string;
+  contact?: { name?: string; phone?: string; email?: string } | null;
+  notes?: string;
+  requestId?: number | null;
 };
 
 export type Employee = {

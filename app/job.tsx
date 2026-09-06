@@ -1,8 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { collection, doc, onSnapshot, updateDoc, writeBatch } from "firebase/firestore";
+import { collection, deleteDoc, doc, onSnapshot, updateDoc, writeBatch } from "firebase/firestore";
 import { useEffect, useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { tapImpact, tapSelect, tapSuccess, tapWarning } from "../components/haptics";
 import { openInMaps } from "../components/maps";
 import { useProfile } from "../components/ProfileProvider";
@@ -64,7 +64,7 @@ export default function JobDetail() {
   // take an unassigned one.
   const isMine = !!selfId && job?.assignedTo === selfId;
   const canWork = isOwner || isMine;
-  const canTake = !isOwner && !!selfId && !!job && !job.assignedTo && !job.cancelled;
+  const canTake = !isOwner && !!selfId && !!job && !job.assignedTo && !job.cancelled && !job.pending;
 
   // Checklist shown from the template when the job has none yet; the list is
   // only written to the job when someone actually starts or ticks it.
@@ -312,6 +312,46 @@ export default function JobDetail() {
     }
   };
 
+  // Website requests: the owner turns one into a real job, or drops it. The
+  // request itself stays in the website admin and email either way.
+  const confirmRequest = async () => {
+    if (!job || !isOwner || busy) return;
+    setBusy(true);
+    try {
+      await updateDoc(doc(db, "jobs", job.id), { pending: false });
+      tapSuccess();
+    } catch (e) {
+      console.warn("confirm request failed:", e);
+      Alert.alert("Couldn't confirm", "The request is still pending. Check your connection and try again.");
+    }
+    setBusy(false);
+  };
+
+  const declineRequest = () => {
+    if (!job || !isOwner) return;
+    Alert.alert(
+      "Decline request",
+      `Remove this request from ${job.contact?.name || "the customer"}? It stays in your website admin and email.`,
+      [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Decline",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteDoc(doc(db, "jobs", job.id));
+              tapWarning();
+              goBack();
+            } catch (e) {
+              console.warn("decline request failed:", e);
+              Alert.alert("Couldn't decline", "Check your connection and try again.");
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const toggleChecklistItem = async (index: number) => {
     if (!job || !canWork) return;
     const updated = checklist.map((item, i) => (i === index ? { ...item, done: !item.done } : item));
@@ -338,11 +378,26 @@ export default function JobDetail() {
     );
   }
 
+  const isPending = job.pending === true;
+  if (isPending && !isOwner) {
+    return (
+      <View style={styles.container}>
+        <ScreenHeader
+          onBack={goBack}
+          title="Not scheduled yet"
+          subtitle="This website request hasn't been confirmed by the owner. It'll show up in Jobs once it is."
+        />
+      </View>
+    );
+  }
+
   const key = jobDateKey(job);
   const days = daysFromToday(job);
   const rel = relativeDayLabel(days);
   const sameDay = job.sameDayTurnover === true;
   const running = !!job.startedAt;
+  const contact = job.contact || null;
+  const hasContact = !!(contact && (contact.name || contact.phone));
   const activeEmployees = employees.filter(e => e.active);
   const assignedEmployee = employees.find(e => e.id === job.assignedTo);
   const assignedColor = job.assignedTo ? cleanerColor(assignedEmployee || { id: job.assignedTo }) : unassignedColor;
@@ -408,6 +463,7 @@ export default function JobDetail() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 150 }}>
         <View style={styles.pillRow}>
+          {isPending ? <Pill label="Needs confirmation" tone="gold" icon="mail-unread" /> : null}
           {running ? <Pill label="In progress" tone="solid" icon="time" /> : null}
           {job.done && !running ? <Pill label="Done" tone="neutral" icon="checkmark" /> : null}
           {job.cancelled ? <Pill label="Cancelled" tone="danger" icon="close-circle" /> : null}
@@ -423,12 +479,54 @@ export default function JobDetail() {
             </Text>
           </View>
         )}
+        {isPending && (
+          <Card tone="gold">
+            <View style={styles.pendingHeader}>
+              <Ionicons name="mail-unread" size={18} color={colors.goldDark} />
+              <Text style={styles.pendingTitle}>Website request — not on the schedule yet</Text>
+            </View>
+            <Text style={styles.pendingBody}>
+              Confirm it once you&apos;ve agreed on the details with the customer. Until then, cleaners can&apos;t see it and no reminders fire.
+            </Text>
+            <BrandButton label={busy ? "Confirming…" : "Confirm job"} icon="checkmark-circle" onPress={confirmRequest} disabled={busy} style={{ marginTop: 12 }} />
+            <TouchableOpacity style={styles.declineBtn} onPress={declineRequest} hitSlop={6}>
+              <Text style={styles.declineText}>Decline & remove</Text>
+            </TouchableOpacity>
+          </Card>
+        )}
+
         {sameDay && !job.cancelled && (
           <View style={styles.sameDayBanner}>
             <Ionicons name="alert-circle" size={17} color={colors.goldDark} />
             <Text style={styles.sameDayBannerText}>Checkout and a new check-in happen on this date. The clean has to be done between guests.</Text>
           </View>
         )}
+
+        {hasContact && contact && (
+          <Card>
+            <Text style={type.section}>Customer</Text>
+            {contact.name ? <Text style={styles.contactName}>{contact.name}</Text> : null}
+            {contact.phone ? (
+              <TouchableOpacity style={styles.contactRow} onPress={() => Linking.openURL(`tel:${contact.phone}`)} hitSlop={6}>
+                <Ionicons name="call-outline" size={16} color={colors.tealDark} />
+                <Text style={styles.contactLink}>{contact.phone}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {isOwner && contact.email ? (
+              <TouchableOpacity style={styles.contactRow} onPress={() => Linking.openURL(`mailto:${contact.email}`)} hitSlop={6}>
+                <Ionicons name="mail-outline" size={16} color={colors.tealDark} />
+                <Text style={styles.contactLink}>{contact.email}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </Card>
+        )}
+
+        {job.notes ? (
+          <Card>
+            <Text style={type.section}>Request details</Text>
+            <Text style={styles.notesText}>{job.notes}</Text>
+          </Card>
+        ) : null}
 
         <Card onPress={() => openInMaps(job.address)}>
           <View style={styles.addressRow}>
@@ -444,7 +542,7 @@ export default function JobDetail() {
           </View>
         </Card>
 
-        <Card accent={assignedColor}>
+        {!isPending && <Card accent={assignedColor}>
           <View style={styles.cardHeaderRow}>
             <Text style={type.section}>Assigned cleaner</Text>
             {isOwner && !job.cancelled && (
@@ -459,9 +557,9 @@ export default function JobDetail() {
           {canTake && (
             <BrandButton label="Take this job" icon="hand-right-outline" variant="outline" compact onPress={takeJob} style={{ marginTop: 12, alignSelf: "flex-start" }} />
           )}
-        </Card>
+        </Card>}
 
-        {!job.cancelled && (
+        {!job.cancelled && !isPending && (
           <Card>
             <Text style={type.section}>Time tracking</Text>
             {running && job.startedAt ? (
@@ -496,16 +594,16 @@ export default function JobDetail() {
           </Card>
         )}
 
-        <Card>
+        {!isPending && <Card>
           <View style={styles.cardHeaderRow}>
             <Text style={type.section}>Checklist</Text>
             <Text style={styles.checklistCount}>{checkedCount}/{checklist.length}</Text>
           </View>
           <ProgressBar value={progress} />
           {renderChecklist()}
-        </Card>
+        </Card>}
 
-        {isOwner && (
+        {isOwner && !isPending && (
           job.cancelled ? (
             <BrandButton label="Restore this cleaning" icon="refresh" variant="outline" onPress={restoreCleaning} />
           ) : (
@@ -517,7 +615,7 @@ export default function JobDetail() {
         )}
       </ScrollView>
 
-      {!job.cancelled && (canWork || canTake) && (
+      {!job.cancelled && !isPending && (canWork || canTake) && (
         <BottomBar>
           {running ? (
             <View style={styles.barRow}>
@@ -552,6 +650,15 @@ const styles = StyleSheet.create({
     borderRadius: radius.md, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: "#F0DDBA",
   },
   sameDayBannerText: { flex: 1, fontSize: 13.5, color: colors.goldDark, lineHeight: 19, fontWeight: "600" },
+  pendingHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  pendingTitle: { flex: 1, fontSize: 15, fontWeight: "700", color: colors.goldDark },
+  pendingBody: { fontSize: 13.5, color: colors.muted, lineHeight: 19, marginTop: 8 },
+  declineBtn: { alignItems: "center", justifyContent: "center", minHeight: 44, marginTop: 2 },
+  declineText: { color: colors.danger, fontSize: 13.5, fontWeight: "600" },
+  contactName: { fontSize: 16, fontWeight: "700", color: colors.ink, marginTop: 8 },
+  contactRow: { flexDirection: "row", alignItems: "center", gap: 7, minHeight: 36 },
+  contactLink: { fontSize: 14.5, fontWeight: "600", color: colors.tealDark },
+  notesText: { fontSize: 14, color: colors.ink, lineHeight: 20, marginTop: 8 },
   addressRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   addressIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.tealSoft, alignItems: "center", justifyContent: "center" },
   addressText: { fontSize: 16, fontWeight: "700", color: colors.ink, marginTop: 3 },

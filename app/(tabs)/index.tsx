@@ -60,10 +60,15 @@ export default function JobsScreen() {
 
   // Owners get reminded about every job; cleaners only about theirs. While
   // the owner is just viewing as a cleaner, their phone keeps the full set.
+  // Unconfirmed website requests aren't on the schedule, so never remind.
   useEffect(() => {
-    const relevant = selfId && !ownerViewing ? jobs.filter(j => j.assignedTo === selfId) : jobs;
+    const scheduled = jobs.filter(j => !j.pending);
+    const relevant = selfId && !ownerViewing ? scheduled.filter(j => j.assignedTo === selfId) : scheduled;
     scheduleTodaysJobNotifications(relevant);
   }, [jobs, selfId, ownerViewing]);
+
+  // Cleaners (and the owner viewing as one) never see unconfirmed requests.
+  const roleJobs = useMemo(() => (selfId ? jobs.filter(j => !j.pending) : jobs), [jobs, selfId]);
 
   const employeeById = useMemo(() => {
     const map = new Map<string, Employee>();
@@ -170,7 +175,7 @@ export default function JobsScreen() {
     );
   };
 
-  const active = jobs.filter(j => !j.done);
+  const active = roleJobs.filter(j => !j.done && !j.pending);
   const todayCount = active.filter(j => daysFromToday(j) === 0).length;
   const weekCount = active.filter(j => {
     const d = daysFromToday(j);
@@ -179,7 +184,7 @@ export default function JobsScreen() {
   const unassignedCount = active.filter(j => !j.assignedTo).length;
   const mineCount = selfId ? active.filter(j => j.assignedTo === selfId).length : 0;
 
-  const visibleJobs = selfId && mineOnly ? jobs.filter(j => j.assignedTo === selfId) : jobs;
+  const visibleJobs = selfId && mineOnly ? roleJobs.filter(j => j.assignedTo === selfId) : roleJobs;
 
   const sections: Section[] = useMemo(() => {
     const buckets = new Map<JobGroup, Job[]>();
@@ -265,7 +270,7 @@ export default function JobsScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 110 }}>
         {visibleJobs.length === 0 && (
-          mineOnly && jobs.length > 0 ? (
+          mineOnly && roleJobs.length > 0 ? (
             <EmptyState
               icon="person-outline"
               title="Nothing assigned to you yet"
@@ -285,7 +290,7 @@ export default function JobsScreen() {
             <SectionHeader
               title={GROUP_TITLES[section.group]}
               count={section.jobs.length}
-              tone={section.group === "running" ? "live" : section.group === "overdue" ? "warn" : "default"}
+              tone={section.group === "running" ? "live" : section.group === "overdue" || section.group === "pending" ? "warn" : "default"}
             />
             {section.jobs.map(job => {
               const assignee = job.assignedTo ? employeeById.get(job.assignedTo) : undefined;
@@ -296,7 +301,7 @@ export default function JobsScreen() {
                   job={job}
                   color={color}
                   photo={assignee?.photo}
-                  canToggle={canManage(job)}
+                  canToggle={canManage(job) && !job.pending}
                   canDelete={isOwner}
                   onPress={() => router.push({ pathname: "/job", params: { id: job.id } })}
                   onToggle={() => toggleDone(job)}
@@ -345,10 +350,12 @@ function JobCard({ job, color, photo, canToggle, canDelete, onPress, onToggle, o
   const days = daysFromToday(job);
   const rel = relativeDayLabel(days);
   const running = !!job.startedAt;
+  const pending = job.pending === true;
   return (
-    <Card tone={sameDay && !job.done ? "gold" : "default"} accent={color} onPress={onPress} style={job.done ? styles.cardDone : undefined}>
+    <Card tone={(sameDay && !job.done) || pending ? "gold" : "default"} accent={pending ? colors.gold : color} onPress={onPress} style={job.done ? styles.cardDone : undefined}>
       <View style={styles.cardTop}>
         <View style={styles.pillRow}>
+          {pending ? <Pill label="Needs confirmation" tone="gold" icon="mail-unread" /> : null}
           {running ? <Pill label="In progress" tone="solid" icon="time" /> : null}
           {job.done ? <Pill label="Done" tone="neutral" icon="checkmark" /> : null}
           {sameDay ? <Pill label="Same-day" tone="gold" icon="alert-circle" /> : null}
@@ -367,7 +374,15 @@ function JobCard({ job, color, photo, canToggle, canDelete, onPress, onToggle, o
         {rel ? <Text style={[styles.metaRel, days === 0 && { color: colors.tealDark }, days !== null && days < 0 && !job.done && { color: colors.goldDark }]}>· {rel}</Text> : null}
       </View>
       <View style={styles.cardBottom}>
-        <AssigneeRow name={job.assignedToName} color={color} photo={photo} />
+        {pending ? (
+          <View style={styles.contactRow}>
+            <Ionicons name="person-outline" size={17} color={colors.muted} />
+            <Text style={styles.contactText}>{job.contact?.name || "Website customer"}</Text>
+          </View>
+        ) : (
+          <AssigneeRow name={job.assignedToName} color={color} photo={photo} />
+        )}
+        {pending ? <Ionicons name="chevron-forward" size={20} color={colors.faint} /> : null}
         {canToggle && (
           <TouchableOpacity
             style={[styles.doneCircle, job.done && styles.doneCircleActive]}
@@ -418,6 +433,8 @@ const styles = StyleSheet.create({
   metaText: { fontSize: 13, color: colors.muted },
   metaRel: { fontSize: 13, fontWeight: "700", color: colors.muted },
   cardBottom: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12, gap: 10 },
+  contactRow: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1 },
+  contactText: { fontSize: 13.5, fontWeight: "600", color: colors.muted },
   doneCircle: {
     width: 40, height: 40, borderRadius: 20, borderWidth: 1.5, borderColor: colors.line,
     alignItems: "center", justifyContent: "center", backgroundColor: colors.card,
