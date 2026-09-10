@@ -13,7 +13,7 @@ A cross-platform mobile app (iOS & Android) built to automate job scheduling for
 - **Team screen** — add cleaners with an hourly rate, phone, and Zelle contact; deactivate or delete them
 - **Assignments** — assign any job to a cleaner from the job detail screen; the assignee shows on job cards, the calendar, and day-of notifications
 - **Time tracking** — Start cleaning / Finish cleaning timer on each job; finishing logs a time entry (minutes × the cleaner's hourly rate) and marks the job done
-- **Checklist** — each job carries its own tappable checklist with progress tracking
+- **Checklist** — each job carries its own tappable checklist with progress tracking. Ticks record the time and who made them, so the owner can follow a cleaning live. Template lines ending in a colon become section headings ("Kitchen:") and never count toward progress
 - **Payroll screen** — unpaid hours and amount owed per cleaner, mark-paid-via-Zelle (with a copy-Zelle-contact button), manual time corrections, and paid history
 - **Assignment pushes** — assigning a job sends a push notification to the cleaner's phone(s); tapping it opens the job. Reassigning tells the previous cleaner, cancelling tells the assignee
 - **Checklist pop-up** — tapping Start cleaning opens the checklist as a sheet. The owner edits the template from the list icon on the Jobs tab (one item per line, stored at `settings/checklist`)
