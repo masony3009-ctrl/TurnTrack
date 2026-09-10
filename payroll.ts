@@ -32,6 +32,11 @@ export function formatEntryDate(ms: number): string {
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }
 
+// "2:14 PM" - the wall-clock time something happened, for checklist stamps.
+export function formatClockTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 export function parseRate(input: string): number | null {
   const cleaned = input.replace(/[^0-9.]/g, "");
   const rate = parseFloat(cleaned);

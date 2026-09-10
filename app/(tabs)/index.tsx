@@ -5,12 +5,13 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { tapSelect, tapSuccess } from "../../components/haptics";
 import { useProfile } from "../../components/ProfileProvider";
-import { alertSoon, AssigneeRow, BrandButton, Card, DatePickerField, EmptyState, Fab, FormInput, IconButton, Pill, ScreenHeader, SectionHeader, SheetModal } from "../../components/ui";
+import { alertSoon, AssigneeRow, BrandButton, Card, DatePickerField, EmptyState, Fab, FormInput, IconButton, Pill, ProgressBar, ScreenHeader, SectionHeader, SheetModal } from "../../components/ui";
 import { db } from "../../firebase";
 import { registerForPushNotifications, scheduleTodaysJobNotifications, sendTestNotification } from "../../notifications";
+import { formatClockTime } from "../../payroll";
 import { cleanerColor, colors, radius, unassignedColor } from "../../theme";
 import { daysFromToday, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, HIDE_AFTER_DAYS, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate } from "../../turnover";
-import { DEFAULT_CHECKLIST, Employee, Job, newJobDoc, parseChecklistText } from "../../types";
+import { checklistProgress, DEFAULT_CHECKLIST, Employee, Job, newJobDoc, parseChecklistText } from "../../types";
 
 type Section = { group: JobGroup; jobs: Job[] };
 
@@ -234,11 +235,11 @@ export default function JobsScreen() {
 
       <SheetModal visible={showChecklistEditor} title="Cleaning checklist" onClose={() => setShowChecklistEditor(false)}>
         <Text style={styles.sheetHint}>
-          One item per line. Every new cleaning gets this list, and it pops up when a cleaner taps Start cleaning.
+          One item per line. End a line with a colon to make it a section heading, like &quot;Kitchen:&quot;. Every new cleaning gets this list, and it pops up when a cleaner taps Start cleaning.
         </Text>
         <FormInput
           label="Checklist items"
-          placeholder={"Strip all beds\nWash and dry all laundry\n…"}
+          placeholder={"Kitchen:\nWash and put away dishes\nClean countertops\n…"}
           value={checklistText}
           onChangeText={setChecklistText}
           multiline
@@ -351,6 +352,9 @@ function JobCard({ job, color, photo, canToggle, canDelete, onPress, onToggle, o
   const rel = relativeDayLabel(days);
   const running = !!job.startedAt;
   const pending = job.pending === true;
+  // Checklist progress while someone is cleaning, so the owner can watch
+  // from the list without opening the job.
+  const cl = checklistProgress(job.checklist);
   return (
     <Card tone={(sameDay && !job.done) || pending ? "gold" : "default"} accent={pending ? colors.gold : color} onPress={onPress} style={job.done ? styles.cardDone : undefined}>
       <View style={styles.cardTop}>
@@ -373,6 +377,14 @@ function JobCard({ job, color, photo, canToggle, canDelete, onPress, onToggle, o
         <Text style={styles.metaText}>{key ? formatShortDate(key) : job.date}</Text>
         {rel ? <Text style={[styles.metaRel, days === 0 && { color: colors.tealDark }, days !== null && days < 0 && !job.done && { color: colors.goldDark }]}>· {rel}</Text> : null}
       </View>
+      {running && cl.total > 0 ? (
+        <View style={styles.checkProgress}>
+          <View style={{ flex: 1 }}><ProgressBar value={cl.done / cl.total} color={color} /></View>
+          <Text style={styles.checkProgressText}>
+            {cl.done}/{cl.total}{cl.lastAt ? ` · ${formatClockTime(cl.lastAt)}` : ""}
+          </Text>
+        </View>
+      ) : null}
       <View style={styles.cardBottom}>
         {pending ? (
           <View style={styles.contactRow}>
@@ -432,6 +444,8 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 5 },
   metaText: { fontSize: 13, color: colors.muted },
   metaRel: { fontSize: 13, fontWeight: "700", color: colors.muted },
+  checkProgress: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
+  checkProgressText: { fontSize: 12, fontWeight: "700", color: colors.tealDark },
   cardBottom: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12, gap: 10 },
   contactRow: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1 },
   contactText: { fontSize: 13.5, fontWeight: "600", color: colors.muted },

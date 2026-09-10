@@ -410,18 +410,28 @@ export function ColorPicker({ label, value, onChange }: {
 }
 
 // One tappable checklist line. 48pt tall so it's an easy target with gloves on.
-export function ChecklistRow({ text, done, onPress, disabled }: {
+export function ChecklistRow({ text, done, meta, heading, onPress, disabled }: {
   text: string;
   done: boolean;
+  // When and by whom the item was ticked, e.g. "2:14 PM - Maria".
+  meta?: string;
+  // Section label rather than a task.
+  heading?: boolean;
   onPress?: () => void;
   disabled?: boolean;
 }) {
+  if (heading) {
+    return <Text style={styles.checkHeading}>{text}</Text>;
+  }
   return (
     <TouchableOpacity style={styles.checkRow} onPress={onPress} disabled={disabled || !onPress} activeOpacity={0.6}>
       <View style={[styles.checkCircle, done && styles.checkCircleActive]}>
         {done && <Ionicons name="checkmark" size={15} color={colors.white} />}
       </View>
-      <Text style={[styles.checkItem, done && styles.checkItemDone]}>{text}</Text>
+      <View style={styles.checkTextWrap}>
+        <Text style={[styles.checkItem, done && styles.checkItemDone]}>{text}</Text>
+        {meta ? <Text style={styles.checkMeta}>{meta}</Text> : null}
+      </View>
     </TouchableOpacity>
   );
 }
@@ -524,6 +534,12 @@ const styles = StyleSheet.create({
   checkCircleActive: { backgroundColor: colors.teal, borderColor: colors.teal },
   checkItem: { flex: 1, fontSize: 15, color: colors.ink, lineHeight: 20 },
   checkItemDone: { color: colors.faint, textDecorationLine: "line-through" },
+  checkTextWrap: { flex: 1 },
+  checkHeading: {
+    fontSize: 11.5, fontWeight: "800", color: colors.faint, letterSpacing: 1,
+    textTransform: "uppercase", marginTop: 16, marginBottom: 2,
+  },
+  checkMeta: { fontSize: 12, color: colors.tealDark, fontWeight: "600", marginTop: 2 },
   progressTrack: { height: 6, borderRadius: 3, backgroundColor: colors.bg, overflow: "hidden", marginTop: 10, marginBottom: 6 },
   progressFill: { height: 6, borderRadius: 3 },
 });

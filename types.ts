@@ -3,6 +3,14 @@ import { formatDateLabel, parseJobDateToKey } from "./turnover";
 export type ChecklistItem = {
   text: string;
   done: boolean;
+  // Section label ("Kitchen"), not a tickable task. Comes from a template
+  // line ending in a colon.
+  heading?: boolean;
+  // Stamped when someone ticks the item and cleared when they untick it, so
+  // the owner can see what got done and when. Absent on items ticked before
+  // stamping existed.
+  doneAt?: number | null;
+  doneBy?: string | null;
 };
 
 export type Job = {
@@ -90,9 +98,44 @@ export const DEFAULT_CHECKLIST: string[] = [
   "Check for damages",
 ];
 
+// A template line ending in a colon is a section heading, e.g. "Kitchen:".
+export function isHeadingLine(line: string): boolean {
+  return /:s*$/.test(line);
+}
+
 export function buildChecklist(template?: string[] | null): ChecklistItem[] {
   const source = template && template.length > 0 ? template : DEFAULT_CHECKLIST;
-  return source.map(text => ({ text, done: false }));
+  return source.map(line => isHeadingLine(line)
+    ? { text: line.replace(/:s*$/, ""), done: false, heading: true }
+    : { text: line, done: false });
+}
+
+export type ChecklistProgress = {
+  done: number;
+  total: number;
+  // The most recent tick, so a card can say "last check 2:31 PM".
+  lastAt: number | null;
+  lastBy: string | null;
+};
+
+export function checklistProgress(items?: ChecklistItem[] | null): ChecklistProgress {
+  const list = items || [];
+  let done = 0;
+  let lastAt: number | null = null;
+  let lastBy: string | null = null;
+  let total = 0;
+  for (const item of list) {
+    // Headings are labels, not work: they never count toward progress.
+    if (item.heading) continue;
+    total++;
+    if (!item.done) continue;
+    done++;
+    if (typeof item.doneAt === "number" && (lastAt === null || item.doneAt > lastAt)) {
+      lastAt = item.doneAt;
+      lastBy = item.doneBy || null;
+    }
+  }
+  return { done, total, lastAt, lastBy };
 }
 
 export type NewJobInput = {

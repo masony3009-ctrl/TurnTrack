@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { collection, deleteDoc, doc, onSnapshot, updateDoc, writeBatch } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { tapImpact, tapSelect, tapSuccess, tapWarning } from "../components/haptics";
 import { openInMaps } from "../components/maps";
@@ -9,10 +9,10 @@ import { useProfile } from "../components/ProfileProvider";
 import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ChecklistRow, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
 import { db } from "../firebase";
 import { assignmentMessage, cancellationMessage, sendPushToEmployee, unassignedMessage } from "../notifications";
-import { computeEarned, formatDuration, formatMoney, minutesBetween } from "../payroll";
+import { computeEarned, formatClockTime, formatDuration, formatMoney, minutesBetween } from "../payroll";
 import { cleanerColor, colors, radius, type, unassignedColor } from "../theme";
 import { daysFromToday, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
-import { buildChecklist, ChecklistItem, DEFAULT_CHECKLIST, Employee, Job } from "../types";
+import { buildChecklist, ChecklistItem, checklistProgress, DEFAULT_CHECKLIST, Employee, Job } from "../types";
 
 export default function JobDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -23,6 +23,11 @@ export default function JobDetail() {
   const [showChecklist, setShowChecklist] = useState(false);
   const [template, setTemplate] = useState<string[]>(DEFAULT_CHECKLIST);
   const [busy, setBusy] = useState(false);
+  // The freshest checklist we know of. Ticks write the whole array, so a
+  // second tap landing before the server echoes the first must build on the
+  // first, not on the array this render closed over - otherwise the faster
+  // tap silently wipes the slower one.
+  const checklistRef = useRef<ChecklistItem[]>([]);
   const { state, employees } = useProfile();
   const isOwner = state.status === "owner";
   const selfId = state.status === "cleaner" ? state.employee.id : null;
@@ -69,9 +74,17 @@ export default function JobDetail() {
   // Checklist shown from the template when the job has none yet; the list is
   // only written to the job when someone actually starts or ticks it.
   const checklist: ChecklistItem[] = job?.checklist && job.checklist.length > 0 ? job.checklist : buildChecklist(template);
-  const checkedCount = checklist.filter(item => item.done).length;
-  const progress = checklist.length > 0 ? checkedCount / checklist.length : 0;
-  const allDone = checklist.length > 0 && checkedCount === checklist.length;
+  // Section headings are labels, so every count here comes from the helper
+  // rather than the raw array length.
+  useEffect(() => {
+    checklistRef.current = checklist;
+  }, [checklist]);
+
+  const activity = checklistProgress(checklist);
+  const checkedCount = activity.done;
+  const taskCount = activity.total;
+  const progress = taskCount > 0 ? checkedCount / taskCount : 0;
+  const allDone = taskCount > 0 && checkedCount === taskCount;
 
   const notify = (employeeId: string | null | undefined, message: ReturnType<typeof assignmentMessage>) => {
     if (employeeId) sendPushToEmployee(employeeId, message);
@@ -218,7 +231,7 @@ export default function JobDetail() {
 
   const finishCleaning = async () => {
     if (!job || !job.startedAt || busy || !canWork) return;
-    const unchecked = checklist.length - checkedCount;
+    const unchecked = taskCount - checkedCount;
     const proceed = async () => {
       setBusy(true);
       try {
@@ -354,7 +367,18 @@ export default function JobDetail() {
 
   const toggleChecklistItem = async (index: number) => {
     if (!job || !canWork) return;
-    const updated = checklist.map((item, i) => (i === index ? { ...item, done: !item.done } : item));
+    if (checklist[index] && checklist[index].heading) return;
+    // Who ticked it: the signed-in cleaner, or the owner working the job.
+    const actor = selfName || (isOwner ? "Owner" : null);
+    const base = checklistRef.current.length > 0 ? checklistRef.current : checklist;
+    const updated = base.map((item, i) => {
+      if (i !== index) return item;
+      return item.done
+        ? { ...item, done: false, doneAt: null, doneBy: null }
+        : { ...item, done: true, doneAt: Date.now(), doneBy: actor };
+    });
+    // Hold the new list locally so a rapid follow-up tap starts from it.
+    checklistRef.current = updated;
     tapSelect();
     try {
       await updateDoc(doc(db, "jobs", job.id), { checklist: updated });
@@ -403,8 +427,27 @@ export default function JobDetail() {
   const assignedColor = job.assignedTo ? cleanerColor(assignedEmployee || { id: job.assignedTo }) : unassignedColor;
   const dateHeading = key ? formatDayHeading(key) : job.date;
 
+  // Live record of what has been ticked. The owner sees this update as the
+  // cleaner works, because the job document streams from Firestore.
+  const stampFor = (item: ChecklistItem) =>
+    item.done && item.doneAt
+      ? `${formatClockTime(item.doneAt)}${item.doneBy ? ` · ${item.doneBy.split(" ")[0]}` : ""}`
+      : undefined;
+  const checklistActivity = activity.lastAt
+    ? `Last check ${formatClockTime(activity.lastAt)}${activity.lastBy ? ` · ${activity.lastBy.split(" ")[0]}` : ""}`
+    : running
+      ? "Nothing checked off yet"
+      : "";
+
   const renderChecklist = () => checklist.map((item, i) => (
-    <ChecklistRow key={i} text={item.text} done={item.done} onPress={canWork ? () => toggleChecklistItem(i) : undefined} />
+    <ChecklistRow
+      key={i}
+      text={item.text}
+      done={item.done}
+      heading={item.heading}
+      meta={stampFor(item)}
+      onPress={canWork && !item.heading ? () => toggleChecklistItem(i) : undefined}
+    />
   ));
 
   return (
@@ -445,7 +488,7 @@ export default function JobDetail() {
 
       <SheetModal visible={showChecklist} title="Cleaning checklist" onClose={() => setShowChecklist(false)}>
         <View style={styles.sheetProgressRow}>
-          <Text style={styles.sheetProgressText}>{checkedCount} of {checklist.length} done</Text>
+          <Text style={styles.sheetProgressText}>{checkedCount} of {taskCount} done</Text>
           <View style={{ flex: 1 }}><ProgressBar value={progress} /></View>
         </View>
         {renderChecklist()}
@@ -569,6 +612,9 @@ export default function JobDetail() {
                   <Text style={styles.liveText}>{job.assignedToName} is cleaning</Text>
                 </View>
                 <ElapsedTimer startedAt={job.startedAt} />
+                <Text style={styles.startedText}>
+                  Started {formatClockTime(job.startedAt)} · {checkedCount} of {taskCount} checked
+                </Text>
                 {canWork && (
                   <TouchableOpacity style={styles.discardBtn} onPress={cancelTimer} hitSlop={8}>
                     <Text style={styles.discardText}>Discard timer</Text>
@@ -597,9 +643,10 @@ export default function JobDetail() {
         {!isPending && <Card>
           <View style={styles.cardHeaderRow}>
             <Text style={type.section}>Checklist</Text>
-            <Text style={styles.checklistCount}>{checkedCount}/{checklist.length}</Text>
+            <Text style={styles.checklistCount}>{checkedCount}/{taskCount}</Text>
           </View>
           <ProgressBar value={progress} />
+          {checklistActivity ? <Text style={styles.checklistActivity}>{checklistActivity}</Text> : null}
           {renderChecklist()}
         </Card>}
 
@@ -678,6 +725,8 @@ const styles = StyleSheet.create({
   summaryText: { fontSize: 14, fontWeight: "600", color: colors.tealDark, flex: 1 },
   timerHint: { fontSize: 13.5, color: colors.muted, lineHeight: 19, marginTop: 8 },
   checklistCount: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
+  checklistActivity: { fontSize: 12.5, color: colors.muted, marginTop: 8 },
+  startedText: { fontSize: 13, color: colors.muted, marginTop: 2 },
   sheetProgressRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 6 },
   sheetProgressText: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
   assignOption: {
