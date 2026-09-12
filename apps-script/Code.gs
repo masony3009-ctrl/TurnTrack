@@ -18,6 +18,27 @@ var FS = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID + "/databa
 var SEARCH_WINDOW = "newer_than:120d";
 var MAX_THREADS = 25;
 
+// The Firestore rules require request.auth, so every call carries an anonymous
+// ID token. WEB_API_KEY is the same public key the app ships with - not a
+// secret, it only identifies the Firebase project.
+var WEB_API_KEY = "AIzaSyBpSJEixry1qJBWrsvS_Azlf40GWnOGCcE";
+var cachedIdToken = null;
+
+function idToken() {
+  if (cachedIdToken) return cachedIdToken; // one run is far shorter than the hour a token lasts
+  var res = UrlFetchApp.fetch(
+    "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + WEB_API_KEY,
+    { method: "post", contentType: "application/json", payload: JSON.stringify({ returnSecureToken: true }), muteHttpExceptions: true }
+  );
+  if (res.getResponseCode() >= 300) throw new Error("anonymous sign-in failed: " + res.getContentText());
+  cachedIdToken = JSON.parse(res.getContentText()).idToken;
+  return cachedIdToken;
+}
+
+function authHeaders() {
+  return { Authorization: "Bearer " + idToken() };
+}
+
 // ---- entry point ---------------------------------------------------------
 
 function scanAllEmails() {
@@ -35,7 +56,7 @@ function int(v) { return { integerValue: String(v) }; }
 function nul() { return { nullValue: null }; }
 
 function fsGet(path) {
-  var res = UrlFetchApp.fetch(FS + path, { muteHttpExceptions: true });
+  var res = UrlFetchApp.fetch(FS + path, { headers: authHeaders(), muteHttpExceptions: true });
   if (res.getResponseCode() >= 300) return null;
   return JSON.parse(res.getContentText());
 }
@@ -252,6 +273,7 @@ function createJob(ctx, opts) {
   var res = UrlFetchApp.fetch(FS + "/jobs", {
     method: "post",
     contentType: "application/json",
+    headers: authHeaders(),
     payload: JSON.stringify({ fields: fields }),
     muteHttpExceptions: true
   });
@@ -329,6 +351,7 @@ function cancelJob(job) {
   UrlFetchApp.fetch("https://firestore.googleapis.com/v1/" + job.name + mask, {
     method: "patch",
     contentType: "application/json",
+    headers: authHeaders(),
     payload: JSON.stringify({ fields: {
       cancelled: bool(true),
       cancelledAt: int(Date.now()),

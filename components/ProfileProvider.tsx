@@ -2,7 +2,7 @@ import * as Application from "expo-application";
 import { collection, deleteDoc, doc, onSnapshot, setDoc } from "firebase/firestore";
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { Platform } from "react-native";
-import { db } from "../firebase";
+import { db, ensureSignedIn } from "../firebase";
 import { DeviceRecord, Employee } from "../types";
 
 export type ProfileState =
@@ -52,8 +52,24 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [loadError, setLoadError] = useState(false);
   const [viewingAsId, setViewingAsId] = useState<string | null>(null);
 
+  const [authReady, setAuthReady] = useState(false);
+
   useEffect(() => {
     resolveDeviceId().then(setDeviceId);
+  }, []);
+
+  // Nothing may touch Firestore before the anonymous sign-in lands - once the
+  // rules require auth, a listener that starts first is denied and never
+  // retries on its own.
+  useEffect(() => {
+    let cancelled = false;
+    ensureSignedIn()
+      .then(() => { if (!cancelled) setAuthReady(true); })
+      .catch((e) => {
+        console.warn("anonymous sign-in failed:", e);
+        if (!cancelled) setLoadError(true);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   // Drop "view as" if the viewed cleaner is deactivated or deleted, so a
@@ -65,7 +81,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   }, [viewingAsId, employees]);
 
   useEffect(() => {
-    if (!deviceId) return;
+    if (!deviceId || !authReady) return;
     const unsub = onSnapshot(doc(db, "devices", deviceId), (snap) => {
       setDeviceRecord(snap.exists() ? (snap.data() as DeviceRecord) : null);
     }, (error) => {
@@ -73,9 +89,10 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       setLoadError(true);
     });
     return unsub;
-  }, [deviceId]);
+  }, [deviceId, authReady]);
 
   useEffect(() => {
+    if (!authReady) return;
     const unsub = onSnapshot(collection(db, "employees"), (snap) => {
       const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Employee[];
       loaded.sort((a, b) => a.name.localeCompare(b.name));
@@ -85,7 +102,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       setLoadError(true);
     });
     return unsub;
-  }, []);
+  }, [authReady]);
 
   const state: ProfileState = useMemo(() => {
     if (loadError) return { status: "error" };
