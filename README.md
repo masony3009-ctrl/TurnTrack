@@ -21,8 +21,15 @@ A cross-platform mobile app (iOS & Android) built to automate job scheduling for
 - **Auto-cleanup** — jobs leave the phones 2 days after their cleaning date (`HIDE_AFTER_DAYS` in `turnover.ts`) but stay in Firestore
 - **Cleaner colors** — each cleaner has a color (Team tab). Calendar dots, job cards, and avatars use it, with a legend under the calendar
 - **Owner access** — the owner can open any cleaner's view without their PIN: "View as" on the Team tab, or the owner PIN on the sign-in screen
+- **Access codes** — the job screen shows the front door, garage and supply-closet codes for that house, tap to copy. They are read from the property registry rather than stored on the job, so changing a code once changes it on every cleaning at that house, past and future
 
-Firestore collections: `jobs`, `pushTokens`, `employees`, `timeEntries`, `devices` (one per phone: role, employee, push token), `settings` (`owner` PIN, `checklist` template). The security rules must allow read/write on all of them.
+Firestore collections: `jobs`, `pushTokens`, `employees`, `timeEntries`, `devices` (one per phone: role, employee, push token), `settings` (`owner` PIN, `checklist` template, `properties` registry, `airbnbSync` heartbeat). The security rules must allow read/write on all of them.
+
+`settings/properties` is the house registry — one entry per property with its
+street address, aliases, beds/baths and access codes. The app, the Apps Script
+and the Airbnb sync all read it, and `findProperty()` in `properties.ts` is the
+shared matcher. Aliases are deliberately narrow: two houses on the same street
+are different houses, so neither may claim the bare street name.
 
 ## Tech Stack
 - **React Native** + **TypeScript** — cross-platform mobile (iOS & Android)

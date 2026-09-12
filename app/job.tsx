@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { collection, deleteDoc, doc, onSnapshot, updateDoc, writeBatch } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
@@ -10,6 +11,8 @@ import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, Checklist
 import { db } from "../firebase";
 import { assignmentMessage, cancellationMessage, sendPushToEmployee, unassignedMessage } from "../notifications";
 import { computeEarned, formatClockTime, formatDuration, formatMoney, minutesBetween } from "../payroll";
+import { useProperties } from "../components/useProperties";
+import { accessCodes, findProperty, type AccessCode } from "../properties";
 import { cleanerColor, colors, radius, type, unassignedColor } from "../theme";
 import { daysFromToday, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
 import { buildChecklist, ChecklistItem, checklistProgress, DEFAULT_CHECKLIST, Employee, Job } from "../types";
@@ -28,6 +31,9 @@ export default function JobDetail() {
   // first, not on the array this render closed over - otherwise the faster
   // tap silently wipes the slower one.
   const checklistRef = useRef<ChecklistItem[]>([]);
+  // Which code was last copied, so the hint can confirm it landed.
+  const [copied, setCopied] = useState<string | null>(null);
+  const properties = useProperties();
   const { state, employees } = useProfile();
   const isOwner = state.status === "owner";
   const selfId = state.status === "cleaner" ? state.employee.id : null;
@@ -85,6 +91,22 @@ export default function JobDetail() {
   const taskCount = activity.total;
   const progress = taskCount > 0 ? checkedCount / taskCount : 0;
   const allDone = taskCount > 0 && checkedCount === taskCount;
+
+  // Access codes come from the registry rather than the job, so changing a
+  // code in one place changes it on every cleaning at that house, past and
+  // future, without rewriting a single job.
+  const property = findProperty(properties, job);
+  const codes = accessCodes(property);
+
+  const copyCode = async (c: AccessCode) => {
+    try {
+      await Clipboard.setStringAsync(c.code);
+      tapSelect();
+      setCopied(c.label);
+    } catch (e) {
+      console.warn("copy code failed:", e);
+    }
+  };
 
   const notify = (employeeId: string | null | undefined, message: ReturnType<typeof assignmentMessage>) => {
     if (employeeId) sendPushToEmployee(employeeId, message);
@@ -585,6 +607,32 @@ export default function JobDetail() {
           </View>
         </Card>
 
+        {!isPending && codes.length > 0 && (
+          <Card>
+            <View style={styles.cardHeaderRow}>
+              <Text style={type.section}>Access codes</Text>
+              <Ionicons name="keypad-outline" size={18} color={colors.tealDark} />
+            </View>
+            <View style={styles.codeRow}>
+              {codes.map((c) => (
+                <TouchableOpacity
+                  key={c.label}
+                  style={styles.codeChip}
+                  onPress={() => copyCode(c)}
+                  accessibilityLabel={`${c.label} code ${c.code}, tap to copy`}
+                  hitSlop={4}
+                >
+                  <Text style={styles.codeLabel}>{c.label}</Text>
+                  <Text style={styles.codeValue}>{c.code}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={styles.codeHint}>
+              {copied ? `${copied} code copied` : "Tap a code to copy it"}
+            </Text>
+          </Card>
+        )}
+
         {!isPending && <Card accent={assignedColor}>
           <View style={styles.cardHeaderRow}>
             <Text style={type.section}>Assigned cleaner</Text>
@@ -710,6 +758,22 @@ const styles = StyleSheet.create({
   addressIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.tealSoft, alignItems: "center", justifyContent: "center" },
   addressText: { fontSize: 16, fontWeight: "700", color: colors.ink, marginTop: 3 },
   addressHint: { fontSize: 12, color: colors.tealDark, fontWeight: "600", marginTop: 2 },
+  // Codes get read off the screen one-handed at a keypad, so they are big,
+  // tabular, and widely spaced.
+  codeRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 12 },
+  codeChip: {
+    flexGrow: 1,
+    minWidth: 96,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: radius.md,
+    backgroundColor: colors.tealSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  codeLabel: { fontSize: 11, fontWeight: "700", color: colors.tealDark, textTransform: "uppercase", letterSpacing: 0.6 },
+  codeValue: { fontSize: 24, fontWeight: "800", color: colors.ink, marginTop: 2, fontVariant: ["tabular-nums"] },
+  codeHint: { fontSize: 12, color: colors.muted, marginTop: 10 },
   cardHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   changeLink: { fontSize: 14, fontWeight: "700", color: colors.tealDark },
   timerBlock: { marginTop: 10, alignItems: "flex-start" },

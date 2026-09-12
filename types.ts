@@ -21,6 +21,9 @@ export type Job = {
   // Canonical "YYYY-MM-DD". Set on every job the app creates.
   dateKey?: string | null;
   address: string;
+  // Registry key for the house, written by the email script and the Airbnb
+  // sync. Used to look the property up for its access codes.
+  property?: string;
   type: string;
   done: boolean;
   completedAt: number | null;

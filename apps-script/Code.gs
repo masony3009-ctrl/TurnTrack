@@ -24,6 +24,7 @@ function scanAllEmails() {
   var ctx = loadContext();
   scanCancellationEmails(ctx); // first, so a cancellation is never read as a booking
   scanTurnoEmails(ctx);
+  checkAirbnbSync(); // notices if the PC-side Airbnb sync has gone quiet
 }
 
 // ---- Firestore value helpers ---------------------------------------------
@@ -394,4 +395,70 @@ function notifyPhones(title, body) {
 
 function testPush() {
   notifyPhones("TurnTrack test", "Push notifications are working.");
+}
+
+// ---- Airbnb sync watchdog ------------------------------------------------
+//
+// The Airbnb calendar sync runs on Mason's PC (C:\Users\mason\AirbnbSync),
+// every 3 hours, and alerts on its own when a run fails. It cannot alert when
+// it never runs at all - PC off, task deleted, Windows logged out. This runs
+// in Google's cloud instead, so it notices exactly that case.
+//
+// The sync stamps settings/airbnbSync on every run; silence here means the
+// Airbnb cleanings have quietly stopped arriving.
+
+var AIRBNB_STALE_HOURS = 30;   // sync runs every 3h; 30h is unambiguous
+var AIRBNB_REALERT_HOURS = 24; // do not nag daily forever
+
+function checkAirbnbSync() {
+  var doc = fsGet("/settings/airbnbSync");
+  var f = (doc && doc.fields) || {};
+  var lastSuccess = f.lastSuccessAt ? Number(f.lastSuccessAt.integerValue) : 0;
+  var ageHours = lastSuccess ? (Date.now() - lastSuccess) / 3600000 : null;
+
+  if (ageHours !== null && ageHours < AIRBNB_STALE_HOURS) return;
+
+  var props = PropertiesService.getScriptProperties();
+  var lastAlert = Number(props.getProperty("airbnbStaleAlertAt") || 0);
+  if (Date.now() - lastAlert < AIRBNB_REALERT_HOURS * 3600000) return;
+
+  var msg = ageHours === null
+    ? "The Airbnb calendar sync has never reported a successful run."
+    : "The Airbnb calendar sync has not run in " + Math.floor(ageHours) + " hours.";
+  if (f.lastError && f.lastError.stringValue) msg += "\nLast error: " + f.lastError.stringValue;
+  msg += "\n\nAirbnb cleanings are not being added. Check the PC is on, then run:"
+       + "\nnode C:\Users\mason\AirbnbSync\watchdog.js --status";
+
+  alertOwnerTelegram("Airbnb sync has gone quiet", msg);
+  props.setProperty("airbnbStaleAlertAt", String(Date.now()));
+}
+
+// Same bot the website Worker uses. Token and chat id are Script Properties
+// (File > Project Settings > Script Properties), never literals in this file -
+// this code is mirrored into a git repo.
+function alertOwnerTelegram(title, body) {
+  var props = PropertiesService.getScriptProperties();
+  var token = props.getProperty("TELEGRAM_BOT_TOKEN");
+  var chatId = props.getProperty("TELEGRAM_CHAT_ID");
+  if (!token || !chatId) {
+    Logger.log("telegram not configured; would have sent: " + title);
+    return false;
+  }
+  var res = UrlFetchApp.fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify({ chat_id: chatId, text: title + "\n\n" + body, disable_web_page_preview: true }),
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() >= 300) {
+    Logger.log("telegram failed: " + res.getContentText());
+    return false;
+  }
+  return true;
+}
+
+function testAirbnbWatchdog() {
+  var doc = fsGet("/settings/airbnbSync");
+  Logger.log(doc ? JSON.stringify(doc.fields) : "no heartbeat doc yet");
+  Logger.log("telegram configured: " + !!PropertiesService.getScriptProperties().getProperty("TELEGRAM_BOT_TOKEN"));
 }
