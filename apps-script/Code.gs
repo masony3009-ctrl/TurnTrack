@@ -71,6 +71,7 @@ function loadJobs() {
       out.push({
         name: d.name,
         dateKey: f.dateKey ? f.dateKey.stringValue : "",
+        date: f.date ? f.date.stringValue : "",
         address: f.address ? f.address.stringValue : "",
         property: f.property ? f.property.stringValue : "",
         done: !!(f.done && f.done.booleanValue),
@@ -130,6 +131,17 @@ function labelFromKey(key) {
   var p = String(key).split("-");
   var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
   return DAY_LABELS[d.getDay()] + ", " + MONTH_LABELS[d.getMonth()] + " " + d.getDate() + " " + d.getFullYear();
+}
+
+// The inverse of labelFromKey. Jobs created before dateKey existed carry only
+// the label, and the duplicate guard has to be able to see them - otherwise a
+// re-scan writes a second copy of a cleaning that is already on the schedule.
+function keyFromLabel(label) {
+  var m = String(label || "").match(/[A-Za-z]{3}, ([A-Za-z]{3}) (\d{1,2}) (\d{4})/);
+  if (!m) return "";
+  var mi = MONTHS.indexOf(m[1].toLowerCase());
+  if (mi < 0) return "";
+  return m[3] + "-" + pad2(mi + 1) + "-" + pad2(Number(m[2]));
 }
 
 function cleanBody(html) {
@@ -211,7 +223,8 @@ function createJob(ctx, opts) {
   var key = dedupeKey(opts.property, opts.address);
   for (var i = 0; i < ctx.jobs.length; i++) {
     var j = ctx.jobs[i];
-    if (j.cancelled || j.dateKey !== opts.dateKey) continue;
+    var jobKey = j.dateKey || keyFromLabel(j.date);
+    if (j.cancelled || jobKey !== opts.dateKey) continue;
     if (dedupeKey(j.property, j.address) === key) return false;
   }
 
@@ -359,9 +372,20 @@ function markAsProcessed(id) {
 // thread bug skipped. Existing cleanings are protected by createJob's
 // duplicate check.
 function resetProcessed() {
-  PropertiesService.getScriptProperties().deleteAllProperties();
+  // Script Properties also hold the Telegram credentials and the watchdog's
+  // last-alert stamp, so this clears the processed-id keys ONLY. It used to
+  // call deleteAllProperties(), which would silently kill alerting.
+  var props = PropertiesService.getScriptProperties();
+  var keep = { TELEGRAM_BOT_TOKEN: 1, TELEGRAM_CHAT_ID: 1, airbnbStaleAlertAt: 1 };
+  var all = props.getProperties();
+  var removed = 0;
+  for (var k in all) {
+    if (keep[k]) continue;
+    props.deleteProperty(k);
+    removed++;
+  }
   processedCache = null;
-  Logger.log("processed-id store cleared - next scan re-reads " + SEARCH_WINDOW);
+  Logger.log("cleared " + removed + " processed-id keys - next scan re-reads " + SEARCH_WINDOW);
 }
 
 // ---- push ----------------------------------------------------------------
