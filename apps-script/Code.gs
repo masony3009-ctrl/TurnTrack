@@ -465,8 +465,8 @@ function alertOwnerTelegram(title, body) {
   var token = props.getProperty("TELEGRAM_BOT_TOKEN");
   var chatId = props.getProperty("TELEGRAM_CHAT_ID");
   if (!token || !chatId) {
-    Logger.log("telegram not configured; would have sent: " + title);
-    return false;
+    Logger.log("telegram not configured; pushing to the owner instead");
+    return pushToOwnerDevices(title, body);
   }
   var res = UrlFetchApp.fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
     method: "post",
@@ -476,8 +476,42 @@ function alertOwnerTelegram(title, body) {
   });
   if (res.getResponseCode() >= 300) {
     Logger.log("telegram failed: " + res.getContentText());
+    return pushToOwnerDevices(title, body);
+  }
+  return true;
+}
+
+// Fallback channel, and the default until a Telegram bot token is stored.
+// Only devices whose role is "owner" - the crew does not need to hear that a
+// scraper fell over. Runs in Google's cloud, so it still fires when the PC
+// that hosts the Airbnb sync is off, which is the whole point of this watchdog.
+function pushToOwnerDevices(title, body) {
+  var doc = fsGet("/devices?pageSize=200");
+  var messages = [], seen = {};
+  ((doc && doc.documents) || []).forEach(function (d) {
+    var f = d.fields || {};
+    if (!f.role || f.role.stringValue !== "owner") return;
+    var t = f.pushToken && f.pushToken.stringValue;
+    if (t && !seen[t]) {
+      seen[t] = true;
+      messages.push({ to: t, title: title, body: body, sound: "default" });
+    }
+  });
+  if (messages.length === 0) {
+    Logger.log("no owner device has a push token; alert not delivered: " + title);
     return false;
   }
+  var res = UrlFetchApp.fetch("https://exp.host/--/api/v2/push/send", {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(messages),
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() >= 300) {
+    Logger.log("owner push failed: " + res.getContentText());
+    return false;
+  }
+  Logger.log("alerted " + messages.length + " owner device(s)");
   return true;
 }
 
