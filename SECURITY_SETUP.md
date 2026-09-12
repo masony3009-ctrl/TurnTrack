@@ -1,12 +1,23 @@
 # Security Setup
 
-> **Status: drafted, not deployed.** The shipped app still calls Anthropic
-> directly with an `EXPO_PUBLIC_` key, has no Firebase Auth, and runs against
-> open Firestore rules (see `firestore.rules`). The steps below describe the
-> hardened setup and the client changes it requires (`httpsCallable` in
-> `app/scan-calendar.tsx`, anonymous sign-in in `app/_layout.tsx`, a real
-> `apiKey` kept out of git). None of that client code exists yet; doing this
-> also needs the Firebase Blaze plan.
+> **Status: Firestore is locked; the Anthropic/Cloud Function work is not done.**
+>
+> Done on 2026-09-12: anonymous auth is enabled, all four clients sign in
+> (the app, the Gmail scraper, the Airbnb sync, the website bridge), and the
+> rules in `firestore.rules` requiring `request.auth` are published and live.
+> An unauthenticated read now returns 403.
+>
+> Still outstanding: the app calls Anthropic directly with an
+> `EXPO_PUBLIC_` key, so steps 0-3 and 7 below (rotate the key, move it into
+> a Cloud Function) are unfinished and need the Blaze plan.
+>
+> **What the lockdown does not do.** Anonymous auth means "some client of
+> this project", not who. The web API key that mints those tokens ships
+> inside the app, so someone who extracts it can still authenticate. It
+> closed the open-to-the-internet hole; it is not a vault. The next real step
+> is **Firebase App Check**, which ties access to your actual app binaries -
+> worth doing, because `settings/properties` holds every house's door,
+> garage and supply codes.
 
 This document covers everything you must do to deploy the security fixes. Once
 these steps are done together with the matching client changes, the calendar
@@ -115,7 +126,7 @@ eas build --platform ios --profile production
 - [ ] Old Anthropic key rotated/deleted
 - [ ] `ANTHROPIC_API_KEY` secret set
 - [ ] `scanCalendar` function deployed
-- [ ] Anonymous auth enabled + real `apiKey` in `firebase.ts`
-- [ ] Firestore rules published
-- [ ] Apps Script updated to authenticate
+- [x] Anonymous auth enabled + real `apiKey` in `firebase.ts`
+- [x] Firestore rules published
+- [x] Apps Script updated to authenticate (plus the Airbnb sync and the website bridge)
 - [ ] New app build shipped

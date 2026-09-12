@@ -24,20 +24,6 @@ var MAX_THREADS = 25;
 var WEB_API_KEY = "AIzaSyBpSJEixry1qJBWrsvS_Azlf40GWnOGCcE";
 var cachedIdToken = null;
 
-function idToken() {
-  if (cachedIdToken) return cachedIdToken; // one run is far shorter than the hour a token lasts
-  var res = UrlFetchApp.fetch(
-    "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + WEB_API_KEY,
-    { method: "post", contentType: "application/json", payload: JSON.stringify({ returnSecureToken: true }), muteHttpExceptions: true }
-  );
-  if (res.getResponseCode() >= 300) throw new Error("anonymous sign-in failed: " + res.getContentText());
-  cachedIdToken = JSON.parse(res.getContentText()).idToken;
-  return cachedIdToken;
-}
-
-function authHeaders() {
-  return { Authorization: "Bearer " + idToken() };
-}
 
 // ---- entry point ---------------------------------------------------------
 
@@ -409,6 +395,22 @@ function resetProcessed() {
   }
   processedCache = null;
   Logger.log("cleared " + removed + " processed-id keys - next scan re-reads " + SEARCH_WINDOW);
+}
+
+// ---- Firestore auth --------------------------------------------------------
+function idToken() {
+  if (cachedIdToken) return cachedIdToken; // one run is far shorter than the hour a token lasts
+  var res = UrlFetchApp.fetch(
+    "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + WEB_API_KEY,
+    { method: "post", contentType: "application/json", payload: JSON.stringify({ returnSecureToken: true }), muteHttpExceptions: true }
+  );
+  if (res.getResponseCode() >= 300) throw new Error("anonymous sign-in failed: " + res.getContentText());
+  cachedIdToken = JSON.parse(res.getContentText()).idToken;
+  return cachedIdToken;
+}
+
+function authHeaders() {
+  return { Authorization: "Bearer " + idToken() };
 }
 
 // ---- push ----------------------------------------------------------------
