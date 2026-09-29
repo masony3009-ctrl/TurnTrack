@@ -471,15 +471,23 @@ function checkAirbnbSync() {
   var lastAlert = Number(props.getProperty("airbnbStaleAlertAt") || 0);
   if (Date.now() - lastAlert < AIRBNB_REALERT_HOURS * 3600000) return;
 
+  // Written for someone reading it on a phone, not at a terminal. The sync runs
+  // on a laptop, and the realistic causes are all "the laptop was not able to
+  // run it" - so say that, and say what it costs: cancellations are missed too,
+  // which means a cleaner can drive to a house that no longer needs cleaning.
   var msg = ageHours === null
     ? "The Airbnb calendar sync has never reported a successful run."
-    : "The Airbnb calendar sync has not run in " + Math.floor(ageHours) + " hours.";
-  if (f.lastError && f.lastError.stringValue) msg += "\nLast error: " + f.lastError.stringValue;
-  msg += "\n\nAirbnb cleanings are not being added. Check the PC is on, then run:"
-       + "\nnode C:\Users\mason\AirbnbSync\watchdog.js --status";
+    : "The Airbnb calendar sync has not run in " + Math.floor(ageHours / 24 >= 2 ? ageHours / 24 : ageHours) +
+      (ageHours / 24 >= 2 ? " days" : " hours") + ".";
+  msg += " New Airbnb bookings are not being added, and cancellations are not being removed.";
+  if (f.lastError && f.lastError.stringValue) msg += "\n\nLast error: " + f.lastError.stringValue;
+  msg += "\n\nMost likely the laptop is asleep, shut, or was unplugged. Open it and plug it in - it catches up by itself within a few minutes.";
 
-  alertOwnerTelegram("Airbnb sync has gone quiet", msg);
-  props.setProperty("airbnbStaleAlertAt", String(Date.now()));
+  // Only start the 24h quiet period once the alert actually reached someone.
+  // Stamping on a failed send would silence the retry for a full day.
+  if (alertOwnerTelegram("Airbnb sync has gone quiet", msg)) {
+    props.setProperty("airbnbStaleAlertAt", String(Date.now()));
+  }
 }
 
 // Same bot the website Worker uses. Token and chat id are Script Properties
