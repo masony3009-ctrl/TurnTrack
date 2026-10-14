@@ -59,5 +59,7 @@ The app was called CleanerApp before it was TurnTrack. Everything people see say
 | `CleanerApp` | `app.json` `slug` | The Expo/EAS project's slug. OTA updates and builds are tied to that project. |
 | `cleanerapp` | `app.json` `scheme` | The deep-link URL scheme, compiled into installed builds. Nothing user-facing uses it. |
 
+The App Store Connect record is named **TurnTrack Crew** because another App Store app already holds "TurnTrack". That name only shows in App Store Connect and TestFlight; the phone's home screen uses `app.json` `name` (TurnTrack).
+
 ## Security
 Current state: Firestore rules are open per-collection (no Firebase Auth; roles and PINs are enforced in the app UI), and the calendar-scan Anthropic key ships as an `EXPO_PUBLIC_` env var managed in EAS. A hardened setup — Anthropic key server-side in a Cloud Function, Firestore locked behind authentication — is drafted in [SECURITY_SETUP.md](./SECURITY_SETUP.md) and `functions/`, but is **not yet deployed** (it needs the Blaze plan, anonymous auth enabled, and the auth-required rules published together with an app build that signs in). `firestore.rules` in this repo mirrors what is actually deployed.
