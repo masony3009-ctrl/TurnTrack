@@ -5,7 +5,7 @@
  * known property, and creates a cleaning in the app. Cancellation emails mark
  * the matching cleaning cancelled instead of deleting it.
  *
- * This file is the source of truth. Paste it into the CleanerAppAutomation
+ * This file is the source of truth. Paste it into the TurnTrackAutomation
  * Apps Script project (script.google.com) after editing it here.
  *
  * Airbnb scanning was removed 2026-09-10: the account no longer hosts, its
