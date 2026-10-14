@@ -29,8 +29,11 @@ var cachedIdToken = null;
 
 function scanAllEmails() {
   var ctx = loadContext();
+  // Everything this run adds or cancels, so one notification can list it.
+  ctx.changes = { created: [], cancelled: [] };
   scanCancellationEmails(ctx); // first, so a cancellation is never read as a booking
   scanTurnoEmails(ctx);
+  sendDigest(ctx);
   checkAirbnbSync(); // notices if the PC-side Airbnb sync has gone quiet
 }
 
@@ -63,7 +66,8 @@ function loadProperties() {
       address: f.address.stringValue,
       aliases: ((f.aliases && f.aliases.arrayValue.values) || []).map(function (a) { return a.stringValue; }),
       bedrooms: f.bedrooms ? Number(f.bedrooms.integerValue) : 0,
-      bathrooms: f.bathrooms ? Number(f.bathrooms.doubleValue) : 0
+      bathrooms: f.bathrooms ? Number(f.bathrooms.doubleValue) : 0,
+      short: f.short ? f.short.stringValue : ""
     };
   });
 }
@@ -269,6 +273,14 @@ function createJob(ctx, opts) {
   }
   ctx.jobs.push({ dateKey: opts.dateKey, address: opts.address, property: opts.property || "", done: false, cancelled: false });
   Logger.log("created " + opts.dateKey + " - " + opts.address);
+  if (ctx.changes) {
+    var created = JSON.parse(res.getContentText());
+    ctx.changes.created.push({
+      dateKey: opts.dateKey,
+      property: opts.property || opts.address,
+      jobId: String(created.name || "").split("/").pop()
+    });
+  }
   return true;
 }
 
@@ -322,7 +334,14 @@ function handleCancellation(ctx, msg) {
   if (matches.length === 1) {
     cancelJob(matches[0]);
     matches[0].cancelled = true;
-    notifyPhones("Cleaning cancelled", matches[0].address + " on " + labelFromKey(dateKey) + " was cancelled and taken off the schedule.");
+    // Reported in the run's single notification alongside any new cleanings.
+    if (ctx.changes) {
+      ctx.changes.cancelled.push({
+        dateKey: dateKey,
+        property: matches[0].property || matches[0].address,
+        jobId: String(matches[0].name || "").split("/").pop()
+      });
+    }
     return;
   }
   notifyPhones("Cancellation received",
@@ -413,15 +432,78 @@ function authHeaders() {
   return { Authorization: "Bearer " + idToken() };
 }
 
+// ---- the "what changed" notification -------------------------------------
+//
+// Same format as the Airbnb sync's notification (AirbnbSync/lib/digest.js).
+// Keep the two in step:
+//
+//   Turno: 2 new, 1 cancelled
+//   New · Tue, Dec 8 · Camina Plata
+//   Cancelled · Fri, Oct 30 · Castle Rock
+
+var DIGEST_MAX_LINES = 6;
+
+function shortDate(key) {
+  var p = String(key).split("-");
+  var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  return DAY_LABELS[d.getDay()] + ", " + MONTH_LABELS[d.getMonth()] + " " + d.getDate();
+}
+
+// The registry's `short` wins; otherwise the part after "·", cut at ":".
+function shortName(ctx, name) {
+  for (var i = 0; i < ctx.properties.length; i++) {
+    if (ctx.properties[i].name === name && ctx.properties[i].short) return ctx.properties[i].short;
+  }
+  var s = String(name || "");
+  if (s.indexOf("·") !== -1) s = s.split("·").pop();
+  if (s.indexOf(":") !== -1) s = s.split(":")[0];
+  s = s.replace(/^\s+|\s+$/g, "");
+  if (s.length > 24) s = s.slice(0, 23).replace(/\s+$/, "") + "…";
+  return s || "Cleaning";
+}
+
+function buildDigest(ctx, source, changes) {
+  var rows = [];
+  changes.created.forEach(function (c) {
+    rows.push({ when: c.dateKey, jobId: c.jobId, text: "New · " + shortDate(c.dateKey) + " · " + shortName(ctx, c.property) });
+  });
+  changes.cancelled.forEach(function (c) {
+    rows.push({ when: c.dateKey, jobId: c.jobId, text: "Cancelled · " + shortDate(c.dateKey) + " · " + shortName(ctx, c.property) });
+  });
+  if (!rows.length) return null;
+  rows.sort(function (a, b) { return a.when < b.when ? -1 : a.when > b.when ? 1 : 0; });
+
+  var parts = [];
+  if (changes.created.length) parts.push(changes.created.length + " new");
+  if (changes.cancelled.length) parts.push(changes.cancelled.length + " cancelled");
+  var title = rows.length === 1 && changes.created.length === 1
+    ? source + ": new cleaning"
+    : source + ": " + parts.join(", ");
+
+  var lines = rows.slice(0, DIGEST_MAX_LINES).map(function (r) { return r.text; });
+  var extra = rows.length - DIGEST_MAX_LINES;
+  if (extra > 0) lines.push("+" + extra + " more change" + (extra === 1 ? "" : "s") + " in the app");
+
+  // A single change opens straight to that job when tapped.
+  var data = rows.length === 1 && rows[0].jobId ? { jobId: rows[0].jobId } : {};
+  return { title: title, body: lines.join("\n"), data: data };
+}
+
+function sendDigest(ctx) {
+  var d = buildDigest(ctx, "Turno", ctx.changes);
+  if (d) notifyPhones(d.title, d.body, d.data);
+}
+
 // ---- push ----------------------------------------------------------------
 
-function notifyPhones(title, body) {
+// `data` rides along with the push; { jobId } makes tapping it open that job.
+function notifyPhones(title, body, data) {
   var messages = [];
   var seen = {};
   function add(token) {
     if (token && !seen[token]) {
       seen[token] = true;
-      messages.push({ to: token, title: title, body: body, sound: "default" });
+      messages.push({ to: token, title: title, body: body, sound: "default", data: data || {} });
     }
   }
   var legacy = fsGet("/pushTokens?pageSize=100");
