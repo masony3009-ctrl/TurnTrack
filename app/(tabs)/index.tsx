@@ -11,7 +11,8 @@ import { registerForPushNotifications, scheduleTodaysJobNotifications, sendTestN
 import { formatClockTime } from "../../payroll";
 import { cleanerColor, colors, radius, unassignedColor } from "../../theme";
 import { daysFromToday, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, HIDE_AFTER_DAYS, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate } from "../../turnover";
-import { checklistProgress, DEFAULT_CHECKLIST, Employee, Job, newJobDoc, parseChecklistText } from "../../types";
+import { checklistProgress, currentRoom, DEFAULT_CHECKLIST, legacyItems, templateFromDoc, templateStats } from "../../checklist";
+import { Employee, Job, newJobDoc, parseChecklistText } from "../../types";
 
 type Section = { group: JobGroup; jobs: Job[] };
 
@@ -41,8 +42,7 @@ export default function JobsScreen() {
   // The owner's checklist template lives at settings/checklist.
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "settings", "checklist"), (snap) => {
-      const items = snap.data()?.items;
-      setChecklistTemplate(Array.isArray(items) && items.length > 0 ? items : DEFAULT_CHECKLIST);
+      setChecklistTemplate(templateFromDoc(snap.data()));
     }, (error) => {
       console.warn("checklist listener error:", error);
     });
@@ -110,16 +110,21 @@ export default function JobsScreen() {
   };
 
   const saveChecklist = async () => {
-    const items = parseChecklistText(checklistText);
-    if (items.length === 0) {
-      Alert.alert("Empty checklist", "Add at least one item, one per line.");
+    const lines = parseChecklistText(checklistText);
+    const stats = templateStats(lines);
+    if (stats.steps === 0) {
+      Alert.alert("No steps yet", "Add at least one step under a room, one per line.");
       return;
     }
     try {
-      await setDoc(doc(db, "settings", "checklist"), { items, updatedAt: Date.now() });
+      // `items` is the plain version phones on an older app version still read.
+      await setDoc(doc(db, "settings", "checklist"), { lines, items: legacyItems(lines), updatedAt: Date.now() });
       setShowChecklistEditor(false);
       tapSuccess();
-      alertSoon("Checklist saved", `${items.length} items. New cleanings will use this list.`);
+      alertSoon(
+        "Checklist saved",
+        `${stats.rooms} room${stats.rooms === 1 ? "" : "s"}, ${stats.steps} steps. Cleanings nobody has started yet use it right away.`
+      );
     } catch (e) {
       console.warn("save checklist failed:", e);
       Alert.alert("Couldn't save", "The checklist didn't save. Check your connection and try again.");
@@ -235,11 +240,11 @@ export default function JobsScreen() {
 
       <SheetModal visible={showChecklistEditor} title="Cleaning checklist" onClose={() => setShowChecklistEditor(false)}>
         <Text style={styles.sheetHint}>
-          One item per line. End a line with a colon to make it a section heading, like &quot;Kitchen:&quot;. Every new cleaning gets this list, and it pops up when a cleaner taps Start cleaning.
+          One step per line. A line ending in a colon starts a room, like &quot;Kitchen:&quot;. Put a tip after a bar: &quot;Oven | Wipe the door glass&quot;. A line starting with &gt; is a note for the whole room. &quot;Bathroom #:&quot; repeats once per bathroom at each house, and &quot;Half bath:&quot; only shows at houses that have one. A room ending in &quot;(optional)&quot;, like &quot;Bedroom (optional):&quot;, stays hidden until someone taps Add a room on a cleaning.
         </Text>
         <FormInput
-          label="Checklist items"
-          placeholder={"Kitchen:\nWash and put away dishes\nClean countertops\n…"}
+          label="Checklist"
+          placeholder={"Kitchen:\n> Microfiber for everything\nCounters | Wipe every crumb\n…"}
           value={checklistText}
           onChangeText={setChecklistText}
           multiline
@@ -355,6 +360,7 @@ function JobCard({ job, color, photo, canToggle, canDelete, onPress, onToggle, o
   // Checklist progress while someone is cleaning, so the owner can watch
   // from the list without opening the job.
   const cl = checklistProgress(job.checklist);
+  const room = running ? currentRoom(job.checklist) : null;
   return (
     <Card tone={(sameDay && !job.done) || pending ? "gold" : "default"} accent={pending ? colors.gold : color} onPress={onPress} style={job.done ? styles.cardDone : undefined}>
       <View style={styles.cardTop}>
@@ -381,7 +387,7 @@ function JobCard({ job, color, photo, canToggle, canDelete, onPress, onToggle, o
         <View style={styles.checkProgress}>
           <View style={{ flex: 1 }}><ProgressBar value={cl.done / cl.total} color={color} /></View>
           <Text style={styles.checkProgressText}>
-            {cl.done}/{cl.total}{cl.lastAt ? ` · ${formatClockTime(cl.lastAt)}` : ""}
+            {room ? `${room} · ` : ""}{cl.done}/{cl.total}{cl.lastAt ? ` · ${formatClockTime(cl.lastAt)}` : ""}
           </Text>
         </View>
       ) : null}

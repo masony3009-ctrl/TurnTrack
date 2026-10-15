@@ -3,6 +3,7 @@ import * as Notifications from "expo-notifications";
 import { collection, doc, getDocs, query, setDoc, where } from "firebase/firestore";
 import { Platform } from "react-native";
 import { db } from "./firebase";
+import { formatClockTime } from "./payroll";
 import { hasSameDayTurnover, jobDate, jobDateKey } from "./turnover";
 import { Job } from "./types";
 
@@ -76,8 +77,18 @@ export type PushMessage = {
 // Sends a push to every phone currently signed in as this cleaner. Never
 // throws: a failed notification must not block the assignment itself.
 export async function sendPushToEmployee(employeeId: string, message: PushMessage): Promise<number> {
+  return sendPushToDevices(where("employeeId", "==", employeeId), message);
+}
+
+// Sends a push to every phone signed in as the owner. Never throws: a failed
+// notification must not block the checklist tick that triggered it.
+export async function sendPushToOwners(message: PushMessage): Promise<number> {
+  return sendPushToDevices(where("role", "==", "owner"), message);
+}
+
+async function sendPushToDevices(filter: ReturnType<typeof where>, message: PushMessage): Promise<number> {
   try {
-    const snap = await getDocs(query(collection(db, "devices"), where("employeeId", "==", employeeId)));
+    const snap = await getDocs(query(collection(db, "devices"), filter));
     const tokens = snap.docs
       .map(d => d.data().pushToken)
       .filter((t): t is string => typeof t === "string" && t.startsWith("ExponentPushToken") && t !== ownToken);
@@ -120,6 +131,27 @@ export function unassignedMessage(job: Job): PushMessage {
   return {
     title: "Cleaning reassigned",
     body: `You're no longer on ${job.address} (${job.date}).`,
+    data: { jobId: job.id },
+  };
+}
+
+// "Bathroom 1 done" / "Marcus · Desert Oasis · 10:58 AM · 17 min"
+export function roomDoneMessage(job: Job, room: { title: string; minutes: number | null; by: string | null; at: number; house: string }): PushMessage {
+  const who = room.by ? room.by.split(" ")[0] : null;
+  const parts = [who, room.house, formatClockTime(room.at), room.minutes ? `${room.minutes} min` : null];
+  return {
+    title: `${room.title} done`,
+    body: parts.filter(Boolean).join(" · "),
+    data: { jobId: job.id },
+  };
+}
+
+// "Cleaning needs a cleaner" / "Marcus gave back Ranger Trail · Sat, Oct 17 2026"
+export function givenBackMessage(job: Job, by: string | null, house: string): PushMessage {
+  const who = by ? by.split(" ")[0] : "A cleaner";
+  return {
+    title: "Cleaning needs a cleaner",
+    body: `${who} gave back ${house} · ${job.date}`,
     data: { jobId: job.id },
   };
 }

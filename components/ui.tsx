@@ -410,13 +410,17 @@ export function ColorPicker({ label, value, onChange }: {
 }
 
 // One tappable checklist line. 48pt tall so it's an easy target with gloves on.
-export function ChecklistRow({ text, done, meta, heading, onPress, disabled }: {
+export function ChecklistRow({ text, done, meta, heading, note, missed, onPress, disabled }: {
   text: string;
   done: boolean;
   // When and by whom the item was ticked, e.g. "2:14 PM - Maria".
   meta?: string;
   // Section label rather than a task.
   heading?: boolean;
+  // How to do it. Shown until the step is ticked, then the time takes over.
+  note?: string | null;
+  // The job was finished without this step.
+  missed?: boolean;
   onPress?: () => void;
   disabled?: boolean;
 }) {
@@ -424,13 +428,23 @@ export function ChecklistRow({ text, done, meta, heading, onPress, disabled }: {
     return <Text style={styles.checkHeading}>{text}</Text>;
   }
   return (
-    <TouchableOpacity style={styles.checkRow} onPress={onPress} disabled={disabled || !onPress} activeOpacity={0.6}>
-      <View style={[styles.checkCircle, done && styles.checkCircleActive]}>
+    <TouchableOpacity
+      style={styles.checkRow}
+      onPress={onPress}
+      disabled={disabled || !onPress}
+      activeOpacity={0.6}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: done, disabled: disabled || !onPress }}
+      accessibilityLabel={note && !done ? `${text}. ${note}` : text}
+    >
+      <View style={[styles.checkCircle, done && styles.checkCircleActive, missed && styles.checkCircleMissed]}>
         {done && <Ionicons name="checkmark" size={15} color={colors.white} />}
       </View>
       <View style={styles.checkTextWrap}>
         <Text style={[styles.checkItem, done && styles.checkItemDone]}>{text}</Text>
+        {note && !done ? <Text style={styles.checkNote}>{note}</Text> : null}
         {meta ? <Text style={styles.checkMeta}>{meta}</Text> : null}
+        {missed ? <Text style={styles.checkMissed}>Not done</Text> : null}
       </View>
     </TouchableOpacity>
   );
@@ -523,8 +537,9 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: 16, fontWeight: "700", color: colors.ink, marginBottom: 6 },
   emptyBody: { fontSize: 13.5, color: colors.muted, textAlign: "center", lineHeight: 19, paddingHorizontal: 10 },
+  // Top-aligned so a two-line tip doesn't push the circle off its step.
   checkRow: {
-    flexDirection: "row", alignItems: "center", gap: 12, minHeight: 48, paddingVertical: 8,
+    flexDirection: "row", alignItems: "flex-start", gap: 12, minHeight: 48, paddingVertical: 11,
     borderBottomWidth: 1, borderBottomColor: colors.bg,
   },
   checkCircle: {
@@ -532,9 +547,12 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center", backgroundColor: colors.card,
   },
   checkCircleActive: { backgroundColor: colors.teal, borderColor: colors.teal },
+  checkCircleMissed: { borderColor: colors.danger },
   checkItem: { flex: 1, fontSize: 15, color: colors.ink, lineHeight: 20 },
   checkItemDone: { color: colors.faint, textDecorationLine: "line-through" },
-  checkTextWrap: { flex: 1 },
+  checkTextWrap: { flex: 1, paddingTop: 3 },
+  checkNote: { fontSize: 13, color: colors.muted, lineHeight: 18, marginTop: 3 },
+  checkMissed: { fontSize: 12, color: colors.danger, fontWeight: "700", marginTop: 2 },
   checkHeading: {
     fontSize: 11.5, fontWeight: "800", color: colors.faint, letterSpacing: 1,
     textTransform: "uppercase", marginTop: 16, marginBottom: 2,

@@ -13,10 +13,13 @@ A cross-platform mobile app (iOS & Android) built to automate job scheduling for
 - **Team screen** — add cleaners with an hourly rate, phone, and Zelle contact; deactivate or delete them
 - **Assignments** — assign any job to a cleaner from the job detail screen; the assignee shows on job cards, the calendar, and day-of notifications
 - **Time tracking** — Start cleaning / Finish cleaning timer on each job; finishing logs a time entry (minutes × the cleaner's hourly rate) and marks the job done
-- **Checklist** — each job carries its own tappable checklist with progress tracking. Ticks record the time and who made them, so the owner can follow a cleaning live. Template lines ending in a colon become section headings ("Kitchen:") and never count toward progress
+- **Checklist by room** — the checklist is a list of rooms (First 10 minutes, Laundry, Bathroom 1, Bathroom 2, Kitchen…). Each room opens to its steps, with a tip under each step and a note for the room. Ticks record the time and who made them; a finished room shows when, by whom and how long it took, and pushes the owner. Bathrooms repeat per the house's bathroom count. Logic lives in `checklist.ts` (`npm test`)
+- **Add a room** — a cleaner or the owner can add a bathroom, half bath or bedroom to one cleaning when a house has more rooms than its count, and remove it again until something in it is ticked
+- **Finishing early** — finishing with steps unchecked asks for a reason, which the owner sees on the job next to the steps marked "Not done"
+- **Give a job back** — a cleaner can hand their own job back to the unassigned pool before starting it; the owner gets a push
 - **Payroll screen** — unpaid hours and amount owed per cleaner, mark-paid-via-Zelle (with a copy-Zelle-contact button), manual time corrections, and paid history
 - **Assignment pushes** — assigning a job sends a push notification to the cleaner's phone(s); tapping it opens the job. Reassigning tells the previous cleaner, cancelling tells the assignee
-- **Checklist pop-up** — tapping Start cleaning opens the checklist as a sheet. The owner edits the template from the list icon on the Jobs tab (one item per line, stored at `settings/checklist`)
+- **Checklist pop-up** — tapping Start cleaning opens the checklist as a sheet. The owner edits the template from the list icon on the Jobs tab, stored at `settings/checklist` as `lines` (rooms, `>` room notes, `step | tip`, `Bathroom #:`, `Half bath:`, `Bedroom (optional):`) plus a plain `items` copy for older app versions. A cleaning nobody has ticked yet always shows the current template
 - **Cancellations** — the owner can cancel a job from its detail screen (or the email script can set `cancelled: true`). Cancelled jobs are hidden everywhere but kept in Firestore
 - **Auto-cleanup** — jobs leave the phones 2 days after their cleaning date (`HIDE_AFTER_DAYS` in `turnover.ts`) but stay in Firestore
 - **Cleaner colors** — each cleaner has a color (Team tab). Calendar dots, job cards, and avatars use it, with a legend under the calendar

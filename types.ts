@@ -1,16 +1,18 @@
+import { buildChecklist, type ChecklistItem } from "./checklist";
 import { formatDateLabel, parseJobDateToKey } from "./turnover";
 
-export type ChecklistItem = {
+// The checklist lives in checklist.ts (pure, so it can be tested under Node);
+// these re-exports keep the older `from "../types"` imports working.
+export { buildChecklist, checklistProgress, DEFAULT_CHECKLIST, isHeadingLine } from "./checklist";
+export type { ChecklistItem, ChecklistProgress } from "./checklist";
+
+// Written when a cleaner finishes with steps still unchecked: they have to
+// say why, and the owner sees it on the job.
+export type FinishNote = {
   text: string;
-  done: boolean;
-  // Section label ("Kitchen"), not a tickable task. Comes from a template
-  // line ending in a colon.
-  heading?: boolean;
-  // Stamped when someone ticks the item and cleared when they untick it, so
-  // the owner can see what got done and when. Absent on items ticked before
-  // stamping existed.
-  doneAt?: number | null;
-  doneBy?: string | null;
+  by: string | null;
+  at: number;
+  skipped: number;
 };
 
 export type Job = {
@@ -42,6 +44,7 @@ export type Job = {
     minutes: number;
     earned: number;
   } | null;
+  finishNote?: FinishNote | null;
   // Website requests arrive as pending: the owner confirms them into real
   // jobs. Cleaners never see a pending job.
   pending?: boolean;
@@ -87,59 +90,6 @@ export type TimeEntry = {
   manual?: boolean;
   note?: string;
 };
-
-// Fallback checklist. The owner can replace it in-app; the live template is
-// stored in Firestore at settings/checklist as { items: string[] }.
-export const DEFAULT_CHECKLIST: string[] = [
-  "Strip all beds",
-  "Wash and dry all laundry",
-  "Clean and sanitize all kitchen appliances",
-  "Clean bathrooms",
-  "Vacuum + mop floors",
-  "Restock supplies",
-  "Wipe + sanitize surfaces",
-  "Check for damages",
-];
-
-// A template line ending in a colon is a section heading, e.g. "Kitchen:".
-export function isHeadingLine(line: string): boolean {
-  return /:s*$/.test(line);
-}
-
-export function buildChecklist(template?: string[] | null): ChecklistItem[] {
-  const source = template && template.length > 0 ? template : DEFAULT_CHECKLIST;
-  return source.map(line => isHeadingLine(line)
-    ? { text: line.replace(/:s*$/, ""), done: false, heading: true }
-    : { text: line, done: false });
-}
-
-export type ChecklistProgress = {
-  done: number;
-  total: number;
-  // The most recent tick, so a card can say "last check 2:31 PM".
-  lastAt: number | null;
-  lastBy: string | null;
-};
-
-export function checklistProgress(items?: ChecklistItem[] | null): ChecklistProgress {
-  const list = items || [];
-  let done = 0;
-  let lastAt: number | null = null;
-  let lastBy: string | null = null;
-  let total = 0;
-  for (const item of list) {
-    // Headings are labels, not work: they never count toward progress.
-    if (item.heading) continue;
-    total++;
-    if (!item.done) continue;
-    done++;
-    if (typeof item.doneAt === "number" && (lastAt === null || item.doneAt > lastAt)) {
-      lastAt = item.doneAt;
-      lastBy = item.doneBy || null;
-    }
-  }
-  return { done, total, lastAt, lastBy };
-}
 
 export type NewJobInput = {
   dateKey?: string | null;

@@ -4,6 +4,8 @@
 // rather than needing every existing job rewritten.
 export type Property = {
   name: string;
+  // What people call the house ("Desert Oasis"), for notifications.
+  short?: string;
   address: string;
   aliases: string[];
   bedrooms: number;
@@ -69,6 +71,7 @@ export function parseProperties(raw: unknown): Property[] {
     .filter((v): v is Record<string, unknown> => !!v && typeof v === "object")
     .map((v) => ({
       name: String(v.name ?? ""),
+      short: v.short ? String(v.short) : undefined,
       address: String(v.address ?? ""),
       aliases: Array.isArray(v.aliases) ? v.aliases.map(String) : [],
       bedrooms: Number(v.bedrooms ?? 0),

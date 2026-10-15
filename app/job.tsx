@@ -7,15 +7,18 @@ import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } 
 import { tapImpact, tapSelect, tapSuccess, tapWarning } from "../components/haptics";
 import { openInMaps } from "../components/maps";
 import { useProfile } from "../components/ProfileProvider";
-import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ChecklistRow, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
+import { FinishSheet } from "../components/FinishSheet";
+import { RoomChecklist } from "../components/RoomChecklist";
+import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
+import { addableRooms, addRoom, checklistForJob, checklistProgress, ownsList, removeRoom, roomMinutes, templateFromDoc, toggleStep, type ChecklistItem } from "../checklist";
 import { db } from "../firebase";
-import { assignmentMessage, cancellationMessage, sendPushToEmployee, unassignedMessage } from "../notifications";
+import { assignmentMessage, cancellationMessage, givenBackMessage, roomDoneMessage, sendPushToEmployee, sendPushToOwners, unassignedMessage } from "../notifications";
 import { computeEarned, formatClockTime, formatDuration, formatMoney, minutesBetween } from "../payroll";
 import { useProperties } from "../components/useProperties";
 import { accessCodes, findProperty, type AccessCode } from "../properties";
 import { cleanerColor, colors, radius, type, unassignedColor } from "../theme";
 import { daysFromToday, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
-import { buildChecklist, ChecklistItem, checklistProgress, DEFAULT_CHECKLIST, Employee, Job } from "../types";
+import { Employee, FinishNote, Job } from "../types";
 
 export default function JobDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -24,7 +27,11 @@ export default function JobDetail() {
   const [missing, setMissing] = useState(false);
   const [showAssign, setShowAssign] = useState(false);
   const [showChecklist, setShowChecklist] = useState(false);
-  const [template, setTemplate] = useState<string[]>(DEFAULT_CHECKLIST);
+  const [showFinish, setShowFinish] = useState(false);
+  const [showGiveBack, setShowGiveBack] = useState(false);
+  // null until settings/checklist has loaded, so a job's stored list isn't
+  // swapped for the fallback template in the meantime.
+  const [template, setTemplate] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   // The freshest checklist we know of. Ticks write the whole array, so a
   // second tap landing before the server echoes the first must build on the
@@ -38,11 +45,13 @@ export default function JobDetail() {
   const isOwner = state.status === "owner";
   const selfId = state.status === "cleaner" ? state.employee.id : null;
   const selfName = state.status === "cleaner" ? state.employee.name : null;
+  // The owner is behind this phone, either signed in as owner or viewing as
+  // a cleaner. They don't need a push about their own ticks.
+  const ownerAtPhone = isOwner || (state.status === "cleaner" && state.ownerViewing);
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "settings", "checklist"), (snapshot) => {
-      const items = snapshot.data()?.items;
-      setTemplate(Array.isArray(items) && items.length > 0 ? items : DEFAULT_CHECKLIST);
+      setTemplate(templateFromDoc(snapshot.data()));
     }, (error) => {
       console.warn("checklist template listener error:", error);
     });
@@ -76,27 +85,39 @@ export default function JobDetail() {
   const isMine = !!selfId && job?.assignedTo === selfId;
   const canWork = isOwner || isMine;
   const canTake = !isOwner && !!selfId && !!job && !job.assignedTo && !job.cancelled && !job.pending;
-
-  // Checklist shown from the template when the job has none yet; the list is
-  // only written to the job when someone actually starts or ticks it.
-  const checklist: ChecklistItem[] = job?.checklist && job.checklist.length > 0 ? job.checklist : buildChecklist(template);
-  // Section headings are labels, so every count here comes from the helper
-  // rather than the raw array length.
-  useEffect(() => {
-    checklistRef.current = checklist;
-  }, [checklist]);
-
-  const activity = checklistProgress(checklist);
-  const checkedCount = activity.done;
-  const taskCount = activity.total;
-  const progress = taskCount > 0 ? checkedCount / taskCount : 0;
-  const allDone = taskCount > 0 && checkedCount === taskCount;
+  // A cleaner can hand back their own job until they've started or finished it.
+  const canGiveBack = isMine && !!job && !job.startedAt && !job.done && !job.cancelled;
 
   // Access codes come from the registry rather than the job, so changing a
   // code in one place changes it on every cleaning at that house, past and
   // future, without rewriting a single job.
   const property = findProperty(properties, job);
   const codes = accessCodes(property);
+
+  // Until someone ticks something, a job shows the current template for its
+  // house (one room per bathroom); the list is written to the job when
+  // someone starts or ticks it. See checklistForJob.
+  const checklist: ChecklistItem[] = checklistForJob({
+    stored: job?.checklist,
+    done: job?.done === true,
+    template,
+    bathrooms: property?.bathrooms,
+  });
+  // Write the shown list to the job only once the template has loaded, so a
+  // fast tap can't save the fallback list.
+  const freshChecklist = !ownsList(job?.checklist) && template !== null;
+  const roomsToAdd = template ? addableRooms(template) : [];
+  useEffect(() => {
+    checklistRef.current = checklist;
+  }, [checklist]);
+
+  // Headings are labels, so every count here comes from the helper rather
+  // than the raw array length.
+  const activity = checklistProgress(checklist);
+  const checkedCount = activity.done;
+  const taskCount = activity.total;
+  const progress = taskCount > 0 ? checkedCount / taskCount : 0;
+  const allDone = taskCount > 0 && checkedCount === taskCount;
 
   const copyCode = async (c: AccessCode) => {
     try {
@@ -145,6 +166,25 @@ export default function JobDetail() {
     }
   };
 
+  // A cleaner hands their own job back to the unassigned pool. The owner is
+  // told, because somebody now has to cover it.
+  const giveBack = async () => {
+    if (!job || !isMine || job.startedAt || busy) return;
+    setBusy(true);
+    try {
+      await updateDoc(doc(db, "jobs", job.id), { assignedTo: null, assignedToName: null });
+      setShowGiveBack(false);
+      tapWarning();
+      if (!ownerAtPhone) {
+        sendPushToOwners(givenBackMessage(job, selfName, property?.short || job.property || job.address));
+      }
+    } catch (e) {
+      console.warn("give back failed:", e);
+      Alert.alert("Couldn't give it back", "You're still on this cleaning. Check your connection and try again.");
+    }
+    setBusy(false);
+  };
+
   const startCleaning = async () => {
     if (!job || busy) return;
     if (!job.assignedTo) {
@@ -156,7 +196,7 @@ export default function JobDetail() {
             assignedTo: selfId,
             assignedToName: selfName,
             startedAt: Date.now(),
-            ...(job.checklist && job.checklist.length > 0 ? {} : { checklist: buildChecklist(template) }),
+            ...(freshChecklist ? { checklist } : {}),
           });
           tapImpact();
           setShowChecklist(true);
@@ -178,7 +218,7 @@ export default function JobDetail() {
     try {
       await updateDoc(doc(db, "jobs", job.id), {
         startedAt: Date.now(),
-        ...(job.checklist && job.checklist.length > 0 ? {} : { checklist: buildChecklist(template) }),
+        ...(freshChecklist ? { checklist } : {}),
       });
       tapImpact();
       setShowChecklist(true);
@@ -210,7 +250,7 @@ export default function JobDetail() {
 
   // Writes the time entry and closes the job in ONE batch so a retry can
   // never double-log. Returns false if the cleaner record is gone.
-  const logTimeAndClose = async (opts: { cancel?: boolean }) => {
+  const logTimeAndClose = async (opts: { cancel?: boolean; finishNote?: FinishNote | null }) => {
     if (!job || !job.startedAt) return false;
     const emp = employees.find(e => e.id === job.assignedTo);
     if (!emp) {
@@ -245,48 +285,53 @@ export default function JobDetail() {
       done: !opts.cancel,
       completedAt: opts.cancel ? null : endedAt,
       timeSummary: { employeeName, minutes, earned },
-      ...(opts.cancel ? { cancelled: true, cancelledAt: endedAt, cancelReason: "Cancelled by owner" } : {}),
+      ...(opts.cancel
+        ? { cancelled: true, cancelledAt: endedAt, cancelReason: "Cancelled by owner" }
+        : { finishNote: opts.finishNote || null }),
+      // Keep the list the cleaner was shown, so the finished job reads back
+      // the same rooms even if nothing was ticked.
+      ...(freshChecklist ? { checklist } : {}),
     });
     await batch.commit();
     return { employeeName, minutes, earned };
   };
 
-  const finishCleaning = async () => {
+  // reason is required when steps are unchecked; FinishSheet collects it.
+  const completeCleaning = async (reason: string | null) => {
     if (!job || !job.startedAt || busy || !canWork) return;
     const unchecked = taskCount - checkedCount;
-    const proceed = async () => {
-      setBusy(true);
-      try {
-        const result = await logTimeAndClose({});
-        if (result) {
-          tapSuccess();
-          setShowChecklist(false);
-          alertSoon(
-            "Cleaning finished",
-            `${result.employeeName} worked ${formatDuration(result.minutes)} and earned ${formatMoney(result.earned)}. It's been added to payroll.`
-          );
-        }
-      } catch (e) {
-        console.warn("finish cleaning failed:", e);
-        Alert.alert(
-          "Couldn't save the time",
-          "Nothing was saved and the timer is still running. Check your connection, then tap Finish again."
+    const finishNote: FinishNote | null = reason && unchecked > 0
+      ? { text: reason, by: selfName || (isOwner ? "Owner" : null), at: Date.now(), skipped: unchecked }
+      : null;
+    setBusy(true);
+    try {
+      const result = await logTimeAndClose({ finishNote });
+      if (result) {
+        tapSuccess();
+        setShowChecklist(false);
+        setShowFinish(false);
+        alertSoon(
+          "Cleaning finished",
+          `${result.employeeName} worked ${formatDuration(result.minutes)} and earned ${formatMoney(result.earned)}. It's been added to payroll.`
         );
       }
-      setBusy(false);
-    };
-    if (unchecked > 0) {
+    } catch (e) {
+      console.warn("finish cleaning failed:", e);
       Alert.alert(
-        `${unchecked} item${unchecked === 1 ? "" : "s"} unchecked`,
-        "Finish anyway, or go back to the checklist?",
-        [
-          { text: "Review checklist", onPress: () => setShowChecklist(true) },
-          { text: "Finish anyway", style: "destructive", onPress: proceed },
-        ]
+        "Couldn't save the time",
+        "Nothing was saved and the timer is still running. Check your connection, then tap Finish again."
       );
+    }
+    setBusy(false);
+  };
+
+  const finishCleaning = () => {
+    if (!job || !job.startedAt || busy || !canWork) return;
+    if (taskCount - checkedCount > 0) {
+      setShowFinish(true);
       return;
     }
-    proceed();
+    completeCleaning(null);
   };
 
   const cancelCleaning = () => {
@@ -387,18 +432,40 @@ export default function JobDetail() {
     );
   };
 
+  // Writes a reshaped list (a room added or removed). Same freshest-list
+  // rule as ticks, so it can't wipe a tick that hasn't echoed back yet.
+  const writeChecklist = async (change: (items: ChecklistItem[]) => ChecklistItem[], failTitle: string) => {
+    if (!job || !canWork || job.done) return;
+    const base = checklistRef.current.length > 0 ? checklistRef.current : checklist;
+    const updated = change(base);
+    if (updated === base) return;
+    checklistRef.current = updated;
+    try {
+      await updateDoc(doc(db, "jobs", job.id), { checklist: updated });
+      tapSuccess();
+    } catch (e) {
+      console.warn("checklist change failed:", e);
+      Alert.alert(failTitle, "Check your connection and try again.");
+    }
+  };
+
+  const addRoomToJob = (base: string) => {
+    if (!template) return;
+    writeChecklist(items => addRoom(items, template, base, selfName || (isOwner ? "Owner" : null), Date.now()), "Couldn't add the room");
+  };
+
+  const removeRoomFromJob = (headingIndex: number) => {
+    writeChecklist(items => removeRoom(items, headingIndex), "Couldn't remove the room");
+  };
+
   const toggleChecklistItem = async (index: number) => {
     if (!job || !canWork) return;
     if (checklist[index] && checklist[index].heading) return;
     // Who ticked it: the signed-in cleaner, or the owner working the job.
     const actor = selfName || (isOwner ? "Owner" : null);
     const base = checklistRef.current.length > 0 ? checklistRef.current : checklist;
-    const updated = base.map((item, i) => {
-      if (i !== index) return item;
-      return item.done
-        ? { ...item, done: false, doneAt: null, doneBy: null }
-        : { ...item, done: true, doneAt: Date.now(), doneBy: actor };
-    });
+    const now = Date.now();
+    const { items: updated, finishedRoom } = toggleStep(base, index, actor, now);
     // Hold the new list locally so a rapid follow-up tap starts from it.
     checklistRef.current = updated;
     tapSelect();
@@ -406,6 +473,18 @@ export default function JobDetail() {
       await updateDoc(doc(db, "jobs", job.id), { checklist: updated });
     } catch (e) {
       console.warn("checklist update failed:", e);
+      Alert.alert("That tick didn't save", "Check your connection and tap it again.");
+      return;
+    }
+    // Tell the owner a room is finished, once per room, after the tick saved.
+    if (finishedRoom && !ownerAtPhone) {
+      sendPushToOwners(roomDoneMessage(job, {
+        title: finishedRoom.title,
+        minutes: roomMinutes(finishedRoom),
+        by: actor,
+        at: now,
+        house: property?.short || job.property || job.address,
+      }));
     }
   };
 
@@ -451,26 +530,26 @@ export default function JobDetail() {
 
   // Live record of what has been ticked. The owner sees this update as the
   // cleaner works, because the job document streams from Firestore.
-  const stampFor = (item: ChecklistItem) =>
-    item.done && item.doneAt
-      ? `${formatClockTime(item.doneAt)}${item.doneBy ? ` · ${item.doneBy.split(" ")[0]}` : ""}`
-      : undefined;
   const checklistActivity = activity.lastAt
     ? `Last check ${formatClockTime(activity.lastAt)}${activity.lastBy ? ` · ${activity.lastBy.split(" ")[0]}` : ""}`
     : running
       ? "Nothing checked off yet"
       : "";
 
-  const renderChecklist = () => checklist.map((item, i) => (
-    <ChecklistRow
-      key={i}
-      text={item.text}
-      done={item.done}
-      heading={item.heading}
-      meta={stampFor(item)}
-      onPress={canWork && !item.heading ? () => toggleChecklistItem(i) : undefined}
+  // Adding a room is for whoever can work the job, before it's finished.
+  const canAddRooms = canWork && !job.done && !job.cancelled && !isPending && roomsToAdd.length > 0;
+  const renderChecklist = () => (
+    <RoomChecklist
+      items={checklist}
+      canWork={canWork}
+      closed={job.done && !running}
+      onToggle={toggleChecklistItem}
+      roomsToAdd={roomsToAdd}
+      onAddRoom={canAddRooms ? addRoomToJob : undefined}
+      onRemoveRoom={canAddRooms ? removeRoomFromJob : undefined}
     />
-  ));
+  );
+  const finishNote = job.done ? job.finishNote : null;
 
   return (
     <View style={styles.container}>
@@ -525,6 +604,31 @@ export default function JobDetail() {
         ) : null}
         <BrandButton label="Keep cleaning" icon="sparkles" variant="ghost" onPress={() => setShowChecklist(false)} style={{ marginTop: 6 }} />
       </SheetModal>
+
+      <SheetModal visible={showGiveBack} title="Give this job back?" onClose={() => setShowGiveBack(false)}>
+        <Text style={styles.giveBackBody}>
+          {property?.short || job.address} on {job.date} goes back to unassigned so another cleaner can take it. The owner gets a notification.
+        </Text>
+        {days !== null && days >= 0 && days <= 1 ? (
+          <View style={styles.giveBackUrgent}>
+            <Ionicons name="call-outline" size={16} color={colors.goldDark} />
+            <Text style={styles.giveBackUrgentText}>
+              This cleaning is {days === 0 ? "today" : "tomorrow"}. Call the owner too, so it gets covered in time.
+            </Text>
+          </View>
+        ) : null}
+        <BrandButton label={busy ? "Giving it back…" : "Give it back"} icon="arrow-undo" variant="outline" onPress={giveBack} disabled={busy} style={{ marginTop: 14 }} />
+        <BrandButton label="Keep it" variant="ghost" onPress={() => setShowGiveBack(false)} style={{ marginTop: 4 }} />
+      </SheetModal>
+
+      <FinishSheet
+        visible={showFinish}
+        items={checklist}
+        busy={busy}
+        onClose={() => setShowFinish(false)}
+        onReview={() => { setShowFinish(false); setTimeout(() => setShowChecklist(true), 450); }}
+        onFinish={(reason) => completeCleaning(reason)}
+      />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 150 }}>
         <View style={styles.pillRow}>
@@ -648,6 +752,12 @@ export default function JobDetail() {
           {canTake && (
             <BrandButton label="Take this job" icon="hand-right-outline" variant="outline" compact onPress={takeJob} style={{ marginTop: 12, alignSelf: "flex-start" }} />
           )}
+          {canGiveBack && (
+            <TouchableOpacity style={styles.giveBackLink} onPress={() => setShowGiveBack(true)} hitSlop={6} accessibilityRole="button">
+              <Ionicons name="arrow-undo-outline" size={16} color={colors.danger} />
+              <Text style={styles.giveBackText}>Give this job back</Text>
+            </TouchableOpacity>
+          )}
         </Card>}
 
         {!job.cancelled && !isPending && (
@@ -695,6 +805,18 @@ export default function JobDetail() {
           </View>
           <ProgressBar value={progress} />
           {checklistActivity ? <Text style={styles.checklistActivity}>{checklistActivity}</Text> : null}
+          {finishNote ? (
+            <View style={styles.finishNote}>
+              <Ionicons name="alert-circle" size={17} color={colors.goldDark} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.finishNoteTitle}>
+                  Finished with {finishNote.skipped} step{finishNote.skipped === 1 ? "" : "s"} not done
+                  {finishNote.by ? ` · ${finishNote.by.split(" ")[0]}` : ""} · {formatClockTime(finishNote.at)}
+                </Text>
+                <Text style={styles.finishNoteText}>&ldquo;{finishNote.text}&rdquo;</Text>
+              </View>
+            </View>
+          ) : null}
           {renderChecklist()}
         </Card>}
 
@@ -790,6 +912,12 @@ const styles = StyleSheet.create({
   timerHint: { fontSize: 13.5, color: colors.muted, lineHeight: 19, marginTop: 8 },
   checklistCount: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
   checklistActivity: { fontSize: 12.5, color: colors.muted, marginTop: 8 },
+  finishNote: {
+    flexDirection: "row", gap: 8, alignItems: "flex-start", backgroundColor: colors.goldSoft,
+    borderRadius: radius.md, padding: 12, marginTop: 10, borderWidth: 1, borderColor: "#F0DDBA",
+  },
+  finishNoteTitle: { fontSize: 13, fontWeight: "700", color: colors.goldDark },
+  finishNoteText: { fontSize: 14, color: colors.ink, lineHeight: 20, marginTop: 3 },
   startedText: { fontSize: 13, color: colors.muted, marginTop: 2 },
   sheetProgressRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 6 },
   sheetProgressText: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
@@ -806,4 +934,12 @@ const styles = StyleSheet.create({
   cancelLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 48 },
   cancelLinkText: { fontSize: 14, fontWeight: "600", color: colors.danger },
   barRow: { flexDirection: "row", gap: 10 },
+  giveBackLink: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 44, marginTop: 6, alignSelf: "flex-start" },
+  giveBackText: { fontSize: 14, fontWeight: "600", color: colors.danger },
+  giveBackBody: { fontSize: 14.5, color: colors.ink, lineHeight: 21 },
+  giveBackUrgent: {
+    flexDirection: "row", alignItems: "flex-start", gap: 8, backgroundColor: colors.goldSoft,
+    borderRadius: radius.md, padding: 12, marginTop: 12, borderWidth: 1, borderColor: "#F0DDBA",
+  },
+  giveBackUrgentText: { flex: 1, fontSize: 13.5, color: colors.goldDark, lineHeight: 19, fontWeight: "600" },
 });
