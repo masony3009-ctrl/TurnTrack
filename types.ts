@@ -68,9 +68,13 @@ export type Employee = {
   createdAt: number;
 };
 
+// pushError/pushErrorAt say why a phone has no push token (set and cleared
+// by registerForPushNotifications).
+type DevicePush = { pushToken?: string | null; pushError?: string | null; pushErrorAt?: number | null };
+
 export type DeviceRecord =
-  | { role: "owner"; pushToken?: string | null }
-  | { role: "cleaner"; employeeId: string; employeeName: string; pushToken?: string | null };
+  | ({ role: "owner" } & DevicePush)
+  | ({ role: "cleaner"; employeeId: string; employeeName: string } & DevicePush);
 
 export type TimeEntry = {
   id: string;

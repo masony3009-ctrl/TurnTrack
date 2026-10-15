@@ -1,6 +1,6 @@
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import { collection, doc, getDocs, query, setDoc, where } from "firebase/firestore";
+import { collection, deleteField, doc, getDocs, query, setDoc, where } from "firebase/firestore";
 import { Platform } from "react-native";
 import { db } from "./firebase";
 import { formatClockTime } from "./payroll";
@@ -24,48 +24,83 @@ Notifications.setNotificationHandler({
   }),
 });
 
+// How signing this phone up for pushes went. "unsupported" is web or a
+// simulator, where there is nothing to fix.
+export type PushRegistration =
+  | { status: "registered"; token: string }
+  | { status: "unsupported" }
+  | { status: "denied" }
+  | { status: "failed"; reason: string };
+
+const DENIED_REASON = "Notifications are turned off for TurnTrack in this phone's settings.";
+
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 // Registers for push and records the token on this phone's device record,
 // so jobs can be pushed to whichever cleaner is signed in on this phone.
-export async function registerForPushNotifications(deviceId?: string | null) {
-  if (isWeb) return null;
-  if (!Device.isDevice) return null;
+// Never fails quietly: a phone that can't get a token says why, both to the
+// caller (to show on screen) and on its device record as pushError, so a
+// phone that never hears anything can be diagnosed from Firestore.
+export async function registerForPushNotifications(deviceId?: string | null): Promise<PushRegistration> {
+  if (isWeb || !Device.isDevice) return { status: "unsupported" };
 
-  if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync("default", {
-      name: "Cleanings",
-      importance: Notifications.AndroidImportance.HIGH,
-      sound: "default",
-    });
-  }
+  const result = await obtainPushToken();
+  if (result.status === "registered") ownToken = result.token;
+  if (!deviceId) return result;
+  return recordRegistration(deviceId, result);
+}
 
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  let finalStatus = existingStatus;
-
-  if (existingStatus !== "granted") {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
-  }
-
-  if (finalStatus !== "granted") return null;
-
-  let token: string;
+async function obtainPushToken(): Promise<PushRegistration> {
   try {
-    token = (await Notifications.getExpoPushTokenAsync()).data;
-  } catch (e) {
-    console.warn("push token failed:", e);
-    return null;
-  }
-  ownToken = token;
-
-  try {
-    if (deviceId) {
-      await setDoc(doc(db, "devices", deviceId), { pushToken: token }, { merge: true });
+    if (Platform.OS === "android") {
+      await Notifications.setNotificationChannelAsync("default", {
+        name: "Cleanings",
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: "default",
+      });
     }
-  } catch (e) {
-    console.warn("saving push token failed:", e);
-  }
 
-  return token;
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+    if (existingStatus !== "granted") {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    if (finalStatus !== "granted") return { status: "denied" };
+
+    // On Android this throws when the build has no FCM config
+    // (android.googleServicesFile) - the reason the dad's phone never had a token.
+    const token = (await Notifications.getExpoPushTokenAsync()).data;
+    return { status: "registered", token };
+  } catch (e) {
+    console.warn("push registration failed:", e);
+    return { status: "failed", reason: errorText(e) };
+  }
+}
+
+async function recordRegistration(deviceId: string, result: PushRegistration): Promise<PushRegistration> {
+  const ref = doc(db, "devices", deviceId);
+  if (result.status === "registered") {
+    try {
+      await setDoc(ref, { pushToken: result.token, pushError: deleteField(), pushErrorAt: deleteField() }, { merge: true });
+      return result;
+    } catch (e) {
+      console.warn("saving push token failed:", e);
+      return { status: "failed", reason: `Couldn't save this phone's push token: ${errorText(e)}` };
+    }
+  }
+  if (result.status === "unsupported") return result;
+
+  const pushError = result.status === "denied" ? DENIED_REASON : result.reason;
+  try {
+    await setDoc(ref, { pushError, pushErrorAt: Date.now() }, { merge: true });
+  } catch (e) {
+    // The caller still shows the problem on screen.
+    console.warn("saving push error failed:", e);
+  }
+  return result;
 }
 
 export type PushMessage = {

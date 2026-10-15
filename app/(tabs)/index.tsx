@@ -7,7 +7,8 @@ import { tapSelect, tapSuccess } from "../../components/haptics";
 import { useProfile } from "../../components/ProfileProvider";
 import { alertSoon, AssigneeRow, BrandButton, Card, DatePickerField, EmptyState, Fab, FormInput, IconButton, Pill, ProgressBar, ScreenHeader, SectionHeader, SheetModal } from "../../components/ui";
 import { db } from "../../firebase";
-import { registerForPushNotifications, scheduleTodaysJobNotifications, sendTestNotification } from "../../notifications";
+import { PushProblemCard, usePushRegistration } from "../../components/PushProblem";
+import { scheduleTodaysJobNotifications, sendTestNotification } from "../../notifications";
 import { formatClockTime } from "../../payroll";
 import { cleanerColor, colors, radius, unassignedColor } from "../../theme";
 import { daysFromToday, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, HIDE_AFTER_DAYS, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate } from "../../turnover";
@@ -35,9 +36,7 @@ export default function JobsScreen() {
   const selfId = state.status === "cleaner" ? state.employee.id : null;
   const firstName = state.status === "cleaner" ? state.employee.name.split(" ")[0] : null;
 
-  useEffect(() => {
-    registerForPushNotifications(deviceId);
-  }, [deviceId]);
+  const push = usePushRegistration(deviceId);
 
   // The owner's checklist template lives at settings/checklist.
   useEffect(() => {
@@ -220,6 +219,8 @@ export default function JobsScreen() {
           </>
         }
       />
+
+      <PushProblemCard result={push.result} checking={push.checking} onRetry={push.retry} />
 
       <View style={styles.statRow}>
         <Stat label="Today" value={todayCount} />
