@@ -3,7 +3,9 @@
  *
  * Runs on a 15-minute trigger. Reads Turno project emails, matches each to a
  * known property, and creates a cleaning in the app. Cancellation emails mark
- * the matching cleaning cancelled instead of deleting it.
+ * the matching cleaning cancelled instead of deleting it. Projects at houses
+ * the registry doesn't know are reported to the owner, not scheduled. The
+ * laptop's Turno calendar sync (AirbnbSync/turno.js) is the other half.
  *
  * This file is the source of truth. Paste it into the TurnTrackAutomation
  * Apps Script project (script.google.com) after editing it here.
@@ -18,6 +20,15 @@ var FS = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID + "/databa
 var SEARCH_WINDOW = "newer_than:120d";
 var MAX_THREADS = 25;
 
+// Turno moved its mail from info@turno.com to donotreply@e.turno.com in fall
+// 2026, and Gmail files some of the forwarded copies under Spam. Searching only
+// the inbox for the old sender found nothing for a month, so: both senders,
+// every folder but the bin.
+var TURNO_MAIL = "(from:info@turno.com OR from:donotreply@e.turno.com OR from:e.turno.com) in:anywhere -in:trash";
+
+// "Start time: Sunday, October 25, 2026 11:00 AM" (Turno's casing changed too).
+var START_TIME = /Start Time:\s*([A-Za-z]{3,9},?\s*[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i;
+
 // The Firestore rules require request.auth, so every call carries an anonymous
 // ID token. WEB_API_KEY is the same public key the app ships with - not a
 // secret, it only identifies the Firebase project.
@@ -31,9 +42,12 @@ function scanAllEmails() {
   var ctx = loadContext();
   // Everything this run adds or cancels, so one notification can list it.
   ctx.changes = { created: [], cancelled: [] };
+  // Offers at houses TurnTrack doesn't know: reported to the owner, not scheduled.
+  ctx.offers = [];
   scanCancellationEmails(ctx); // first, so a cancellation is never read as a booking
   scanTurnoEmails(ctx);
   sendDigest(ctx);
+  reportOffers(ctx);
   checkAirbnbSync(); // notices if the PC-side Airbnb sync has gone quiet
 }
 
@@ -85,6 +99,7 @@ function loadJobs() {
         date: f.date ? f.date.stringValue : "",
         address: f.address ? f.address.stringValue : "",
         property: f.property ? f.property.stringValue : "",
+        turnoProjectId: f.turnoProjectId ? String(f.turnoProjectId.stringValue || f.turnoProjectId.integerValue || "") : "",
         done: !!(f.done && f.done.booleanValue),
         cancelled: !!(f.cancelled && f.cancelled.booleanValue)
       });
@@ -116,6 +131,14 @@ var DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 var MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function pad2(n) { return n < 10 ? "0" + n : "" + n; }
+
+// Today where the houses are. Mail about a day that has already passed is
+// history, not news: widening the search on Oct 18 2026 surfaced a month of
+// unread Turno mail, and none of it may turn into cleanings or alerts now.
+// (Kept below scanAllEmails: the editor's Run button runs the first function.)
+function todayKey() {
+  return Utilities.formatDate(new Date(), "America/Phoenix", "yyyy-MM-dd");
+}
 
 // "Sun, Oct 18 2026" / "Oct 18, 2026" / "Oct 18" -> "2026-10-18"
 function toDateKey(text) {
@@ -172,7 +195,7 @@ function cleanBody(html) {
 // version read only the first, which silently skipped every later cleaning at
 // a repeat property.
 function scanTurnoEmails(ctx) {
-  var threads = GmailApp.search('from:info@turno.com subject:"New Cleaning project" ' + SEARCH_WINDOW, 0, MAX_THREADS);
+  var threads = GmailApp.search(TURNO_MAIL + ' subject:"New Cleaning project" ' + SEARCH_WINDOW, 0, MAX_THREADS);
   for (var i = 0; i < threads.length; i++) {
     var msgs = threads[i].getMessages();
     for (var j = 0; j < msgs.length; j++) {
@@ -200,7 +223,7 @@ function handleTurnoMessage(ctx, msg) {
   var propertyName = nameMatch ? nameMatch[1].replace(/[.\s]+$/, "") : "";
   var property = matchProperty(ctx.properties, propertyName) || matchProperty(ctx.properties, text);
 
-  var startMatch = text.match(/Start Time:\s*([A-Za-z]{3,9},?\s*[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/);
+  var startMatch = text.match(START_TIME);
   if (!startMatch) {
     Logger.log("no Start Time found: " + subject);
     return;
@@ -210,19 +233,46 @@ function handleTurnoMessage(ctx, msg) {
     Logger.log("unreadable Start Time: " + startMatch[1]);
     return;
   }
+  if (dateKey < todayKey()) return;
+  var idMatch = text.match(/Project\s*#\s*(\d{5,})/i);
+  var projectId = idMatch ? idMatch[1] : "";
+
+  // "New Cleaning project available" is worded the same whether a customer
+  // assigned the project to us or only offered it. Every current customer
+  // assigns directly, so a project at a house we know is ours; one at a house
+  // we don't know may be an offer someone else takes (Oct 18 2026: nine at a
+  // new house, none of them on our Turno calendar). Ask instead of guessing -
+  // the Turno calendar sync adds it once it really is ours.
   if (!property) {
-    Logger.log("UNKNOWN PROPERTY (add to settings/properties): " + propertyName);
+    Logger.log("offer at unknown house, not scheduled: " + propertyName + " " + dateKey);
+    ctx.offers.push({ dateKey: dateKey, place: propertyName || "a new house", projectId: projectId });
+    return;
   }
 
   createJob(ctx, {
     dateKey: dateKey,
-    address: property ? property.address : (propertyName || "Turno job - address in Turno app"),
-    property: property ? property.name : propertyName,
+    address: property.address,
+    property: property.name,
     type: "Turno Cleaning",
     source: "turno-email",
-    bedrooms: property ? property.bedrooms : 0,
-    bathrooms: property ? property.bathrooms : 0
+    turnoProjectId: projectId,
+    bedrooms: property.bedrooms,
+    bathrooms: property.bathrooms
   });
+}
+
+// One message per run listing every offer, owner only.
+function reportOffers(ctx) {
+  if (!ctx.offers || !ctx.offers.length) return;
+  ctx.offers.sort(function (a, b) { return a.dateKey < b.dateKey ? -1 : 1; });
+  var places = {};
+  ctx.offers.forEach(function (o) { places[o.place] = true; });
+  var lines = ctx.offers.map(function (o) { return "- " + labelFromKey(o.dateKey) + " · " + o.place; });
+  alertOwnerTelegram(
+    "Turno offered " + ctx.offers.length + " project" + (ctx.offers.length === 1 ? "" : "s") + " at a house TurnTrack doesn't know",
+    lines.join("\n") + "\n\nNot added to the app: Turno hasn't put them on your calendar. " +
+    "If they're yours, accept them in Turno and add the house to the property list (" + Object.keys(places).join(", ") + ")."
+  );
 }
 
 // ---- job creation --------------------------------------------------------
@@ -234,6 +284,9 @@ function createJob(ctx, opts) {
   var key = dedupeKey(opts.property, opts.address);
   for (var i = 0; i < ctx.jobs.length; i++) {
     var j = ctx.jobs[i];
+    // Already known by project number - including one Turno cancelled, which
+    // must not come back from an older "new project" email.
+    if (opts.turnoProjectId && j.turnoProjectId === opts.turnoProjectId) return false;
     var jobKey = j.dateKey || keyFromLabel(j.date);
     if (j.cancelled || jobKey !== opts.dateKey) continue;
     if (dedupeKey(j.property, j.address) === key) return false;
@@ -257,6 +310,8 @@ function createJob(ctx, opts) {
     source: str(opts.source),
     createdAt: int(Date.now())
   };
+  // Lets the Turno calendar sync track this job when Turno moves or cancels it.
+  if (opts.turnoProjectId) fields.turnoProjectId = str(opts.turnoProjectId);
   if (opts.bedrooms) fields.bedrooms = int(opts.bedrooms);
   if (opts.bathrooms) fields.bathrooms = { doubleValue: opts.bathrooms };
 
@@ -271,7 +326,7 @@ function createJob(ctx, opts) {
     Logger.log("create failed: " + res.getContentText());
     return false;
   }
-  ctx.jobs.push({ dateKey: opts.dateKey, address: opts.address, property: opts.property || "", done: false, cancelled: false });
+  ctx.jobs.push({ dateKey: opts.dateKey, address: opts.address, property: opts.property || "", turnoProjectId: opts.turnoProjectId || "", done: false, cancelled: false });
   Logger.log("created " + opts.dateKey + " - " + opts.address);
   if (ctx.changes) {
     var created = JSON.parse(res.getContentText());
@@ -291,7 +346,7 @@ function dedupeKey(property, address) {
 // ---- cancellations -------------------------------------------------------
 
 function scanCancellationEmails(ctx) {
-  var threads = GmailApp.search('from:info@turno.com (subject:cancel OR subject:canceled OR subject:cancelled) ' + SEARCH_WINDOW, 0, MAX_THREADS);
+  var threads = GmailApp.search(TURNO_MAIL + ' (subject:cancel OR subject:canceled OR subject:cancelled) ' + SEARCH_WINDOW, 0, MAX_THREADS);
   for (var i = 0; i < threads.length; i++) {
     var msgs = threads[i].getMessages();
     for (var j = 0; j < msgs.length; j++) {
@@ -314,20 +369,30 @@ function handleCancellation(ctx, msg) {
   var propertyName = nameMatch ? nameMatch[1].replace(/[.\s]+$/, "") : "";
   var property = matchProperty(ctx.properties, propertyName) || matchProperty(ctx.properties, text);
 
-  var startMatch = text.match(/Start Time:\s*([A-Za-z]{3,9},?\s*[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/);
+  var startMatch = text.match(START_TIME);
   var dateKey = toDateKey(startMatch ? startMatch[1] : subject);
   if (!dateKey) {
     notifyPhones("Cancellation received", "Couldn't read the date from a Turno cancellation - check the app and your inbox.");
     return;
   }
+  if (dateKey < todayKey()) return;
+  var idMatch = text.match(/Project\s*#\s*(\d{5,})/i);
+  var projectId = idMatch ? idMatch[1] : "";
 
   var matches = [];
+  var alreadyCancelled = false;
   for (var i = 0; i < ctx.jobs.length; i++) {
     var j = ctx.jobs[i];
-    if (j.cancelled || j.done || j.dateKey !== dateKey || !j.name) continue;
-    if (property && dedupeKey(j.property, j.address) !== dedupeKey(property.name, property.address)) continue;
+    if (!j.name || j.dateKey !== dateKey) continue;
+    // The project number, when both sides have it, settles it outright.
+    var sameProject = projectId && j.turnoProjectId === projectId;
+    if (!sameProject && property && dedupeKey(j.property, j.address) !== dedupeKey(property.name, property.address)) continue;
+    if (j.cancelled) { alreadyCancelled = true; continue; }
+    if (j.done) continue;
     matches.push(j);
   }
+  // The Turno calendar sync (or someone in the app) got there first.
+  if (!matches.length && alreadyCancelled) return;
 
   // Only ever act on an unambiguous match: cancelling the wrong cleaning is
   // worse than asking a human to look.
