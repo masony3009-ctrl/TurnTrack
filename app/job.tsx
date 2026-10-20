@@ -10,7 +10,7 @@ import { useProfile } from "../components/ProfileProvider";
 import { FinishSheet } from "../components/FinishSheet";
 import { RoomChecklist } from "../components/RoomChecklist";
 import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
-import { addableRooms, addRoom, checklistForJob, checklistProgress, ownsList, removeRoom, roomMinutes, templateFromDoc, toggleStep, type ChecklistItem } from "../checklist";
+import { addableRooms, addRoom, checkAll, checklistForJob, checklistProgress, ownsList, removeRoom, roomMinutes, templateFromDoc, toggleStep, type ChecklistItem } from "../checklist";
 import { db } from "../firebase";
 import { assignmentMessage, cancellationMessage, givenBackMessage, roomDoneMessage, sendPushToEmployee, sendPushToOwners, unassignedMessage } from "../notifications";
 import { computeEarned, formatClockTime, formatDuration, formatMoney, minutesBetween } from "../payroll";
@@ -250,7 +250,7 @@ export default function JobDetail() {
 
   // Writes the time entry and closes the job in ONE batch so a retry can
   // never double-log. Returns false if the cleaner record is gone.
-  const logTimeAndClose = async (opts: { cancel?: boolean; finishNote?: FinishNote | null }) => {
+  const logTimeAndClose = async (opts: { cancel?: boolean; finishNote?: FinishNote | null; checklist?: ChecklistItem[] }) => {
     if (!job || !job.startedAt) return false;
     const emp = employees.find(e => e.id === job.assignedTo);
     if (!emp) {
@@ -289,23 +289,27 @@ export default function JobDetail() {
         ? { cancelled: true, cancelledAt: endedAt, cancelReason: "Cancelled by owner" }
         : { finishNote: opts.finishNote || null }),
       // Keep the list the cleaner was shown, so the finished job reads back
-      // the same rooms even if nothing was ticked.
-      ...(freshChecklist ? { checklist } : {}),
+      // the same rooms even if nothing was ticked. A "check all" finish
+      // writes its fully ticked list in the same batch as the time.
+      ...(opts.checklist ? { checklist: opts.checklist } : freshChecklist ? { checklist } : {}),
     });
     await batch.commit();
     return { employeeName, minutes, earned };
   };
 
   // reason is required when steps are unchecked; FinishSheet collects it.
-  const completeCleaning = async (reason: string | null) => {
+  // allChecked: the cleaner says everything was done - tick it all and finish.
+  const completeCleaning = async (reason: string | null, allChecked = false) => {
     if (!job || !job.startedAt || busy || !canWork) return;
+    const actor = selfName || (isOwner ? "Owner" : null);
     const unchecked = taskCount - checkedCount;
-    const finishNote: FinishNote | null = reason && unchecked > 0
-      ? { text: reason, by: selfName || (isOwner ? "Owner" : null), at: Date.now(), skipped: unchecked }
+    const finishNote: FinishNote | null = !allChecked && reason && unchecked > 0
+      ? { text: reason, by: actor, at: Date.now(), skipped: unchecked }
       : null;
+    const base = checklistRef.current.length > 0 ? checklistRef.current : checklist;
     setBusy(true);
     try {
-      const result = await logTimeAndClose({ finishNote });
+      const result = await logTimeAndClose({ finishNote, checklist: allChecked ? checkAll(base, actor, Date.now()) : undefined });
       if (result) {
         tapSuccess();
         setShowChecklist(false);
@@ -628,6 +632,7 @@ export default function JobDetail() {
         onClose={() => setShowFinish(false)}
         onReview={() => { setShowFinish(false); setTimeout(() => setShowChecklist(true), 450); }}
         onFinish={(reason) => completeCleaning(reason)}
+        onCheckAll={() => completeCleaning(null, true)}
       />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 150 }}>

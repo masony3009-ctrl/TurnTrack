@@ -10,6 +10,7 @@ import {
   hasHalfBath,
   isHeadingLine,
   ownsList,
+  checkAll,
   addableRooms,
   addRoom,
   removeRoom,
@@ -301,4 +302,16 @@ test("unfinished steps are listed by room", () => {
 test("progress ignores headings", () => {
   const list = toggleStep(buildChecklist(TEMPLATE, { bathrooms: 1 }), 2, "Marcus", 7).items;
   assert.deepEqual(checklistProgress(list), { done: 1, total: 5, lastAt: 7, lastBy: "Marcus" });
+});
+
+test("check all ticks every open step at once and leaves the rest alone", () => {
+  let list = buildChecklist(TEMPLATE, { bathrooms: 1 });
+  const walk = list.findIndex(i => i.text === "Walk the house");
+  list = toggleStep(list, walk, "Marcus", 5).items;
+  const all = checkAll(list, "Marcus", 99);
+  assert.deepEqual(checklistProgress(all), { done: 5, total: 5, lastAt: 99, lastBy: "Marcus" });
+  // The step ticked earlier keeps its own time; headings are untouched.
+  assert.equal(all[walk].doneAt, 5);
+  assert.deepEqual(all.filter(i => i.heading), list.filter(i => i.heading));
+  assert.equal(unfinishedByRoom(all).length, 0);
 });

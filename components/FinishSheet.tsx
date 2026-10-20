@@ -9,13 +9,15 @@ import { BrandButton, SheetModal } from "./ui";
 const MAX_LISTED = 8;
 const MIN_REASON = 3;
 
-export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish }: {
+export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish, onCheckAll }: {
   visible: boolean;
   items: ChecklistItem[];
   busy: boolean;
   onClose: () => void;
   onReview: () => void;
   onFinish: (reason: string) => void;
+  // Everything was done, just not ticked: tick it all and finish.
+  onCheckAll: () => void;
 }) {
   const [reason, setReason] = useState("");
   const rooms = useMemo(() => unfinishedByRoom(items), [items]);
@@ -32,8 +34,16 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish 
   const hidden = count - listed.reduce((n, r) => n + r.steps.length, 0);
 
   return (
-    <SheetModal visible={visible} title={`${count} step${count === 1 ? "" : "s"} not done`} onClose={onClose}>
-      <Text style={styles.lead}>You can still finish. Say why first; the owner sees this note on the job.</Text>
+    <SheetModal visible={visible} title={`${count} step${count === 1 ? "" : "s"} not checked`} onClose={onClose}>
+      <Text style={styles.lead}>Did all of it but forgot to tick as you went? Check everything off and finish in one tap.</Text>
+      <BrandButton
+        label={busy ? "Saving…" : `Everything's done — check all ${count} & finish`}
+        icon="checkmark-done"
+        onPress={onCheckAll}
+        disabled={busy}
+        style={{ marginTop: 12 }}
+      />
+      <Text style={styles.divider}>If something really wasn&apos;t done, say why instead. The owner sees this note on the job.</Text>
       <View style={styles.list}>
         {listed.map(room => (
           <View key={room.title} style={styles.room}>
@@ -59,6 +69,7 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish 
       <BrandButton
         label={busy ? "Saving…" : "Finish with this note"}
         icon="checkmark-circle"
+        variant="outline"
         onPress={() => onFinish(reason.trim())}
         disabled={!ready || busy}
         style={{ marginTop: 12 }}
@@ -71,6 +82,10 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish 
 
 const styles = StyleSheet.create({
   lead: { fontSize: 14, color: colors.muted, lineHeight: 20 },
+  divider: {
+    fontSize: 13.5, color: colors.muted, lineHeight: 19, marginTop: 18, paddingTop: 14,
+    borderTopWidth: 1, borderTopColor: colors.line,
+  },
   list: { marginTop: 12, marginBottom: 14, gap: 10 },
   room: { gap: 2 },
   roomTitle: { fontSize: 13, fontWeight: "800", color: colors.ink },

@@ -310,6 +310,13 @@ export function toggleStep(
   return { items: updated, finishedRoom: room };
 }
 
+// Ticks every step still open, stamped now - for a cleaner who did the work
+// but didn't tick as they went. The identical times show the owner it was
+// one tap at the end, not step by step.
+export function checkAll(items: ChecklistItem[], actor: string | null, now: number): ChecklistItem[] {
+  return items.map((item) => (item.heading || item.done ? item : { ...item, done: true, doneAt: now, doneBy: actor }));
+}
+
 // Whether a job's stored list is its own: something was ticked, or a room was
 // added by hand. Until then the list is just a copy of the template.
 export function ownsList(items?: ChecklistItem[] | null): boolean {
