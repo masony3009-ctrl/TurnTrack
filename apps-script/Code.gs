@@ -48,6 +48,7 @@ function scanAllEmails() {
   scanTurnoEmails(ctx);
   sendDigest(ctx);
   reportOffers(ctx);
+  scanIcalFeeds(ctx);          // houses whose hosts gave us an Airbnb calendar link
   checkAirbnbSync(); // notices if the PC-side Airbnb sync has gone quiet
 }
 
@@ -70,6 +71,13 @@ function loadContext() {
   return { properties: loadProperties(), jobs: loadJobs() };
 }
 
+// Counts are stored as whole numbers or decimals (2 vs 2.5); read either.
+function numberField(v) {
+  if (!v) return 0;
+  var n = Number(v.integerValue !== undefined ? v.integerValue : v.doubleValue);
+  return isFinite(n) ? n : 0;
+}
+
 function loadProperties() {
   var doc = fsGet("/settings/properties");
   if (!doc || !doc.fields || !doc.fields.items) return [];
@@ -79,9 +87,11 @@ function loadProperties() {
       name: f.name.stringValue,
       address: f.address.stringValue,
       aliases: ((f.aliases && f.aliases.arrayValue.values) || []).map(function (a) { return a.stringValue; }),
-      bedrooms: f.bedrooms ? Number(f.bedrooms.integerValue) : 0,
-      bathrooms: f.bathrooms ? Number(f.bathrooms.doubleValue) : 0,
-      short: f.short ? f.short.stringValue : ""
+      bedrooms: numberField(f.bedrooms),
+      bathrooms: numberField(f.bathrooms),
+      short: f.short ? f.short.stringValue : "",
+      // A host's Airbnb calendar export link, for houses we aren't co-hosts on.
+      icalUrl: f.icalUrl ? f.icalUrl.stringValue : ""
     };
   });
 }
@@ -100,6 +110,8 @@ function loadJobs() {
         address: f.address ? f.address.stringValue : "",
         property: f.property ? f.property.stringValue : "",
         turnoProjectId: f.turnoProjectId ? String(f.turnoProjectId.stringValue || f.turnoProjectId.integerValue || "") : "",
+        source: f.source ? f.source.stringValue : "",
+        icalUid: f.icalUid ? f.icalUid.stringValue : "",
         done: !!(f.done && f.done.booleanValue),
         cancelled: !!(f.cancelled && f.cancelled.booleanValue)
       });
@@ -300,7 +312,7 @@ function createJob(ctx, opts) {
     type: str(opts.type),
     done: bool(false),
     completedAt: nul(),
-    sameDayTurnover: bool(false),
+    sameDayTurnover: bool(!!opts.sameDay),
     assignedTo: nul(),
     assignedToName: nul(),
     startedAt: nul(),
@@ -312,6 +324,8 @@ function createJob(ctx, opts) {
   };
   // Lets the Turno calendar sync track this job when Turno moves or cancels it.
   if (opts.turnoProjectId) fields.turnoProjectId = str(opts.turnoProjectId);
+  // The booking's iCal UID: how a date change or cancellation finds this job.
+  if (opts.icalUid) fields.icalUid = str(opts.icalUid);
   if (opts.bedrooms) fields.bedrooms = int(opts.bedrooms);
   if (opts.bathrooms) fields.bathrooms = { doubleValue: opts.bathrooms };
 
@@ -326,11 +340,16 @@ function createJob(ctx, opts) {
     Logger.log("create failed: " + res.getContentText());
     return false;
   }
-  ctx.jobs.push({ dateKey: opts.dateKey, address: opts.address, property: opts.property || "", turnoProjectId: opts.turnoProjectId || "", done: false, cancelled: false });
+  var created = JSON.parse(res.getContentText());
+  ctx.jobs.push({
+    name: created.name, dateKey: opts.dateKey, address: opts.address, property: opts.property || "",
+    turnoProjectId: opts.turnoProjectId || "", source: opts.source, icalUid: opts.icalUid || "", done: false, cancelled: false
+  });
   Logger.log("created " + opts.dateKey + " - " + opts.address);
-  if (ctx.changes) {
-    var created = JSON.parse(res.getContentText());
-    ctx.changes.created.push({
+  // Each source reports in its own notification (Turno's, or the iCal one).
+  var report = opts.changes || ctx.changes;
+  if (report) {
+    report.created.push({
       dateKey: opts.dateKey,
       property: opts.property || opts.address,
       jobId: String(created.name || "").split("/").pop()
@@ -430,6 +449,201 @@ function cancelJob(job) {
     } }),
     muteHttpExceptions: true
   });
+}
+
+// ---- Airbnb iCal links -----------------------------------------------------
+
+// Some hosts give us their Airbnb calendar's export link (Calendar >
+// Availability > Export calendar) instead of making us co-hosts. A house in the
+// registry with an icalUrl is read here every run. The feed lists each booking
+// as an all-day event from check-in to checkout and a stable UID, so: a booking
+// becomes a cleaning on its checkout day, a date change moves it, a booking that
+// disappears cancels it - with the same guards as the laptop Airbnb sync. The
+// link is private to the host; it lives in the registry, never in this file.
+
+var ICAL_SOURCE = "airbnb-ical";
+var ICAL_JOB_TYPE = "Airbnb Turnover";
+var ICAL_ALERT_HOURS = 24;
+
+function scanIcalFeeds(ctx) {
+  ctx.icalChanges = { created: [], cancelled: [], moved: [], restored: [] };
+  var today = todayKey();
+  ctx.properties.forEach(function (house) {
+    if (!house.icalUrl) return;
+    var res;
+    try {
+      res = UrlFetchApp.fetch(house.icalUrl, { muteHttpExceptions: true, followRedirects: true });
+    } catch (e) {
+      icalProblem(house, "Couldn't reach the calendar link (" + String(e).slice(0, 120) + ").");
+      return;
+    }
+    var body = res.getContentText();
+    if (res.getResponseCode() !== 200 || body.indexOf("BEGIN:VCALENDAR") === -1) {
+      icalProblem(house, "The calendar link answered " + res.getResponseCode() + ". The host may have reset it in Airbnb - ask them for the new export link.");
+      return;
+    }
+    var plan = planIcalHouse(parseIcal(body), ctx.jobs, house, today);
+    // A half-loaded feed would look exactly like a wave of cancellations.
+    if (plan.badRead) {
+      icalProblem(house, "The calendar would have cancelled " + plan.cancel.length + " cleanings at once, which looks like a bad read, so nothing was changed.");
+      return;
+    }
+    clearIcalProblem(house);
+    applyIcalPlan(ctx, house, plan, today);
+  });
+  var d = buildDigest(ctx, "Airbnb", ctx.icalChanges);
+  if (d) notifyPhones(d.title, d.body, d.data);
+}
+
+// "20261016" (VALUE=DATE) or "20261016T110000Z" -> "2026-10-16". Airbnb writes
+// all-day dates, so the first eight digits are the day itself.
+function icalDate(value) {
+  var m = String(value || "").match(/^(\d{4})(\d{2})(\d{2})/);
+  return m ? m[1] + "-" + m[2] + "-" + m[3] : "";
+}
+
+// Bookings only: Airbnb also lists dates the host blocked ("Airbnb (Not
+// available)"), which are not stays and need no cleaning.
+function parseIcal(text) {
+  var lines = String(text || "").replace(/\r?\n[ \t]/g, "").split(/\r?\n/);
+  var out = [], ev = null;
+  lines.forEach(function (line) {
+    if (line === "BEGIN:VEVENT") { ev = {}; return; }
+    if (line === "END:VEVENT") { if (ev) out.push(ev); ev = null; return; }
+    if (!ev) return;
+    var colon = line.indexOf(":");
+    if (colon < 0) return;
+    var key = line.slice(0, colon).split(";")[0].toUpperCase();
+    var value = line.slice(colon + 1).trim();
+    if (key === "DTSTART") ev.checkIn = icalDate(value);
+    else if (key === "DTEND") ev.checkOut = icalDate(value);
+    else if (key === "UID") ev.uid = value;
+    else if (key === "SUMMARY") ev.summary = value;
+  });
+  return out.filter(function (e) {
+    return e.uid && e.checkIn && e.checkOut && e.checkOut > e.checkIn &&
+      !/not available|blocked|unavailable/i.test(e.summary || "");
+  });
+}
+
+// Works out every change for one house before anything is written.
+function planIcalHouse(stays, jobs, house, today) {
+  var plan = { create: [], move: [], restore: [], cancel: [], badRead: false };
+  var checkIns = {};
+  stays.forEach(function (s) { checkIns[s.checkIn] = true; });
+
+  // One job per booking; a live one beats a cancelled one.
+  var byUid = {};
+  jobs.forEach(function (j) {
+    if (!j.icalUid) return;
+    var cur = byUid[j.icalUid];
+    if (!cur || (cur.cancelled && !j.cancelled)) byUid[j.icalUid] = j;
+  });
+
+  var listed = {};
+  stays.forEach(function (s) {
+    listed[s.uid] = true;
+    if (s.checkOut < today) return;
+    var sameDay = !!checkIns[s.checkOut];
+    var mine = byUid[s.uid];
+    if (!mine) { plan.create.push({ stay: s, sameDay: sameDay }); return; }
+    if (mine.cancelled) plan.restore.push({ job: mine, stay: s, sameDay: sameDay });
+    else if (mine.dateKey !== s.checkOut) plan.move.push({ job: mine, stay: s, sameDay: sameDay, from: mine.dateKey });
+  });
+
+  // Never cancel a cleaning dated today or earlier: a booking is never
+  // cancelled on its own checkout day, so a missing one then is a read gap.
+  var upcoming = 0;
+  jobs.forEach(function (j) {
+    if (j.source !== ICAL_SOURCE || !j.icalUid || j.cancelled || j.done || j.property !== house.name) return;
+    if (!(j.dateKey > today)) return;
+    upcoming++;
+    if (!listed[j.icalUid]) plan.cancel.push(j);
+  });
+  plan.badRead = plan.cancel.length > 3 && plan.cancel.length >= upcoming / 2;
+  return plan;
+}
+
+function applyIcalPlan(ctx, house, plan, today) {
+  var report = ctx.icalChanges;
+  plan.create.forEach(function (c) {
+    // A cleaning someone already put in for that house and day is tagged
+    // with the booking instead of doubled.
+    var existing = liveJobAt(ctx, house, c.stay.checkOut);
+    if (existing) {
+      if (!existing.icalUid && existing.name) {
+        patchJobFields(existing.name, { icalUid: str(c.stay.uid) });
+        existing.icalUid = c.stay.uid;
+      }
+      return;
+    }
+    createJob(ctx, {
+      dateKey: c.stay.checkOut, address: house.address, property: house.name, type: ICAL_JOB_TYPE,
+      source: ICAL_SOURCE, icalUid: c.stay.uid, sameDay: c.sameDay,
+      bedrooms: house.bedrooms, bathrooms: house.bathrooms, changes: report
+    });
+  });
+  plan.move.forEach(function (m) {
+    patchJobFields(m.job.name, { dateKey: str(m.stay.checkOut), date: str(labelFromKey(m.stay.checkOut)), sameDayTurnover: bool(m.sameDay) });
+    report.moved.push({ from: m.from, to: m.stay.checkOut, property: house.name, jobId: jobIdOf(m.job) });
+    m.job.dateKey = m.stay.checkOut;
+  });
+  plan.restore.forEach(function (r) {
+    patchJobFields(r.job.name, {
+      cancelled: bool(false), cancelledAt: nul(), cancelReason: nul(),
+      dateKey: str(r.stay.checkOut), date: str(labelFromKey(r.stay.checkOut)), sameDayTurnover: bool(r.sameDay)
+    });
+    report.restored.push({ dateKey: r.stay.checkOut, property: house.name, jobId: jobIdOf(r.job) });
+    r.job.cancelled = false;
+  });
+  plan.cancel.forEach(function (j) {
+    patchJobFields(j.name, { cancelled: bool(true), cancelledAt: int(Date.now()), cancelReason: str("Booking no longer on the host's Airbnb calendar") });
+    report.cancelled.push({ dateKey: j.dateKey, property: house.name, jobId: jobIdOf(j) });
+    j.cancelled = true;
+  });
+}
+
+function liveJobAt(ctx, house, dateKey) {
+  var key = dedupeKey(house.name, house.address);
+  for (var i = 0; i < ctx.jobs.length; i++) {
+    var j = ctx.jobs[i];
+    if (j.cancelled || (j.dateKey || keyFromLabel(j.date)) !== dateKey) continue;
+    if (dedupeKey(j.property, j.address) === key) return j;
+  }
+  return null;
+}
+
+function jobIdOf(job) { return String(job.name || "").split("/").pop(); }
+
+function patchJobFields(jobName, fields) {
+  var mask = Object.keys(fields).map(function (k) { return "updateMask.fieldPaths=" + k; }).join("&");
+  var res = UrlFetchApp.fetch("https://firestore.googleapis.com/v1/" + jobName + "?" + mask, {
+    method: "patch",
+    contentType: "application/json",
+    headers: authHeaders(),
+    payload: JSON.stringify({ fields: fields }),
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() >= 300) Logger.log("patch failed: " + res.getContentText());
+}
+
+// One owner alert per house per day while a feed is broken, so a revoked
+// link is noticed without nagging.
+function icalProblem(house, message) {
+  Logger.log("ical problem at " + house.name + ": " + message);
+  var props = PropertiesService.getScriptProperties();
+  var key = "icalAlertAt:" + house.name;
+  var last = Number(props.getProperty(key) || 0);
+  if (Date.now() - last < ICAL_ALERT_HOURS * 3600 * 1000) return;
+  if (alertOwnerTelegram("Airbnb calendar for " + (house.short || house.name) + " isn't working", message + "\n\nNothing changed for that house this time.")) {
+    props.setProperty(key, String(Date.now()));
+  }
+}
+
+function clearIcalProblem(house) {
+  var props = PropertiesService.getScriptProperties();
+  var key = "icalAlertAt:" + house.name;
+  if (props.getProperty(key)) props.deleteProperty(key);
 }
 
 // ---- processed message ids ----------------------------------------------
@@ -535,11 +749,21 @@ function buildDigest(ctx, source, changes) {
   changes.cancelled.forEach(function (c) {
     rows.push({ when: c.dateKey, jobId: c.jobId, text: "Cancelled · " + shortDate(c.dateKey) + " · " + shortName(ctx, c.property) });
   });
+  // Only the iCal feeds move or restore cleanings; Turno passes neither list.
+  var moved = changes.moved || [], restored = changes.restored || [];
+  moved.forEach(function (c) {
+    rows.push({ when: c.to, jobId: c.jobId, text: "Moved · " + shortName(ctx, c.property) + " · " + shortDate(c.from) + " → " + shortDate(c.to) });
+  });
+  restored.forEach(function (c) {
+    rows.push({ when: c.dateKey, jobId: c.jobId, text: "Back on · " + shortDate(c.dateKey) + " · " + shortName(ctx, c.property) });
+  });
   if (!rows.length) return null;
   rows.sort(function (a, b) { return a.when < b.when ? -1 : a.when > b.when ? 1 : 0; });
 
   var parts = [];
   if (changes.created.length) parts.push(changes.created.length + " new");
+  if (restored.length) parts.push(restored.length + " back on");
+  if (moved.length) parts.push(moved.length + " moved");
   if (changes.cancelled.length) parts.push(changes.cancelled.length + " cancelled");
   var title = rows.length === 1 && changes.created.length === 1
     ? source + ": new cleaning"

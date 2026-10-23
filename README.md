@@ -44,6 +44,8 @@ are different houses, so neither may claim the bare street name.
 ## How the automation works
 A Google Apps Script runs every 15 minutes and searches Gmail for Airbnb reservation confirmations and Turno cleaning emails. It uses regex to extract checkout dates and property addresses, then sends them directly to Firebase via REST API. New jobs appear on both phones instantly with no manual input.
 
+The same script reads **Airbnb iCal links** for hosts who share their calendar export instead of making us co-hosts: give a house in `settings/properties` an `icalUrl` and every booking becomes a cleaning on its checkout day (`source: "airbnb-ical"`, tracked by the booking's `icalUid`), date changes move it, and vanished bookings cancel it — never on or before today, and never in a wave. The link is private to the host, so it lives only in Firestore. Tests for the script's pure parts run from `apps-script/Code.gs` itself (`tests/apps-script.test.mjs`).
+
 ## Published
 Available on iOS via TestFlight. Built and deployed using Expo EAS.
 
