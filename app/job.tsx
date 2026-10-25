@@ -12,12 +12,14 @@ import { RoomChecklist } from "../components/RoomChecklist";
 import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
 import { addableRooms, addRoom, checkAll, checklistForJob, checklistProgress, ownsList, removeRoom, roomMinutes, templateFromDoc, toggleStep, type ChecklistItem } from "../checklist";
 import { db } from "../firebase";
-import { assignmentMessage, cancellationMessage, givenBackMessage, roomDoneMessage, sendPushToEmployee, sendPushToOwners, unassignedMessage } from "../notifications";
+import { assignmentMessage, cancellationMessage, givenBackMessage, movedMessage, roomDoneMessage, sendPushToEmployee, sendPushToOwners, unassignedMessage } from "../notifications";
+import { WhenSheet } from "../components/WhenSheet";
+import { canEditDate, formatTime, withTime } from "../jobTime";
 import { computeEarned, formatClockTime, formatDuration, formatMoney, minutesBetween } from "../payroll";
 import { useProperties } from "../components/useProperties";
 import { accessCodes, findProperty, type AccessCode } from "../properties";
 import { cleanerColor, colors, radius, type, unassignedColor } from "../theme";
-import { daysFromToday, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
+import { daysFromToday, formatDateLabel, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
 import { Employee, FinishNote, Job } from "../types";
 
 export default function JobDetail() {
@@ -29,6 +31,7 @@ export default function JobDetail() {
   const [showChecklist, setShowChecklist] = useState(false);
   const [showFinish, setShowFinish] = useState(false);
   const [showGiveBack, setShowGiveBack] = useState(false);
+  const [showWhen, setShowWhen] = useState(false);
   // null until settings/checklist has loaded, so a job's stored list isn't
   // swapped for the fallback template in the meantime.
   const [template, setTemplate] = useState<string[] | null>(null);
@@ -153,6 +156,29 @@ export default function JobDetail() {
       console.warn("assign failed:", e);
       Alert.alert("Couldn't assign", "The assignment didn't save. Check your connection and try again.");
     }
+  };
+
+  // The owner moves a job or sets its start time. A synced job's date stays
+  // with its calendar (WhenSheet only offers the time there); whoever is
+  // assigned hears about the change.
+  const saveWhen = async (next: { dateKey: string | null; time: string | null }) => {
+    if (!job || !isOwner || busy) return;
+    const moveDate = canEditDate(job.source) && !!next.dateKey && next.dateKey !== jobDateKey(job);
+    const changes = {
+      time: next.time,
+      ...(moveDate && next.dateKey ? { dateKey: next.dateKey, date: formatDateLabel(next.dateKey) } : {}),
+    };
+    setBusy(true);
+    try {
+      await updateDoc(doc(db, "jobs", job.id), changes);
+      setShowWhen(false);
+      tapSuccess();
+      notify(job.assignedTo, movedMessage({ ...job, ...changes }));
+    } catch (e) {
+      console.warn("save date failed:", e);
+      Alert.alert("Couldn't save the date", "Nothing changed. Check your connection and try again.");
+    }
+    setBusy(false);
   };
 
   const takeJob = async () => {
@@ -561,7 +587,17 @@ export default function JobDetail() {
         onBack={goBack}
         backLabel="Back"
         title={job.address}
-        subtitle={rel ? `${dateHeading} · ${rel}` : dateHeading}
+        subtitle={key ? [withTime(dateHeading, job.time), rel].filter(Boolean).join(" · ") : job.date ? withTime(job.date, job.time) : "No date yet"}
+      />
+
+      <WhenSheet
+        visible={showWhen}
+        source={job.source}
+        dateKey={key}
+        time={job.time || null}
+        busy={busy}
+        onClose={() => setShowWhen(false)}
+        onSave={saveWhen}
       />
 
       <SheetModal visible={showAssign} title="Assign to" onClose={() => setShowAssign(false)}>
@@ -701,6 +737,22 @@ export default function JobDetail() {
             <Text style={styles.notesText}>{job.notes}</Text>
           </Card>
         ) : null}
+
+        {isOwner && !job.cancelled && (
+          <Card onPress={() => setShowWhen(true)}>
+            <View style={styles.addressRow}>
+              <View style={styles.addressIcon}>
+                <Ionicons name="calendar-outline" size={20} color={colors.tealDark} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={type.section}>Date & time</Text>
+                <Text style={styles.addressText}>{key ? formatDayHeading(key) : "No date yet"}</Text>
+                <Text style={styles.addressHint}>{formatTime(job.time) || "No set time"} · Tap to change</Text>
+              </View>
+              <Ionicons name="create-outline" size={22} color={colors.teal} />
+            </View>
+          </Card>
+        )}
 
         <Card onPress={() => openInMaps(job.address)}>
           <View style={styles.addressRow}>

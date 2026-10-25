@@ -9,6 +9,8 @@ import { alertSoon, AssigneeRow, BrandButton, Card, DatePickerField, EmptyState,
 import { db } from "../../firebase";
 import { PushProblemCard, usePushRegistration } from "../../components/PushProblem";
 import { scheduleTodaysJobNotifications, sendTestNotification } from "../../notifications";
+import { TimeChips } from "../../components/TimeChips";
+import { withTime } from "../../jobTime";
 import { formatClockTime } from "../../payroll";
 import { cleanerColor, colors, radius, unassignedColor } from "../../theme";
 import { daysFromToday, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, HIDE_AFTER_DAYS, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate } from "../../turnover";
@@ -24,6 +26,7 @@ export default function JobsScreen() {
   const [newAddress, setNewAddress] = useState("");
   const [newType, setNewType] = useState("");
   const [newSameDayTurnover, setNewSameDayTurnover] = useState(false);
+  const [newTime, setNewTime] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [mineOnly, setMineOnly] = useState(false);
   const [showChecklistEditor, setShowChecklistEditor] = useState(false);
@@ -132,6 +135,7 @@ export default function JobsScreen() {
 
   const resetForm = () => {
     setNewDateKey(null);
+    setNewTime(null);
     setNewAddress("");
     setNewType("");
     setNewSameDayTurnover(false);
@@ -151,6 +155,7 @@ export default function JobsScreen() {
     try {
       await addDoc(collection(db, "jobs"), newJobDoc({
         dateKey: newDateKey,
+        time: newTime,
         address: newAddress,
         type: newType || "Turnover",
         sameDayTurnover: newSameDayTurnover,
@@ -256,6 +261,7 @@ export default function JobsScreen() {
       <SheetModal visible={showForm} title="New cleaning" onClose={() => setShowForm(false)}>
         <DatePickerField label="Date" value={newDateKey} onChange={setNewDateKey} />
         <FormInput label="Property" placeholder="Name or address" value={newAddress} onChangeText={setNewAddress} autoCapitalize="words" />
+        <TimeChips label="Start time" value={newTime} onChange={setNewTime} />
         <FormInput label="Job type" placeholder="Turnover" value={newType} onChangeText={setNewType} autoCapitalize="words" />
         <TouchableOpacity
           style={[styles.toggleRow, newSameDayTurnover && styles.toggleRowActive]}
@@ -381,7 +387,7 @@ function JobCard({ job, color, photo, canToggle, canDelete, onPress, onToggle, o
       <Text style={[styles.address, job.done && styles.addressDone]} numberOfLines={2}>{job.address}</Text>
       <View style={styles.metaRow}>
         <Ionicons name="calendar-clear-outline" size={13} color={colors.muted} />
-        <Text style={styles.metaText}>{key ? formatShortDate(key) : job.date}</Text>
+        <Text style={styles.metaText}>{withTime(key ? formatShortDate(key) : job.date, job.time)}</Text>
         {rel ? <Text style={[styles.metaRel, days === 0 && { color: colors.tealDark }, days !== null && days < 0 && !job.done && { color: colors.goldDark }]}>· {rel}</Text> : null}
       </View>
       {running && cl.total > 0 ? (

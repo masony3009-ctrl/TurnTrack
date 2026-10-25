@@ -1,4 +1,5 @@
 import { buildChecklist, type ChecklistItem } from "./checklist";
+import { isTime } from "./jobTime";
 import { formatDateLabel, parseJobDateToKey } from "./turnover";
 
 // The checklist lives in checklist.ts (pure, so it can be tested under Node);
@@ -22,6 +23,8 @@ export type Job = {
   date: string;
   // Canonical "YYYY-MM-DD". Set on every job the app creates.
   dateKey?: string | null;
+  // Start time, "HH:MM" 24-hour (see jobTime.ts). Absent or null = no set time.
+  time?: string | null;
   address: string;
   // Registry key for the house, written by the email script and the Airbnb
   // sync. Used to look the property up for its access codes.
@@ -97,6 +100,7 @@ export type TimeEntry = {
 
 export type NewJobInput = {
   dateKey?: string | null;
+  time?: string | null;
   date?: string;
   address: string;
   type: string;
@@ -111,6 +115,7 @@ export function newJobDoc(input: NewJobInput, template?: string[] | null): Omit<
   return {
     date,
     dateKey,
+    time: isTime(input.time) ? input.time : null,
     address: input.address.trim(),
     type: input.type.trim() || "Turnover",
     done: false,

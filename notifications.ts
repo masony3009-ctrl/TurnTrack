@@ -3,6 +3,7 @@ import * as Notifications from "expo-notifications";
 import { collection, deleteField, doc, getDocs, query, setDoc, where } from "firebase/firestore";
 import { Platform } from "react-native";
 import { db } from "./firebase";
+import { withTime } from "./jobTime";
 import { formatClockTime } from "./payroll";
 import { hasSameDayTurnover, jobDate, jobDateKey } from "./turnover";
 import { Job } from "./types";
@@ -151,7 +152,16 @@ async function sendPushToDevices(filter: ReturnType<typeof where>, message: Push
 
 function jobLine(job: Job): string {
   const sameDay = hasSameDayTurnover(job) ? " · same-day turnover" : "";
-  return `${job.address} — ${job.date}${sameDay}`;
+  return `${job.address} — ${withTime(job.date, job.time)}${sameDay}`;
+}
+
+// The owner changed when a cleaning happens; tell whoever is on it.
+export function movedMessage(job: Job): PushMessage {
+  return {
+    title: "Cleaning moved",
+    body: `${job.address} is now ${withTime(job.date, job.time)}.`,
+    data: { jobId: job.id },
+  };
 }
 
 export function assignmentMessage(job: Job): PushMessage {

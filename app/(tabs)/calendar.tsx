@@ -8,6 +8,7 @@ import { tapSelect } from "../../components/haptics";
 import { useProfile } from "../../components/ProfileProvider";
 import { AssigneeRow, calendarTheme, Card, ColorDot, IconButton, Pill, ScreenHeader } from "../../components/ui";
 import { db } from "../../firebase";
+import { formatTime } from "../../jobTime";
 import { cleanerColor, colors, radius, shadow, unassignedColor } from "../../theme";
 import { formatDayHeading, hasSameDayTurnover, isJobVisible, jobDateKey, sortByDate, todayKey } from "../../turnover";
 import { Job } from "../../types";
@@ -130,6 +131,7 @@ export default function CalendarScreen() {
                   {job.startedAt ? <Pill label="In progress" tone="solid" icon="time" /> : null}
                   {job.done ? <Pill label="Done" tone="neutral" icon="checkmark" /> : null}
                   {sameDay ? <Pill label="Same-day" tone="gold" icon="alert-circle" /> : null}
+                  {formatTime(job.time) ? <Pill label={formatTime(job.time) || ""} tone="neutral" icon="time-outline" /> : null}
                   {mine ? <Pill label="Yours" tone="teal" /> : null}
                   <Pill label={job.type} tone="neutral" />
                 </View>

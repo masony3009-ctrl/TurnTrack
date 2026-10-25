@@ -13,6 +13,7 @@ export type JobLike = {
   pending?: boolean;
   startedAt?: number | null;
   done?: boolean;
+  time?: string | null;
 };
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
@@ -224,6 +225,10 @@ export function sortByDate<T extends JobLike>(jobs: T[]): T[] {
     const ka = jobDateKey(a) || "9999";
     const kb = jobDateKey(b) || "9999";
     if (ka !== kb) return ka < kb ? -1 : 1;
+    // Same day: timed jobs in time order, untimed ones after them.
+    const ta = a.time || "99:99";
+    const tb = b.time || "99:99";
+    if (ta !== tb) return ta < tb ? -1 : 1;
     return (a as any).address?.localeCompare?.((b as any).address || "") || 0;
   });
 }
