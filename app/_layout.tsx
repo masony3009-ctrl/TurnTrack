@@ -90,7 +90,6 @@ function GatedApp() {
         <Stack.Screen name="scan-calendar" />
         <Stack.Screen name="gmail" />
         <Stack.Screen name="scan" />
-        <Stack.Screen name="schedule" />
       </Stack>
       <ViewingAsBanner />
     </View>

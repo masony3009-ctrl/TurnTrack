@@ -215,7 +215,7 @@ export default function JobsScreen() {
       <ScreenHeader
         title="Jobs"
         subtitle={subtitle}
-        onSubtitlePress={isOwner ? () => router.push("/schedule") : undefined}
+        onSubtitlePress={isOwner ? () => router.navigate("/calendar") : undefined}
         right={
           <>
             {isOwner && <IconButton icon="scan-outline" onPress={() => router.push("/scan-calendar")} />}
