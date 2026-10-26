@@ -48,3 +48,18 @@ export function syncedFrom(source?: string | null): string | null {
 export function canEditDate(source?: string | null): boolean {
   return syncedFrom(source) === null;
 }
+
+// When the day-of reminder rings: 8 AM, or an hour before the start time when
+// that's earlier, so a 7 AM cleaning isn't announced an hour after it began.
+export function reminderAt(day: Date, time?: string | null): Date {
+  const at = new Date(day);
+  at.setHours(8, 0, 0, 0);
+  if (isTime(time)) {
+    const [h, m] = time.split(":").map(Number);
+    const start = new Date(day);
+    start.setHours(h, m, 0, 0);
+    const before = new Date(start.getTime() - 60 * 60000);
+    if (before < at) return before;
+  }
+  return at;
+}

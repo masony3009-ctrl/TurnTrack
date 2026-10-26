@@ -1,132 +1,48 @@
 # Security Setup
 
-> **Status: Firestore is locked; the Anthropic/Cloud Function work is not done.**
+> **Status (2026-10-26).** Anonymous auth is on and every client signs in
+> (the app, the Gmail scraper, the Airbnb/Turno laptop sync, the website
+> bridge); `firestore.rules` rejects unauthenticated requests. Calendar
+> scanning, the only thing that used an AI API, was removed from the app, and
+> its `EXPO_PUBLIC_ANTHROPIC_API_KEY` was deleted from EAS and `app/.env`.
 >
-> Done on 2026-09-12: anonymous auth is enabled, all four clients sign in
-> (the app, the Gmail scraper, the Airbnb sync, the website bridge), and the
-> rules in `firestore.rules` requiring `request.auth` are published and live.
-> An unauthenticated read now returns 403.
->
-> Still outstanding: the app calls Anthropic directly with an
-> `EXPO_PUBLIC_` key, so steps 0-3 and 7 below (rotate the key, move it into
-> a Cloud Function) are unfinished and need the Blaze plan.
->
-> **What the lockdown does not do.** Anonymous auth means "some client of
-> this project", not who. The web API key that mints those tokens ships
-> inside the app, so someone who extracts it can still authenticate. It
-> closed the open-to-the-internet hole; it is not a vault. The next real step
-> is **Firebase App Check**, which ties access to your actual app binaries -
-> worth doing, because `settings/properties` holds every house's door,
-> garage and supply codes.
+> **Still open, and it matters: the database is not private.** Anonymous auth
+> means "some client of this project", not who. The web API key that mints
+> those tokens is public (it ships in the app and sits in this repo), so anyone
+> who has it can read and write every collection, including
+> `settings/properties` (every house's door, garage and supply codes and the
+> hosts' iCal links), PINs, payroll and push tokens. Nothing stops a delete,
+> and the free plan has no backups.
 
-This document covers everything you must do to deploy the security fixes. Once
-these steps are done together with the matching client changes, the calendar
-scan goes through a Cloud Function and Firestore reads require auth.
+## 1. Revoke the old Anthropic key
 
-## 0. Rotate the old Anthropic key first
+Every app build and over-the-air update published before 2026-10-26 carried
+the key in its JavaScript bundle, and those bundles stay on Expo's servers and
+people's phones. Deleting it from EAS stops new copies; only revoking it in the
+[Anthropic Console](https://console.anthropic.com/settings/keys) makes the old
+copies useless.
 
-If any build that contained `EXPO_PUBLIC_ANTHROPIC_API_KEY` was ever distributed
-(TestFlight, an APK, anyone's phone), **treat that key as compromised.** Go to the
-[Anthropic Console](https://console.anthropic.com/settings/keys), delete the old
-key, and create a new one. Use the new key in step 2 below. Also remove
-`EXPO_PUBLIC_ANTHROPIC_API_KEY` from any `.env`, EAS secrets, or build config —
-it is no longer used by the app.
+## 2. Lock the database down (not done)
 
-## 1. Install the Firebase CLI and log in
+All four clients have to change together, or one of them gets locked out:
 
-```bash
-npm install -g firebase-tools
-firebase login
-firebase use cleanerapp-3f196   # or: firebase use --add
-```
-
-## 2. Set the Anthropic key as a server-side secret
-
-```bash
-cd functions
-npm install
-cd ..
-firebase functions:secrets:set ANTHROPIC_API_KEY
-# paste your NEW key when prompted
-```
-
-The key now lives only in Google Cloud Secret Manager and is injected into the
-function at runtime. It is never in the repo and never in the app bundle.
-
-## 3. Deploy the Cloud Function
-
-```bash
-firebase deploy --only functions
-```
-
-This deploys `scanCalendar`, a callable function that proxies the Anthropic
-request. The app calls it via `httpsCallable(functions, "scanCalendar")`.
-
-## 4. Enable Anonymous Authentication
-
-In the [Firebase Console](https://console.firebase.google.com/) →
-**Authentication** → **Sign-in method** → enable **Anonymous**.
-
-The app signs in anonymously on launch (`app/_layout.tsx`). This is what lets the
-Firestore rules require `request.auth != null`. Note: anonymous auth means
-"someone running this app", not per-user accounts — it closes the open-to-the-
-internet hole but does not separate users from each other. If you later want a
-real login (e.g. a shared business account), swap `signInAnonymously` for an
-email/password sign-in screen.
-
-> A real `apiKey` must be present in `firebase.ts` for auth to work. The
-> committed config has a blank `apiKey` — fill in the real one locally.
-
-## 5. Publish the Firestore security rules
-
-```bash
-firebase deploy --only firestore:rules
-```
-
-`firestore.rules` denies all unauthenticated access and only allows the `jobs`
-and `pushTokens` collections for signed-in clients. Everything else is denied.
-
-## 6. Update the Google Apps Script ingestion (IMPORTANT)
-
-Your README describes an Apps Script that writes jobs to Firestore via the REST
-API every 15 minutes. **Once the rules above are live, unauthenticated REST
-writes will be rejected (403)** and new jobs will stop appearing.
-
-Pick one of these:
-
-**Option A — Authenticate the Apps Script with a service account (smallest change).**
-1. Firebase Console → Project Settings → Service accounts → generate a new
-   private key (JSON).
-2. In Apps Script, store the JSON in Script Properties and mint an OAuth2 access
-   token for scope `https://www.googleapis.com/auth/datastore` (the
-   [apps-script-oauth2](https://github.com/googleworkspace/apps-script-oauth2)
-   library handles this).
-3. Send the token on every Firestore REST call:
-   `Authorization: Bearer <access_token>`.
-   Service-account requests bypass security rules (they use Admin privileges), so
-   writes will succeed while the public stays locked out.
-
-**Option B — Add an authenticated ingestion Cloud Function.**
-Add an HTTPS function that checks a shared secret header, then writes with the
-Admin SDK. Point the Apps Script at that URL instead of the raw Firestore REST
-endpoint. (Not included here because it requires changing your Apps Script code,
-which isn't in this repo.)
-
-## 7. Build a fresh app binary
-
-Rebuild and redistribute so users get the version that calls the Cloud Function
-instead of Anthropic directly:
-
-```bash
-eas build --platform ios --profile production
-```
-
-## Checklist
-
-- [ ] Old Anthropic key rotated/deleted
-- [ ] `ANTHROPIC_API_KEY` secret set
-- [ ] `scanCalendar` function deployed
-- [x] Anonymous auth enabled + real `apiKey` in `firebase.ts`
-- [x] Firestore rules published
-- [x] Apps Script updated to authenticate (plus the Airbnb sync and the website bridge)
-- [ ] New app build shipped
+1. **Roles from a server.** A small endpoint (the website's Cloudflare Worker
+   can host it, no Blaze plan needed) checks a PIN and returns a Firebase
+   custom token with a `role` claim (`owner` or `cleaner`, plus the
+   employee id). The app signs in with `signInWithCustomToken` instead of
+   anonymously.
+2. **PINs leave readable documents.** Store only salted hashes, somewhere the
+   rules deny to every client; the endpoint is the only reader. Rate-limit
+   wrong guesses there.
+3. **Scripts use a service account.** The Apps Script and the laptop sync
+   mint OAuth tokens from a service-account key (kept in Script Properties and
+   a gitignored file) instead of anonymous sign-up. Service accounts bypass the
+   rules.
+4. **Rules check roles.** Cleaners read jobs, the registry minus codes they
+   don't need, and their own employee record; only owners write employees,
+   settings and payroll; nobody deletes jobs or time entries from a client.
+   Then turn anonymous sign-in off.
+5. **App Check** (DeviceCheck / App Attest on iOS, Play Integrity on Android)
+   needs a native build; do it with the next one.
+6. **Backups:** scheduled exports need the Blaze plan; until then, a periodic
+   export from the laptop sync's service account.

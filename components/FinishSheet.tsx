@@ -1,11 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
-import { unfinishedByRoom, type ChecklistItem } from "../checklist";
+import { checklistProgress, unfinishedByRoom, type ChecklistItem } from "../checklist";
 import { colors, radius } from "../theme";
 import { BrandButton, SheetModal } from "./ui";
 
-// Shown when someone taps Finish with steps still unchecked. They can finish,
-// but only after saying why; the reason is kept on the job for the owner.
+// Shown on every Finish. With everything ticked it just offers an optional
+// note for the owner (damage, low supplies). With steps unchecked the cleaner
+// can tick them all in one go, or finish after saying why they weren't done.
 const MAX_LISTED = 8;
 const MIN_REASON = 3;
 
@@ -15,14 +16,39 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
   busy: boolean;
   onClose: () => void;
   onReview: () => void;
-  onFinish: (reason: string) => void;
+  // note: optional when everything is ticked, required (the reason) otherwise.
+  onFinish: (note: string | null) => void;
   // Everything was done, just not ticked: tick it all and finish.
-  onCheckAll: () => void;
+  onCheckAll: (note: string | null) => void;
 }) {
-  const [reason, setReason] = useState("");
+  const [text, setText] = useState("");
+  useEffect(() => { if (!visible) setText(""); }, [visible]);
   const rooms = useMemo(() => unfinishedByRoom(items), [items]);
+  const total = checklistProgress(items).total;
   const count = rooms.reduce((n, r) => n + r.steps.length, 0);
-  const ready = reason.trim().length >= MIN_REASON;
+  const note = text.trim() || null;
+  const ready = text.trim().length >= MIN_REASON;
+
+  if (count === 0) {
+    return (
+      <SheetModal visible={visible} title="Finish cleaning" onClose={onClose}>
+        <Text style={styles.lead}>{total > 0 ? `All ${total} steps are checked off.` : "Ready to stop the clock."}</Text>
+        <Text style={[styles.label, { marginTop: 14 }]}>Anything the owner should know? (optional)</Text>
+        <TextInput
+          style={styles.input}
+          multiline
+          textAlignVertical="top"
+          value={text}
+          onChangeText={setText}
+          placeholder="Damage, low supplies, anything odd"
+          placeholderTextColor={colors.faint}
+          accessibilityLabel="Anything the owner should know?"
+        />
+        <BrandButton label={busy ? "Saving…" : "Finish cleaning"} icon="checkmark-circle" onPress={() => onFinish(note)} disabled={busy} style={{ marginTop: 12 }} />
+        <BrandButton label="Back to checklist" icon="list" variant="ghost" onPress={onReview} style={{ marginTop: 4 }} />
+      </SheetModal>
+    );
+  }
 
   // Room by room, capped so a mostly-skipped list stays readable.
   let budget = MAX_LISTED;
@@ -39,7 +65,7 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
       <BrandButton
         label={busy ? "Saving…" : `Everything's done — check all ${count} & finish`}
         icon="checkmark-done"
-        onPress={onCheckAll}
+        onPress={() => onCheckAll(note)}
         disabled={busy}
         style={{ marginTop: 12 }}
       />
@@ -60,8 +86,8 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
         style={styles.input}
         multiline
         textAlignVertical="top"
-        value={reason}
-        onChangeText={setReason}
+        value={text}
+        onChangeText={setText}
         placeholder="e.g. Fridge front wouldn't come clean, left it for you"
         placeholderTextColor={colors.faint}
         accessibilityLabel="Why weren't these done?"
@@ -70,7 +96,7 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
         label={busy ? "Saving…" : "Finish with this note"}
         icon="checkmark-circle"
         variant="outline"
-        onPress={() => onFinish(reason.trim())}
+        onPress={() => onFinish(note)}
         disabled={!ready || busy}
         style={{ marginTop: 12 }}
       />

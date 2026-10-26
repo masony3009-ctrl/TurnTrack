@@ -1,6 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import { ReactNode, useEffect, useState } from "react";
-import { Alert, AlertButton, Dimensions, Image, KeyboardAvoidingView, KeyboardTypeOptions, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, ViewStyle } from "react-native";
+import {
+  Alert, AlertButton, Image, Keyboard, KeyboardAvoidingView, KeyboardTypeOptions, Modal, Platform, ScrollView, StyleSheet, Text, TextInput,
+  TouchableOpacity, useWindowDimensions, View, ViewStyle,
+} from "react-native";
 import { Calendar } from "react-native-calendars";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { formatElapsed } from "../payroll";
@@ -113,7 +116,7 @@ export function ScreenHeader({ title, subtitle, right, onBack, backLabel, onSubt
     <View style={[styles.headerWrap, { paddingTop: Math.max(insets.top, 20) + 8 }]}>
       <View style={{ flex: 1 }}>
         {onBack ? (
-          <TouchableOpacity onPress={onBack} style={styles.backRow} hitSlop={10}>
+          <TouchableOpacity onPress={onBack} style={styles.backRow} hitSlop={10} accessibilityRole="button" accessibilityLabel={backLabel || "Back"}>
             <Ionicons name="chevron-back" size={20} color={colors.tealDark} />
             <Text style={styles.backText}>{backLabel || "Back"}</Text>
           </TouchableOpacity>
@@ -135,14 +138,16 @@ export function ScreenHeader({ title, subtitle, right, onBack, backLabel, onSubt
   );
 }
 
-export function IconButton({ icon, onPress, tint: tintColor, badge }: {
+export function IconButton({ icon, onPress, tint: tintColor, badge, label }: {
   icon: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
   tint?: string;
   badge?: boolean;
+  // What the button does, for screen readers (an icon alone says nothing).
+  label?: string;
 }) {
   return (
-    <TouchableOpacity style={styles.iconBtn} onPress={onPress} hitSlop={6}>
+    <TouchableOpacity style={styles.iconBtn} onPress={onPress} hitSlop={6} accessibilityRole="button" accessibilityLabel={label}>
       <Ionicons name={icon} size={21} color={tintColor || colors.tealDark} />
       {badge ? <View style={styles.iconBadge} /> : null}
     </TouchableOpacity>
@@ -171,7 +176,7 @@ export function Card({ children, style, tone, accent, onPress }: {
     </View>
   );
   if (!onPress) return body;
-  return <TouchableOpacity onPress={onPress} activeOpacity={0.75}>{body}</TouchableOpacity>;
+  return <TouchableOpacity onPress={onPress} activeOpacity={0.75} accessibilityRole="button">{body}</TouchableOpacity>;
 }
 
 export function Pill({ label, tone = "teal", icon, color }: {
@@ -331,16 +336,29 @@ export function SheetModal({ visible, title, onClose, children }: {
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
+  // With the keyboard up, the sheet has to fit in what's left above it, or its
+  // title and close button get pushed off the top (and on Android, with the
+  // app drawn edge to edge, the keyboard simply covers the fields).
+  const [keyboard, setKeyboard] = useState(0);
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const show = Keyboard.addListener(showEvent, (e) => setKeyboard(e.endCoordinates.height));
+    const hide = Keyboard.addListener(hideEvent, () => setKeyboard(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+  const maxHeight = Math.max(160, Math.min(height * 0.72, height - keyboard - insets.top - 120));
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <View style={styles.sheetOverlay}>
-          <TouchableOpacity style={{ flex: 1 }} onPress={onClose} />
-          <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 20) + 8 }]}>
+          <TouchableOpacity style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Close" accessibilityRole="button" />
+          <View style={[styles.sheet, { paddingBottom: keyboard ? 12 : Math.max(insets.bottom, 20) + 8 }]}>
             <View style={styles.sheetHandle} />
             <View style={styles.sheetTitleRow}>
               <Text style={styles.sheetTitle}>{title}</Text>
-              <TouchableOpacity onPress={onClose} hitSlop={10} style={styles.sheetClose}>
+              <TouchableOpacity onPress={onClose} hitSlop={10} style={styles.sheetClose} accessibilityLabel="Close" accessibilityRole="button">
                 <Ionicons name="close" size={20} color={colors.muted} />
               </TouchableOpacity>
             </View>
@@ -348,7 +366,7 @@ export function SheetModal({ visible, title, onClose, children }: {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
               bounces={false}
-              style={{ maxHeight: Dimensions.get("window").height * 0.72 }}
+              style={{ maxHeight }}
             >
               {children}
             </ScrollView>

@@ -175,21 +175,30 @@ export function hasSameDayTurnover(job: JobLike): boolean {
   return job.sameDayTurnover === true;
 }
 
-// Jobs leave the phones this many days after the cleaning date. They stay
-// in Firestore; this only controls what the app shows.
+// Finished jobs leave the phones this many days after the cleaning date. They
+// stay in Firestore; this only controls what the app shows.
 export const HIDE_AFTER_DAYS = 2;
 
-// Visible unless cancelled or long past. A job with a running timer never
-// hides: somebody still needs to finish or discard it so the hours get logged.
+// Visible unless cancelled or finished a while ago. A running timer never
+// hides (somebody has to finish or discard it so the hours get logged), and
+// neither does a past cleaning nobody finished: it waits under "Needs
+// attention" until someone marks it done or cancels it.
 export function isJobVisible(job: JobLike): boolean {
   if (job.cancelled) return false;
   // An unconfirmed website request stays until the owner confirms or
   // declines it, however old its requested date is.
   if (job.pending) return true;
   if (job.startedAt) return true;
+  if (!job.done) return true;
   const days = daysFromToday(job);
   if (days === null) return true;
   return days >= -HIDE_AFTER_DAYS;
+}
+
+// Days from today through Saturday: the weeks here run Sunday to Saturday,
+// the same as the calendar's weekly counts.
+export function daysLeftInWeek(today: Date = new Date()): number {
+  return 6 - today.getDay();
 }
 
 export type JobGroup = "pending" | "running" | "overdue" | "today" | "tomorrow" | "week" | "later" | "past" | "unknown";
@@ -202,8 +211,8 @@ export const GROUP_TITLES: Record<JobGroup, string> = {
   overdue: "Needs attention",
   today: "Today",
   tomorrow: "Tomorrow",
-  week: "This week",
-  later: "Later",
+  week: "Later this week",
+  later: "Coming up",
   past: "Recently finished",
   unknown: "Date unclear",
 };
@@ -216,7 +225,7 @@ export function jobGroup(job: JobLike): JobGroup {
   if (days < 0) return job.done ? "past" : "overdue";
   if (days === 0) return "today";
   if (days === 1) return "tomorrow";
-  if (days <= 6) return "week";
+  if (days <= daysLeftInWeek()) return "week";
   return "later";
 }
 

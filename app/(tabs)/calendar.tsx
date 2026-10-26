@@ -24,7 +24,7 @@ import {
   type Month,
   type WeekCount,
 } from "../../schedule";
-import { cleanerColor, colors, radius, shadow, tint, unassignedColor } from "../../theme";
+import { cleanerColor, colors, radius, shadow, textOn, tint, unassignedColor } from "../../theme";
 import { formatDayHeading, hasSameDayTurnover, jobDateKey, sortByDate, todayKey } from "../../turnover";
 import { Job } from "../../types";
 
@@ -68,8 +68,15 @@ export default function CalendarScreen() {
   const weekCounts = useMemo(() => countsByWeek(all), [all]);
   const months = useMemo(() => scheduleMonths(all, today), [all, today]);
   const maxWeek = useMemo(() => Math.max(1, ...[...weekCounts.values()].map(c => c.total)), [weekCounts]);
-  const grid = monthGrid(month);
-  const totals = monthTotals(all, month, today);
+  const grid = useMemo(() => monthGrid(month), [month]);
+  const totals = useMemo(() => monthTotals(all, month), [all, month]);
+  // Cleaners with a chip on this month's grid, so a cleaner who has since
+  // left still gets a legend entry for their color.
+  const shownCleaners = useMemo(() => {
+    const ids = new Set<string>();
+    grid.flat().forEach(key => (byDay.get(key) || []).forEach(j => { if (j.assignedTo) ids.add(j.assignedTo); }));
+    return ids;
+  }, [grid, byDay]);
   const selectedKey = monthKey(month);
 
   useEffect(() => {
@@ -95,13 +102,13 @@ export default function CalendarScreen() {
   }
 
   const dayJobs = openDay ? byDay.get(openDay) || [] : [];
-  const monthTotal = totals.had + totals.ahead;
+  const monthTotal = totals.done + totals.left;
 
   return (
     <View style={styles.container}>
       <ScreenHeader
         title={monthLabel(month, true)}
-        subtitle={jobs ? `${monthTotal} cleaning${monthTotal === 1 ? "" : "s"} · ${totals.had} so far, ${totals.ahead} to go` : "Loading cleanings…"}
+        subtitle={jobs ? `${monthTotal} cleaning${monthTotal === 1 ? "" : "s"} · ${totals.done} done, ${totals.left} to go` : "Loading cleanings…"}
         right={<IconButton icon="today-outline" onPress={() => pickMonth(monthOfKey(today))} />}
       />
 
@@ -151,7 +158,7 @@ export default function CalendarScreen() {
             </View>
 
             <View style={styles.legend}>
-              {employees.filter(e => e.active).map(e => (
+              {employees.filter(e => e.active || shownCleaners.has(e.id)).map(e => (
                 <View key={e.id} style={styles.legendItem}>
                   <ColorDot color={cleanerColor(e)} />
                   <Text style={styles.legendText}>{e.name.split(" ")[0]}</Text>
@@ -226,18 +233,22 @@ function DayCell({ dayKey, inMonth, isToday, jobs, label, colorFor, onPress }: {
       {jobs.slice(0, CHIPS_PER_DAY).map(job => {
         const color = colorFor(job);
         const unassigned = color === unassignedColor;
+        // Done cleanings go light with dark text instead of fading: still
+        // readable, clearly finished. Light cleaner colors get dark text.
+        const soft = unassigned || job.done;
+        const background = soft ? tint(color, unassigned ? 0.28 : 0.22) : color;
         return (
           <View
             key={job.id}
             style={[
               styles.chip,
-              { backgroundColor: unassigned ? tint(unassignedColor, 0.28) : color },
+              { backgroundColor: background },
+              job.done && !unassigned && { borderLeftWidth: 3, borderLeftColor: color },
               hasSameDayTurnover(job) && styles.chipSameDay,
-              job.done && styles.chipDone,
             ]}
           >
-            <Text style={[styles.chipText, unassigned && { color: colors.ink }]} numberOfLines={1} ellipsizeMode="clip">
-              {label(job)}
+            <Text style={[styles.chipText, { color: soft ? colors.ink : textOn(color) }]} numberOfLines={1} ellipsizeMode="tail">
+              {job.done ? "✓ " : ""}{label(job)}
             </Text>
           </View>
         );
@@ -312,7 +323,7 @@ const styles = StyleSheet.create({
   weekday: { flex: 1, textAlign: "center", fontSize: 12, fontWeight: "700", color: colors.faint },
   gridRow: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: colors.line },
   cell: { flex: 1, minHeight: 84, paddingHorizontal: 2, paddingTop: 4, paddingBottom: 4, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colors.line, gap: 2 },
-  cellOut: { backgroundColor: colors.tealFaint, opacity: 0.75 },
+  cellOut: { backgroundColor: colors.tealFaint },
   dayNum: { alignSelf: "center", width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 2 },
   dayNumToday: { backgroundColor: colors.teal },
   dayNumText: { fontSize: 12.5, fontWeight: "700", color: colors.ink },
@@ -320,7 +331,6 @@ const styles = StyleSheet.create({
   dayNumTodayText: { color: colors.white },
   chip: { borderRadius: 4, paddingHorizontal: 3, paddingVertical: 2 },
   chipSameDay: { borderLeftWidth: 3, borderLeftColor: colors.gold },
-  chipDone: { opacity: 0.5 },
   chipText: { fontSize: 10, fontWeight: "700", color: colors.white },
   more: { fontSize: 10, fontWeight: "700", color: colors.muted, textAlign: "center" },
   legend: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 12, paddingHorizontal: 2 },

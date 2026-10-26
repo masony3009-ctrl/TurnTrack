@@ -1,9 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Notifications from "expo-notifications";
-import { router, Stack } from "expo-router";
+import { type ErrorBoundaryProps, router, Stack } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import * as Updates from "expo-updates";
 import { useEffect, useRef } from "react";
-import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, AppState, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { ProfileGate } from "../components/ProfileGate";
 import { ProfileProvider, useProfile } from "../components/ProfileProvider";
 import { jobIdFromResponse } from "../notifications";
@@ -87,33 +88,57 @@ function GatedApp() {
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="job" />
-        <Stack.Screen name="scan-calendar" />
-        <Stack.Screen name="gmail" />
-        <Stack.Screen name="scan" />
       </Stack>
       <ViewingAsBanner />
     </View>
   );
 }
 
+// A crash anywhere below shows this instead of a dead white screen, with a way
+// back in. One bad record must not take the app down for the whole crew.
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  return (
+    <View style={styles.splash}>
+      <Text style={type.wordmark}>TurnTrack</Text>
+      <Text style={styles.splashMessage}>Something on this screen broke. Your saved work is safe on the server.</Text>
+      <Text style={styles.errorDetail} numberOfLines={3}>{error.message}</Text>
+      <TouchableOpacity style={styles.retryBtn} onPress={retry} accessibilityRole="button">
+        <Text style={styles.retryText}>Try again</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 export default function Layout() {
+  // Download updates quietly and apply one when the app next comes back to
+  // the front, not seconds after opening it, mid-tap or mid-save.
   useEffect(() => {
-    async function checkForUpdates() {
+    let ready = false;
+    let wentAway = false;
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "background") wentAway = true;
+      if (next === "active" && wentAway && ready) {
+        Updates.reloadAsync().catch((e) => console.log("Applying update failed:", e));
+      }
+    });
+    (async () => {
       try {
         const update = await Updates.checkForUpdateAsync();
         if (update.isAvailable) {
           await Updates.fetchUpdateAsync();
-          await Updates.reloadAsync();
+          ready = true;
         }
       } catch (e) {
         console.log("Update check failed:", e);
       }
-    }
-    checkForUpdates();
+    })();
+    return () => sub.remove();
   }, []);
 
   return (
     <ProfileProvider>
+      {/* The app is light-only, so status bar text stays dark even in dark mode. */}
+      <StatusBar style="dark" />
       <GatedApp />
     </ProfileProvider>
   );
@@ -122,6 +147,9 @@ export default function Layout() {
 const styles = StyleSheet.create({
   splash: { flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center", paddingHorizontal: 40 },
   splashMessage: { fontSize: 14.5, color: colors.muted, textAlign: "center", lineHeight: 21, marginTop: 14 },
+  errorDetail: { fontSize: 12, color: colors.faint, textAlign: "center", marginTop: 8 },
+  retryBtn: { marginTop: 18, minHeight: 44, paddingHorizontal: 22, borderRadius: radius.pill, backgroundColor: colors.teal, justifyContent: "center" },
+  retryText: { color: colors.white, fontSize: 15, fontWeight: "700" },
   banner: {
     position: "absolute", left: 16, right: 16, bottom: 96,
     flexDirection: "row", alignItems: "center", gap: 8,

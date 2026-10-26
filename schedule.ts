@@ -140,20 +140,20 @@ export function weekSummary(count: WeekCount | undefined, status: WeekStatus): s
   return total ? `${done} of ${total} done` : "None this week";
 }
 
-// The month's cleanings split into already happened (before today) and still
-// to come (today on).
-export function monthTotals(jobs: ScheduleJob[], m: Month, today: string): { had: number; ahead: number } {
+// The month's cleanings split into finished and still to do. Done-ness, not
+// the date: a cleaning finished this morning is done, and one nobody finished
+// last week is still to do.
+export function monthTotals(jobs: ScheduleJob[], m: Month): { done: number; left: number } {
   const prefix = monthKey(m);
-  let had = 0;
-  let ahead = 0;
+  let done = 0;
+  let left = 0;
   for (const job of jobs) {
     if (!countsAsCleaning(job)) continue;
-    const key = jobDateKey(job) as string;
-    if (!key.startsWith(prefix)) continue;
-    if (key < today) had += 1;
-    else ahead += 1;
+    if (!(jobDateKey(job) as string).startsWith(prefix)) continue;
+    if (job.done) done += 1;
+    else left += 1;
   }
-  return { had, ahead };
+  return { done, left };
 }
 
 // The months worth offering: from the first cleaning on record to the last

@@ -54,3 +54,15 @@ test("same-day jobs sort by time, untimed ones last", async () => {
   ];
   assert.deepEqual(sortByDate(jobs).map((j) => j.address), ["Z", "A", "B", "C"]);
 });
+
+test("the day-of reminder rings at 8, or an hour before an earlier start", async () => {
+  const { reminderAt } = await import("../jobTime.ts");
+  const day = new Date(2026, 9, 29);
+  const hm = (d) => `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+  assert.equal(hm(reminderAt(day, null)), "8:00");
+  assert.equal(hm(reminderAt(day, "14:00")), "8:00");
+  assert.equal(hm(reminderAt(day, "09:00")), "8:00");
+  assert.equal(hm(reminderAt(day, "08:30")), "7:30");
+  assert.equal(hm(reminderAt(day, "07:00")), "6:00");
+  assert.equal(reminderAt(day, "07:00").getDate(), 29);
+});

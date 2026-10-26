@@ -47,7 +47,7 @@ export const type = {
   wordmark: { fontSize: 11, fontWeight: "700" as const, color: colors.teal, letterSpacing: 2.5, textTransform: "uppercase" as const },
   title: { fontSize: 26, fontWeight: "700" as const, color: colors.ink },
   subtitle: { fontSize: 14, color: colors.muted },
-  section: { fontSize: 11, fontWeight: "700" as const, color: colors.faint, letterSpacing: 1.2, textTransform: "uppercase" as const },
+  section: { fontSize: 11, fontWeight: "700" as const, color: colors.muted, letterSpacing: 1.2, textTransform: "uppercase" as const },
   body: { fontSize: 15, color: colors.ink },
   bodyBold: { fontSize: 15, fontWeight: "600" as const, color: colors.ink },
   caption: { fontSize: 12.5, color: colors.muted },
@@ -98,4 +98,25 @@ export function pickUnusedColor(employees: { color?: string | null }[]): string 
 export function tint(hex: string, alpha = 0.16): string {
   const a = Math.round(alpha * 255).toString(16).padStart(2, "0");
   return `${hex}${a}`;
+}
+
+// Relative luminance of "#RRGGBB" (WCAG).
+function luminance(hex: string): number {
+  const n = parseInt(hex.replace("#", "").slice(0, 6), 16);
+  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(v => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+// White or dark text, whichever reads better on this background. Some
+// cleaner colors are too light for white text.
+export function textOn(background: string): string {
+  return contrast(colors.white, background) >= contrast(colors.ink, background) ? colors.white : colors.ink;
 }

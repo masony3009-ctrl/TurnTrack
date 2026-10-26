@@ -3,6 +3,7 @@ import { collection, deleteDoc, doc, onSnapshot, setDoc } from "firebase/firesto
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { Platform } from "react-native";
 import { db, ensureSignedIn } from "../firebase";
+import { clearScheduledReminders } from "../notifications";
 import { DeviceRecord, Employee } from "../types";
 
 export type ProfileState =
@@ -95,7 +96,8 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     if (!authReady) return;
     const unsub = onSnapshot(collection(db, "employees"), (snap) => {
       const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Employee[];
-      loaded.sort((a, b) => a.name.localeCompare(b.name));
+      // A record missing its name must not crash every phone at launch.
+      loaded.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
       setEmployees(loaded);
     }, (error) => {
       console.warn("employees listener error:", error);
@@ -117,6 +119,11 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     if (!employee || !employee.active) return { status: "unset" };
     return { status: "cleaner", employee, ownerViewing: false };
   }, [loadError, deviceId, deviceRecord, employees, viewingAsId]);
+
+  // Signed out, deactivated or removed: this phone stops announcing cleanings.
+  useEffect(() => {
+    if (state.status === "unset") clearScheduledReminders();
+  }, [state.status]);
 
   const value = useMemo<ProfileContextValue>(() => ({
     state,

@@ -1,25 +1,46 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
-import { addDoc, collection, deleteDoc, doc, onSnapshot, writeBatch } from "firebase/firestore";
-import { useEffect, useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { addDoc, collection, deleteDoc, doc, onSnapshot, updateDoc, writeBatch } from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useProfile } from "../../components/ProfileProvider";
-import { alertSoon, Avatar, BrandButton, Card, EmptyState, ErrorState, FormInput, ScreenHeader, SheetModal } from "../../components/ui";
+import { alertSoon, Avatar, BrandButton, Card, DatePickerField, EmptyState, ErrorState, FormInput, ScreenHeader, SheetModal } from "../../components/ui";
 import { db } from "../../firebase";
 import { computeEarned, formatDuration, formatEntryDate, formatMoney } from "../../payroll";
+import { LONG_SESSION_MINUTES } from "../../session";
 import { cleanerColor, colors, radius, shadow } from "../../theme";
+import { dateFromKey, keyFromDate, todayKey } from "../../turnover";
 import { Employee, TimeEntry } from "../../types";
 
+const HISTORY_LIMIT = 100;
+
+// Noon on the chosen day, so a manual or corrected entry sorts on that date.
+function noonOf(dateKey: string): number {
+  const d = dateFromKey(dateKey) || new Date();
+  d.setHours(12, 0, 0, 0);
+  return d.getTime();
+}
+
+type Payee = { id: string; name: string };
+
 export default function PayrollScreen() {
-  const [entries, setEntries] = useState<TimeEntry[]>([]);
+  // null until loaded, so "Everyone is paid up" never flashes over real debts.
+  const [entries, setEntries] = useState<TimeEntry[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [manualFor, setManualFor] = useState<Employee | null>(null);
   const [manualMinutes, setManualMinutes] = useState("");
   const [manualNote, setManualNote] = useState("");
+  const [manualDateKey, setManualDateKey] = useState<string | null>(todayKey());
+  const [editing, setEditing] = useState<TimeEntry | null>(null);
+  const [editMinutes, setEditMinutes] = useState("");
+  const [editDateKey, setEditDateKey] = useState<string | null>(null);
   const { state, employees } = useProfile();
+  const isOwner = state.status === "owner";
 
+  // Pay is the owner's business: cleaners' phones never download it.
   useEffect(() => {
+    if (!isOwner) return;
     const unsub = onSnapshot(collection(db, "timeEntries"), (snapshot) => {
       const loaded = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as TimeEntry[];
       loaded.sort((a, b) => b.endedAt - a.endedAt);
@@ -30,37 +51,47 @@ export default function PayrollScreen() {
       setLoadError(true);
     });
     return unsub;
-  }, []);
+  }, [isOwner]);
 
-
-  const unpaid = entries.filter(e => !e.paid);
-  const paid = entries.filter(e => e.paid);
-  const orphanedUnpaid = unpaid.filter(e => !employees.some(emp => emp.id === e.employeeId));
+  const all = entries || [];
+  const unpaid = all.filter(e => !e.paid);
+  const paid = all.filter(e => e.paid);
+  const employeeIds = useMemo(() => new Set(employees.map(e => e.id)), [employees]);
+  // Unpaid time from cleaners no longer on the team, one group per person.
+  const orphanGroups = useMemo(() => {
+    const groups = new Map<string, { payee: Payee; entries: TimeEntry[] }>();
+    unpaid.filter(e => !employeeIds.has(e.employeeId)).forEach(e => {
+      const g = groups.get(e.employeeId) || { payee: { id: e.employeeId, name: e.employeeName }, entries: [] };
+      g.entries.push(e);
+      groups.set(e.employeeId, g);
+    });
+    return [...groups.values()];
+  }, [unpaid, employeeIds]);
   const totalOwed = unpaid.reduce((sum, e) => sum + e.earned, 0);
   const totalMinutes = unpaid.reduce((sum, e) => sum + e.minutes, 0);
 
-  const markPaid = (emp: Employee, empEntries: TimeEntry[], total: number) => {
+  // Records how it was paid, asked at the moment of marking: not every payment is Zelle.
+  const markPaid = (payee: Payee, empEntries: TimeEntry[], total: number) => {
+    const settle = async (method: string) => {
+      try {
+        const batch = writeBatch(db);
+        const paidAt = Date.now();
+        empEntries.forEach(e => {
+          batch.update(doc(db, "timeEntries", e.id), { paid: true, paidAt, method });
+        });
+        await batch.commit();
+      } catch (err) {
+        console.warn("mark paid failed:", err);
+        Alert.alert("Couldn't mark paid", "The entries are still marked unpaid. Check your connection and try again.");
+      }
+    };
     Alert.alert(
       "Mark paid",
-      `Mark ${formatMoney(total)} (${empEntries.length} entr${empEntries.length === 1 ? "y" : "ies"}) as paid to ${emp.name} via Zelle?\n\nDo this after you've actually sent the Zelle payment.`,
+      `Mark ${formatMoney(total)} (${empEntries.length} entr${empEntries.length === 1 ? "y" : "ies"}) as paid to ${payee.name}?\n\nDo this after you've actually sent the money.`,
       [
         { text: "Cancel", style: "cancel" },
-        {
-          text: "Mark paid",
-          onPress: async () => {
-            try {
-              const batch = writeBatch(db);
-              const paidAt = Date.now();
-              empEntries.forEach(e => {
-                batch.update(doc(db, "timeEntries", e.id), { paid: true, paidAt, method: "Zelle" });
-              });
-              await batch.commit();
-            } catch (err) {
-              console.warn("mark paid failed:", err);
-              Alert.alert("Couldn't mark paid", "The entries are still marked unpaid. Check your connection and try again.");
-            }
-          },
-        },
+        { text: "Paid in cash", onPress: () => settle("Cash") },
+        { text: "Paid by Zelle", onPress: () => settle("Zelle") },
       ]
     );
   };
@@ -84,7 +115,13 @@ export default function PayrollScreen() {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
-            await deleteDoc(doc(db, "timeEntries", entry.id));
+            try {
+              await deleteDoc(doc(db, "timeEntries", entry.id));
+              setEditing(null);
+            } catch (e) {
+              console.warn("delete entry failed:", e);
+              Alert.alert("Couldn't delete", "The entry is still there. Check your connection and try again.");
+            }
           },
         },
       ]
@@ -95,6 +132,40 @@ export default function PayrollScreen() {
     setManualFor(emp);
     setManualMinutes("");
     setManualNote("");
+    setManualDateKey(todayKey());
+  };
+
+  // Fixing an entry: a timer left on overnight, or the wrong day. Pay is
+  // recomputed at the rate the entry was logged at.
+  const openEdit = (entry: TimeEntry) => {
+    setEditing(entry);
+    setEditMinutes(String(entry.minutes));
+    setEditDateKey(keyFromDate(new Date(entry.endedAt)));
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    const minutes = parseInt(editMinutes, 10);
+    if (isNaN(minutes) || minutes <= 0 || minutes > 24 * 60) {
+      Alert.alert("Invalid minutes", "Enter the number of minutes worked, like 150.");
+      return;
+    }
+    const sameDay = editDateKey === keyFromDate(new Date(editing.endedAt));
+    const endedAt = sameDay || !editDateKey ? editing.endedAt : noonOf(editDateKey);
+    try {
+      await updateDoc(doc(db, "timeEntries", editing.id), {
+        minutes,
+        earned: computeEarned(minutes, editing.hourlyRate),
+        endedAt,
+        startedAt: endedAt - minutes * 60000,
+        ...(sameDay ? {} : { jobDate: formatEntryDate(endedAt) }),
+        editedAt: Date.now(),
+      });
+      setEditing(null);
+    } catch (e) {
+      console.warn("edit entry failed:", e);
+      Alert.alert("Couldn't save", "The entry didn't change. Check your connection and try again.");
+    }
   };
 
   const saveManual = async () => {
@@ -104,16 +175,16 @@ export default function PayrollScreen() {
       Alert.alert("Invalid minutes", "Enter the number of minutes worked, like 90.");
       return;
     }
-    const nowMs = Date.now();
+    const endedAt = manualDateKey && manualDateKey !== todayKey() ? noonOf(manualDateKey) : Date.now();
     try {
       await addDoc(collection(db, "timeEntries"), {
         jobId: null,
         jobAddress: manualNote.trim() || "Manual entry",
-        jobDate: formatEntryDate(nowMs),
+        jobDate: formatEntryDate(endedAt),
         employeeId: manualFor.id,
         employeeName: manualFor.name,
-        startedAt: nowMs,
-        endedAt: nowMs,
+        startedAt: endedAt - minutes * 60000,
+        endedAt,
         minutes,
         hourlyRate: manualFor.hourlyRate,
         earned: computeEarned(minutes, manualFor.hourlyRate),
@@ -134,7 +205,9 @@ export default function PayrollScreen() {
   const manualPreviewMinutes = parseInt(manualMinutes, 10);
   const showManualPreview = manualFor && !isNaN(manualPreviewMinutes) && manualPreviewMinutes > 0;
 
-  if (state.status !== "owner") {
+  const editPreview = parseInt(editMinutes, 10);
+
+  if (!isOwner) {
     return (
       <View style={styles.container}>
         <ScreenHeader title="Payroll" />
@@ -151,7 +224,29 @@ export default function PayrollScreen() {
     <View style={styles.container}>
       <ScreenHeader title="Payroll" subtitle="Hours tracked, pay owed, Zelle-ready" />
 
+      <SheetModal visible={editing !== null} title={`Fix ${editing?.employeeName.split(" ")[0] || ""}'s time`} onClose={() => setEditing(null)}>
+        {editing ? <Text style={styles.editLead}>{editing.jobAddress} · logged at {formatMoney(editing.hourlyRate)}/hr</Text> : null}
+        <DatePickerField label="Day" value={editDateKey} onChange={setEditDateKey} />
+        <FormInput label="Minutes worked" placeholder="e.g. 150" value={editMinutes} onChangeText={setEditMinutes} keyboardType="number-pad" />
+        {editing && !isNaN(editPreview) && editPreview > 0 ? (
+          <View style={styles.previewStrip}>
+            <Ionicons name="calculator-outline" size={15} color={colors.tealDark} />
+            <Text style={styles.previewText}>
+              {formatDuration(editPreview)} × {formatMoney(editing.hourlyRate)}/hr = {formatMoney(computeEarned(editPreview, editing.hourlyRate))}
+            </Text>
+          </View>
+        ) : null}
+        <BrandButton label="Save" icon="checkmark" onPress={saveEdit} />
+        {editing ? (
+          <TouchableOpacity style={styles.deleteLink} onPress={() => deleteEntry(editing)} accessibilityRole="button">
+            <Ionicons name="trash-outline" size={15} color={colors.danger} />
+            <Text style={styles.deleteLinkText}>Delete this entry</Text>
+          </TouchableOpacity>
+        ) : null}
+      </SheetModal>
+
       <SheetModal visible={manualFor !== null} title={`Add time for ${manualFor?.name || ""}`} onClose={() => setManualFor(null)}>
+        <DatePickerField label="Day" value={manualDateKey} onChange={setManualDateKey} />
         <FormInput label="Minutes worked" placeholder="e.g. 90" value={manualMinutes} onChangeText={setManualMinutes} keyboardType="number-pad" />
         <FormInput label="What was it for? (optional)" placeholder="e.g. Deep clean at Desert Oasis" value={manualNote} onChangeText={setManualNote} />
         {showManualPreview && (
@@ -168,12 +263,21 @@ export default function PayrollScreen() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
         <View style={[styles.hero, shadow.card]}>
           <Text style={styles.heroLabel}>TOTAL OWED</Text>
-          <Text style={styles.heroAmount}>{formatMoney(totalOwed)}</Text>
-          <Text style={styles.heroSub}>
-            {totalOwed > 0
-              ? `${formatDuration(totalMinutes)} of unpaid work across ${unpaid.length} entr${unpaid.length === 1 ? "y" : "ies"}`
-              : "Everyone is paid up"}
-          </Text>
+          {entries ? (
+            <>
+              <Text style={styles.heroAmount}>{formatMoney(totalOwed)}</Text>
+              <Text style={styles.heroSub}>
+                {totalOwed > 0
+                  ? `${formatDuration(totalMinutes)} of unpaid work across ${unpaid.length} entr${unpaid.length === 1 ? "y" : "ies"}`
+                  : "Everyone is paid up"}
+              </Text>
+            </>
+          ) : (
+            <View style={styles.heroLoading}>
+              <ActivityIndicator color={colors.white} />
+              <Text style={styles.heroSub}>Loading pay…</Text>
+            </View>
+          )}
         </View>
 
         {loadError && (
@@ -202,26 +306,14 @@ export default function PayrollScreen() {
                   <Text style={styles.empName}>{emp.name}</Text>
                   <Text style={styles.empSub}>
                     {empUnpaid.length === 0
-                      ? "No unpaid time"
-                      : `${formatDuration(empMinutes)} at ${formatMoney(emp.hourlyRate)}/hr`}
+                      ? `No unpaid time · ${formatMoney(emp.hourlyRate)}/hr`
+                      : `${formatDuration(empMinutes)} unpaid, at the rate each was logged`}
                   </Text>
                 </View>
                 <Text style={[styles.empOwed, total === 0 && { color: colors.faint }]}>{formatMoney(total)}</Text>
               </View>
 
-              {empUnpaid.map(entry => (
-                <View key={entry.id} style={styles.entryRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.entryAddress}>{entry.jobAddress}</Text>
-                    <Text style={styles.entryMeta}>
-                      {entry.jobDate} · {formatDuration(entry.minutes)} · {formatMoney(entry.earned)}{entry.manual ? " · manual" : ""}
-                    </Text>
-                  </View>
-                  <TouchableOpacity onPress={() => deleteEntry(entry)} hitSlop={8}>
-                    <Ionicons name="trash-outline" size={16} color={colors.faint} />
-                  </TouchableOpacity>
-                </View>
-              ))}
+              {empUnpaid.map(entry => <EntryRow key={entry.id} entry={entry} onPress={() => openEdit(entry)} />)}
 
               <View style={styles.actionRow}>
                 {empUnpaid.length > 0 && (
@@ -245,25 +337,24 @@ export default function PayrollScreen() {
           );
         })}
 
-        {orphanedUnpaid.length > 0 && (
-          <Card>
-            <Text style={styles.empName}>Deleted cleaners</Text>
-            <Text style={styles.empSub}>Unpaid entries from cleaners no longer on the team</Text>
-            {orphanedUnpaid.map(entry => (
-              <View key={entry.id} style={styles.entryRow}>
+        {orphanGroups.map(({ payee, entries: owed }) => {
+          const total = owed.reduce((sum, e) => sum + e.earned, 0);
+          return (
+            <Card key={payee.id}>
+              <View style={styles.empTop}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.entryAddress}>{entry.employeeName} — {entry.jobAddress}</Text>
-                  <Text style={styles.entryMeta}>
-                    {entry.jobDate} · {formatDuration(entry.minutes)} · {formatMoney(entry.earned)}
-                  </Text>
+                  <Text style={styles.empName}>{payee.name}</Text>
+                  <Text style={styles.empSub}>No longer on the team · unpaid time</Text>
                 </View>
-                <TouchableOpacity onPress={() => deleteEntry(entry)} hitSlop={8}>
-                  <Ionicons name="trash-outline" size={16} color={colors.faint} />
-                </TouchableOpacity>
+                <Text style={styles.empOwed}>{formatMoney(total)}</Text>
               </View>
-            ))}
-          </Card>
-        )}
+              {owed.map(entry => <EntryRow key={entry.id} entry={entry} onPress={() => openEdit(entry)} />)}
+              <View style={styles.actionRow}>
+                <BrandButton label={`Mark ${formatMoney(total)} paid`} icon="checkmark-circle" onPress={() => markPaid(payee, owed, total)} style={styles.actionMain} />
+              </View>
+            </Card>
+          );
+        })}
 
         <TouchableOpacity style={styles.historyToggle} onPress={() => setShowHistory(!showHistory)}>
           <Ionicons name={showHistory ? "chevron-up" : "time-outline"} size={15} color={colors.tealDark} />
@@ -272,7 +363,10 @@ export default function PayrollScreen() {
           </Text>
         </TouchableOpacity>
 
-        {showHistory && paid.slice(0, 100).map(entry => (
+        {showHistory && paid.length > HISTORY_LIMIT ? (
+          <Text style={styles.historyNote}>Showing the latest {HISTORY_LIMIT} of {paid.length} payments.</Text>
+        ) : null}
+        {showHistory && paid.slice(0, HISTORY_LIMIT).map(entry => (
           <View key={entry.id} style={styles.paidRow}>
             <Ionicons name="checkmark-circle" size={17} color={colors.teal} />
             <View style={{ flex: 1 }}>
@@ -285,6 +379,24 @@ export default function PayrollScreen() {
         ))}
       </ScrollView>
     </View>
+  );
+}
+
+// One unpaid entry; tap to fix its time or delete it. Very long ones are
+// flagged, since a timer left running is the usual way pay goes wrong.
+function EntryRow({ entry, onPress }: { entry: TimeEntry; onPress: () => void }) {
+  const long = entry.minutes > LONG_SESSION_MINUTES;
+  return (
+    <TouchableOpacity style={styles.entryRow} onPress={onPress} accessibilityRole="button" accessibilityHint="Opens the entry to fix or delete it">
+      <View style={{ flex: 1 }}>
+        <Text style={styles.entryAddress}>{entry.jobAddress}</Text>
+        <Text style={styles.entryMeta}>
+          {entry.jobDate} · {formatDuration(entry.minutes)} · {formatMoney(entry.earned)}{entry.manual ? " · manual" : ""}
+        </Text>
+        {long ? <Text style={styles.entryWarn}>Over {LONG_SESSION_MINUTES / 60} hours: was the timer left on? Tap to fix.</Text> : null}
+      </View>
+      <Ionicons name="create-outline" size={17} color={colors.tealDark} />
+    </TouchableOpacity>
   );
 }
 
@@ -301,11 +413,17 @@ const styles = StyleSheet.create({
   empSub: { fontSize: 12.5, color: colors.muted, marginTop: 1 },
   empOwed: { fontSize: 18, fontWeight: "700", color: colors.tealDark },
   entryRow: {
-    flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 9,
+    flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 9, minHeight: 48,
     borderTopWidth: 1, borderTopColor: colors.bg, marginTop: 9,
   },
   entryAddress: { fontSize: 13.5, fontWeight: "600", color: colors.ink },
   entryMeta: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  entryWarn: { fontSize: 12, fontWeight: "700", color: colors.goldDark, marginTop: 3 },
+  editLead: { fontSize: 13.5, color: colors.muted, marginBottom: 12 },
+  heroLoading: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8 },
+  historyNote: { fontSize: 12.5, color: colors.muted, textAlign: "center", marginBottom: 8 },
+  deleteLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 6, minHeight: 44 },
+  deleteLinkText: { color: colors.danger, fontSize: 13.5, fontWeight: "600" },
   actionRow: { flexDirection: "row", gap: 8, marginTop: 12, alignItems: "stretch" },
   actionMain: { flex: 1, paddingVertical: 11 },
   smallAction: {

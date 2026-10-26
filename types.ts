@@ -48,6 +48,9 @@ export type Job = {
     earned: number;
   } | null;
   finishNote?: FinishNote | null;
+  // How many steps "check all" ticked in one tap at the finish, so the owner can
+  // tell a list worked through from one ticked off at the end.
+  checkedAtFinish?: number | null;
   // Website requests arrive as pending: the owner confirms them into real
   // jobs. Cleaners never see a pending job.
   pending?: boolean;

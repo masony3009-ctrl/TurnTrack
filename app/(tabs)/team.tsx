@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { addDoc, collection, deleteDoc, doc, getDocs, query, updateDoc, where, writeBatch } from "firebase/firestore";
 import { useMemo, useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { pickProfilePhoto } from "../../components/photo";
 import { useProfile } from "../../components/ProfileProvider";
 import { alertSoon, Avatar, BrandButton, Card, ColorPicker, EmptyState, Fab, FormInput, Pill, ScreenHeader, SheetModal } from "../../components/ui";
@@ -9,21 +9,37 @@ import { tapSuccess } from "../../components/haptics";
 import { db } from "../../firebase";
 import { formatMoney, parseRate } from "../../payroll";
 import { cleanerColor, colors, pickUnusedColor, radius } from "../../theme";
-import { Employee } from "../../types";
+import { Employee, Job } from "../../types";
 
 // A cleaner who is deactivated or deleted should stop receiving pushes and
 // lose their signed-in phones, so their device records go too.
 async function removeDevicesFor(employeeId: string) {
-  try {
-    const snap = await getDocs(query(collection(db, "devices"), where("employeeId", "==", employeeId)));
-    if (snap.empty) return;
+  const snap = await getDocs(query(collection(db, "devices"), where("employeeId", "==", employeeId)));
+  if (snap.empty) return;
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+// A cleaner's unfinished jobs. Ones with a timer running can't just be handed
+// back: somebody has to finish or discard that time first.
+async function openJobsOf(employeeId: string): Promise<{ waiting: Job[]; running: Job[] }> {
+  const snap = await getDocs(query(collection(db, "jobs"), where("assignedTo", "==", employeeId)));
+  const open = snap.docs.map(d => ({ id: d.id, ...d.data() }) as Job).filter(j => !j.done && !j.cancelled);
+  return { waiting: open.filter(j => !j.startedAt), running: open.filter(j => !!j.startedAt) };
+}
+
+// Puts a leaving cleaner's jobs back in the unassigned pool, so they show as
+// needing someone and another cleaner can take them.
+async function releaseJobs(jobs: Job[]) {
+  for (let i = 0; i < jobs.length; i += 400) {
     const batch = writeBatch(db);
-    snap.docs.forEach(d => batch.delete(d.ref));
+    jobs.slice(i, i + 400).forEach(j => batch.update(doc(db, "jobs", j.id), { assignedTo: null, assignedToName: null }));
     await batch.commit();
-  } catch (e) {
-    console.warn("remove devices failed:", e);
   }
 }
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 export default function TeamScreen() {
   const [showForm, setShowForm] = useState(false);
@@ -41,7 +57,7 @@ export default function TeamScreen() {
   // Active cleaners first, then by name (the provider sorts by name only).
   const employees = useMemo(() => [...allEmployees].sort((a, b) => {
     if (a.active !== b.active) return a.active ? -1 : 1;
-    return a.name.localeCompare(b.name);
+    return String(a.name || "").localeCompare(String(b.name || ""));
   }), [allEmployees]);
 
   const visibleEmployees = isOwner ? employees : employees.filter(e => e.active);
@@ -125,39 +141,74 @@ export default function TeamScreen() {
     }
   };
 
-  const toggleActive = async (emp: Employee) => {
+  // Taking someone off the team: their phones are signed out and their
+  // unfinished jobs go back to unassigned. Asks first, with the numbers.
+  const takeOff = async (emp: Employee, mode: "deactivate" | "delete") => {
+    let open: { waiting: Job[]; running: Job[] };
     try {
-      await updateDoc(doc(db, "employees", emp.id), { active: !emp.active });
-      if (emp.active) await removeDevicesFor(emp.id);
+      open = await openJobsOf(emp.id);
     } catch (e) {
-      console.warn("toggle active failed:", e);
+      console.warn("loading cleaner's jobs failed:", e);
+      Alert.alert("Couldn't check their jobs", "Check your connection and try again.");
+      return;
+    }
+    const first = emp.name.split(" ")[0];
+    if (open.running.length) {
+      Alert.alert(
+        "Timer still running",
+        `${first} is on the clock at ${open.running.map(j => j.property || j.address).join(", ")}. Finish or discard that timer from the job first, so their time is settled.`
+      );
+      return;
+    }
+    const jobsLine = open.waiting.length
+      ? ` Their ${plural(open.waiting.length, "unfinished job")} go back to unassigned.`
+      : "";
+    const body = mode === "delete"
+      ? `Delete ${emp.name}? Their phone is signed out and their past time entries stay in payroll history.${jobsLine} If they might come back, deactivate instead.`
+      : `Deactivate ${emp.name}? Their phone is signed out until you reactivate them.${jobsLine}`;
+    Alert.alert(mode === "delete" ? "Delete cleaner" : "Deactivate cleaner", body, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: mode === "delete" ? "Delete" : "Deactivate",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await releaseJobs(open.waiting);
+            if (mode === "delete") await deleteDoc(doc(db, "employees", emp.id));
+            else await updateDoc(doc(db, "employees", emp.id), { active: false });
+            setShowForm(false);
+            tapSuccess();
+          } catch (e) {
+            console.warn(`${mode} cleaner failed:`, e);
+            Alert.alert("Couldn't finish that", "Check your connection and try again. Any jobs already handed back stay unassigned.");
+            return;
+          }
+          try {
+            await removeDevicesFor(emp.id);
+          } catch (e) {
+            console.warn("remove devices failed:", e);
+            alertSoon("Their phone may still be signed in", `${first} is off the team, but signing their phone out didn't go through. Their phone signs itself out the next time it opens TurnTrack.`);
+          }
+        },
+      },
+    ]);
+  };
+
+  const toggleActive = async (emp: Employee) => {
+    if (emp.active) {
+      takeOff(emp, "deactivate");
+      return;
+    }
+    try {
+      await updateDoc(doc(db, "employees", emp.id), { active: true });
+      tapSuccess();
+    } catch (e) {
+      console.warn("reactivate failed:", e);
       Alert.alert("Couldn't update", "Check your connection and try again.");
     }
   };
 
-  const remove = (emp: Employee) => {
-    Alert.alert(
-      "Delete cleaner",
-      `Delete ${emp.name}? Their past time entries stay in payroll history. If they might come back, deactivate instead.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await deleteDoc(doc(db, "employees", emp.id));
-              await removeDevicesFor(emp.id);
-              setShowForm(false);
-            } catch (e) {
-              console.warn("delete cleaner failed:", e);
-              Alert.alert("Couldn't delete", "Check your connection and try again.");
-            }
-          },
-        },
-      ]
-    );
-  };
+  const remove = (emp: Employee) => takeOff(emp, "delete");
 
   const activeCount = employees.filter(e => e.active).length;
   const canSeePay = (emp: Employee) => isOwner || self?.id === emp.id;
@@ -277,8 +328,24 @@ export default function TeamScreen() {
                   <View style={styles.contactBlock}>
                     {emp.phone ? (
                       <View style={styles.contactRow}>
-                        <Ionicons name="call-outline" size={14} color={colors.faint} />
-                        <Text style={styles.contactText}>{emp.phone}</Text>
+                        <TouchableOpacity
+                          style={styles.contactLink}
+                          onPress={() => Linking.openURL(`tel:${emp.phone}`)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Call ${emp.name}`}
+                        >
+                          <Ionicons name="call-outline" size={15} color={colors.tealDark} />
+                          <Text style={styles.contactLinkText}>{emp.phone}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.contactLink}
+                          onPress={() => Linking.openURL(`sms:${emp.phone}`)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Text ${emp.name}`}
+                        >
+                          <Ionicons name="chatbubble-outline" size={15} color={colors.tealDark} />
+                          <Text style={styles.contactLinkText}>Text</Text>
+                        </TouchableOpacity>
                       </View>
                     ) : null}
                     {canSeePay(emp) && emp.zelle ? (
@@ -330,13 +397,15 @@ const styles = StyleSheet.create({
   rate: { fontSize: 13.5, fontWeight: "600", color: colors.tealDark, marginTop: 1 },
   contactBlock: { marginTop: 12, gap: 5 },
   contactRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  contactLink: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 40, paddingRight: 10 },
+  contactLinkText: { fontSize: 14, fontWeight: "600", color: colors.tealDark },
   contactText: { fontSize: 13, color: colors.muted },
   editHintRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 10 },
   editHintText: { fontSize: 12.5, fontWeight: "600", color: colors.tealDark },
   toggleBtn: {
     flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start", marginTop: 12,
     borderWidth: 1, borderColor: colors.line, borderRadius: radius.sm,
-    paddingHorizontal: 11, paddingVertical: 6, backgroundColor: colors.bg,
+    paddingHorizontal: 12, minHeight: 44, backgroundColor: colors.bg,
   },
   toggleBtnText: { fontSize: 12.5, fontWeight: "600", color: colors.tealDark },
   photoRow: { flexDirection: "row", alignItems: "center", gap: 14, marginBottom: 16 },
@@ -344,8 +413,8 @@ const styles = StyleSheet.create({
   photoBtn: { paddingVertical: 9 },
   removePhoto: { alignSelf: "center", padding: 2 },
   removePhotoText: { fontSize: 12.5, fontWeight: "600", color: colors.danger },
-  resetPinLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 14, padding: 4 },
+  resetPinLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 10, minHeight: 44 },
   resetPinText: { color: colors.tealDark, fontSize: 13.5, fontWeight: "600" },
-  deleteLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 10, padding: 4 },
+  deleteLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 4, minHeight: 44 },
   deleteLinkText: { color: colors.danger, fontSize: 13.5, fontWeight: "600" },
 });

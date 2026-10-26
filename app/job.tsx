@@ -1,9 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { collection, deleteDoc, doc, onSnapshot, updateDoc, writeBatch } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDocs, onSnapshot, query, runTransaction, updateDoc, where, writeBatch } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { OWNER_PHONE, OWNER_PHONE_LABEL } from "../business";
+import { EndTimeSheet } from "../components/EndTimeSheet";
 import { tapImpact, tapSelect, tapSuccess, tapWarning } from "../components/haptics";
 import { openInMaps } from "../components/maps";
 import { useProfile } from "../components/ProfileProvider";
@@ -12,15 +14,26 @@ import { RoomChecklist } from "../components/RoomChecklist";
 import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
 import { addableRooms, addRoom, checkAll, checklistForJob, checklistProgress, ownsList, removeRoom, roomMinutes, templateFromDoc, toggleStep, type ChecklistItem } from "../checklist";
 import { db } from "../firebase";
-import { assignmentMessage, cancellationMessage, givenBackMessage, movedMessage, roomDoneMessage, sendPushToEmployee, sendPushToOwners, unassignedMessage } from "../notifications";
+import {
+  assignmentMessage, cancellationMessage, discardedMessage, finishNoteMessage, givenBackMessage, movedMessage, roomDoneMessage,
+  sendPushToEmployee, sendPushToOwners, unassignedMessage,
+} from "../notifications";
 import { WhenSheet } from "../components/WhenSheet";
 import { canEditDate, formatTime, withTime } from "../jobTime";
 import { computeEarned, formatClockTime, formatDuration, formatMoney, minutesBetween } from "../payroll";
 import { useProperties } from "../components/useProperties";
 import { accessCodes, findProperty, type AccessCode } from "../properties";
+import { isLongSession, mergeSummary, otherRunningJob, sessionEntryId, startCheck, waitBriefly } from "../session";
 import { cleanerColor, colors, radius, type, unassignedColor } from "../theme";
 import { daysFromToday, formatDateLabel, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
 import { Employee, FinishNote, Job } from "../types";
+
+// How long a save may take before the screen stops waiting on it. With no
+// signal Firestore keeps the change on this phone and uploads it later.
+const SAVE_WAIT_MS = 2500;
+
+// Thrown inside a claim transaction when someone else got the job first.
+class AlreadyTaken extends Error {}
 
 export default function JobDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -32,6 +45,12 @@ export default function JobDetail() {
   const [showFinish, setShowFinish] = useState(false);
   const [showGiveBack, setShowGiveBack] = useState(false);
   const [showWhen, setShowWhen] = useState(false);
+  // A long session waiting on "when did you finish?", with what Finish chose.
+  const [endTimeFor, setEndTimeFor] = useState<{ note: string | null; allChecked: boolean } | null>(null);
+  // True while a change made on this phone hasn't reached the server.
+  const [pendingWrites, setPendingWrites] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   // null until settings/checklist has loaded, so a job's stored list isn't
   // swapped for the fallback template in the meantime.
   const [template, setTemplate] = useState<string[] | null>(null);
@@ -46,11 +65,14 @@ export default function JobDetail() {
   const properties = useProperties();
   const { state, employees } = useProfile();
   const isOwner = state.status === "owner";
-  const selfId = state.status === "cleaner" ? state.employee.id : null;
-  const selfName = state.status === "cleaner" ? state.employee.name : null;
+  // The owner previewing as a cleaner looks but doesn't touch: anything done
+  // here would be credited to the cleaner.
+  const viewingAs = state.status === "cleaner" && state.ownerViewing;
+  const selfId = state.status === "cleaner" && !viewingAs ? state.employee.id : null;
+  const selfName = state.status === "cleaner" && !viewingAs ? state.employee.name : null;
   // The owner is behind this phone, either signed in as owner or viewing as
   // a cleaner. They don't need a push about their own ticks.
-  const ownerAtPhone = isOwner || (state.status === "cleaner" && state.ownerViewing);
+  const ownerAtPhone = isOwner || viewingAs;
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "settings", "checklist"), (snapshot) => {
@@ -63,19 +85,22 @@ export default function JobDetail() {
 
   useEffect(() => {
     if (!id) return;
-    const unsub = onSnapshot(doc(db, "jobs", id), (snapshot) => {
+    setLoadError(false);
+    const unsub = onSnapshot(doc(db, "jobs", id), { includeMetadataChanges: true }, (snapshot) => {
+      setPendingWrites(snapshot.metadata.hasPendingWrites);
       if (!snapshot.exists()) {
         setMissing(true);
         setJob(null);
         return;
       }
+      setMissing(false);
       setJob({ id: snapshot.id, ...snapshot.data() } as Job);
     }, (error) => {
       console.warn("job listener error:", error);
-      setMissing(true);
+      setLoadError(true);
     });
     return unsub;
-  }, [id]);
+  }, [id, reloadKey]);
 
   const goBack = () => {
     if (router.canGoBack()) router.back();
@@ -86,7 +111,7 @@ export default function JobDetail() {
   // do anything; a cleaner can work only the job assigned to them, and can
   // take an unassigned one.
   const isMine = !!selfId && job?.assignedTo === selfId;
-  const canWork = isOwner || isMine;
+  const canWork = (isOwner || isMine) && !job?.cancelled;
   const canTake = !isOwner && !!selfId && !!job && !job.assignedTo && !job.cancelled && !job.pending;
   // A cleaner can hand back their own job until they've started or finished it.
   const canGiveBack = isMine && !!job && !job.startedAt && !job.done && !job.cancelled;
@@ -96,6 +121,7 @@ export default function JobDetail() {
   // future, without rewriting a single job.
   const property = findProperty(properties, job);
   const codes = accessCodes(property);
+  const house = property?.short || job?.property || job?.address || "the house";
 
   // Until someone ticks something, a job shows the current template for its
   // house (one room per bathroom); the list is written to the job when
@@ -143,6 +169,15 @@ export default function JobDetail() {
       setShowAssign(false);
       return;
     }
+    // The running session belongs to whoever started it; moving the job now
+    // would pay all of it to the next person.
+    if (job.startedAt) {
+      Alert.alert(
+        "Timer is running",
+        `${job.assignedToName || "The cleaner"} is on the clock. Finish or discard that timer before changing who has this cleaning.`
+      );
+      return;
+    }
     try {
       await updateDoc(doc(db, "jobs", job.id), {
         assignedTo: emp ? emp.id : null,
@@ -181,15 +216,39 @@ export default function JobDetail() {
     setBusy(false);
   };
 
+  // Claims an unassigned job, failing if another cleaner got there first (their
+  // phone may have shown it as free a moment ago, same as this one did).
+  const claim = (extra: Record<string, unknown>) => {
+    if (!job || !selfId || !selfName) return Promise.reject(new Error("not signed in as a cleaner"));
+    const ref = doc(db, "jobs", job.id);
+    return runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      const current = snap.data();
+      if (!snap.exists() || current?.cancelled) throw new AlreadyTaken("gone");
+      if (current?.assignedTo && current.assignedTo !== selfId) throw new AlreadyTaken(String(current.assignedToName || "another cleaner"));
+      tx.update(ref, { assignedTo: selfId, assignedToName: selfName, ...extra });
+    });
+  };
+
+  const claimFailed = (e: unknown, title: string) => {
+    if (e instanceof AlreadyTaken) {
+      Alert.alert("Already taken", e.message === "gone" ? "This cleaning was cancelled or removed." : `${e.message} took this cleaning first.`);
+      return;
+    }
+    console.warn(`${title}:`, e);
+    Alert.alert(title, "Taking a job needs a connection. Check your signal and try again.");
+  };
+
   const takeJob = async () => {
-    if (!job || !selfId || !selfName) return;
+    if (!job || !selfId || !selfName || busy) return;
+    setBusy(true);
     try {
-      await updateDoc(doc(db, "jobs", job.id), { assignedTo: selfId, assignedToName: selfName });
+      await claim({});
       tapSuccess();
     } catch (e) {
-      console.warn("take job failed:", e);
-      Alert.alert("Couldn't take the job", "Check your connection and try again.");
+      claimFailed(e, "Couldn't take the job");
     }
+    setBusy(false);
   };
 
   // A cleaner hands their own job back to the unassigned pool. The owner is
@@ -202,7 +261,15 @@ export default function JobDetail() {
       setShowGiveBack(false);
       tapWarning();
       if (!ownerAtPhone) {
-        sendPushToOwners(givenBackMessage(job, selfName, property?.short || job.property || job.address));
+        const reached = await sendPushToOwners(givenBackMessage(job, selfName, property?.short || job.property || job.address));
+        // The sheet promised the owner would hear about it; if no phone took the
+        // notification, the cleaner has to call instead.
+        if (reached === 0) {
+          alertSoon("The owner wasn't notified", `The job is back in the pool, but the notification didn't go through. Call ${OWNER_PHONE_LABEL} so it gets covered.`, [
+            { text: "Not now", style: "cancel" },
+            { text: "Call", onPress: () => Linking.openURL(`tel:${OWNER_PHONE}`) },
+          ]);
+        }
       }
     } catch (e) {
       console.warn("give back failed:", e);
@@ -211,87 +278,135 @@ export default function JobDetail() {
     setBusy(false);
   };
 
+  // A save the server rejected after the screen had already moved on.
+  const lateSaveFailed = (what: string) => (e: unknown) => {
+    console.warn(`${what} failed later:`, e);
+    Alert.alert(`${what} didn't save`, "The server turned it down once the signal came back. Check the job and try again.");
+  };
+
+  // Asks first when a start needs a second look (another timer still running,
+  // a future date, an already finished cleaning), then starts.
   const startCleaning = async () => {
     if (!job || busy) return;
-    if (!job.assignedTo) {
-      if (canTake) {
-        // Cleaner takes an unassigned job and starts in one step.
-        setBusy(true);
-        try {
-          await updateDoc(doc(db, "jobs", job.id), {
-            assignedTo: selfId,
-            assignedToName: selfName,
-            startedAt: Date.now(),
-            ...(freshChecklist ? { checklist } : {}),
-          });
-          tapImpact();
-          setShowChecklist(true);
-        } catch (e) {
-          console.warn("start cleaning failed:", e);
-          Alert.alert("Couldn't start the timer", "Check your connection and try again.");
-        }
-        setBusy(false);
-        return;
-      }
+    const taking = !job.assignedTo;
+    if (taking && !canTake) {
       Alert.alert("No cleaner assigned", "Assign this job to a cleaner first so the time gets tracked to them.");
       return;
     }
-    if (!canWork) {
+    if (!taking && !canWork) {
       Alert.alert("Not your job", `This cleaning is assigned to ${job.assignedToName}. Ask the owner to reassign it if that's wrong.`);
       return;
     }
+    const who = taking ? selfId : job.assignedTo;
+    if (who) {
+      try {
+        const snap = await getDocs(query(collection(db, "jobs"), where("assignedTo", "==", who)));
+        const other = otherRunningJob(snap.docs.map(d => ({ id: d.id, ...d.data() }) as Job), who, job.id);
+        if (other) {
+          const name = (taking ? selfName : job.assignedToName)?.split(" ")[0] || "This cleaner";
+          Alert.alert(
+            "Another timer is running",
+            `${name} is still on the clock at ${other.property || other.address} (${other.date}). Finish or discard that one first, or the overlap gets paid twice.`,
+            [
+              { text: "Cancel", style: "cancel" },
+              { text: "Open it", onPress: () => router.push({ pathname: "/job", params: { id: other.id } }) },
+            ]
+          );
+          return;
+        }
+      } catch (e) {
+        // No signal: don't block the start on a check that can't run.
+        console.warn("running-timer check failed:", e);
+      }
+    }
+    const check = startCheck(job, daysFromToday(job));
+    if (check) {
+      Alert.alert(
+        check === "finished" ? "Start another session?" : "This cleaning isn't today",
+        check === "finished"
+          ? "This cleaning is already finished. Start another session? Its time adds to what's already logged."
+          : `This cleaning is on ${job.date}. Start the timer now anyway?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Start timer", onPress: () => beginTimer(taking) },
+        ]
+      );
+      return;
+    }
+    beginTimer(taking);
+  };
+
+  const beginTimer = async (taking: boolean) => {
+    if (!job) return;
     setBusy(true);
+    const changes = {
+      startedAt: Date.now(),
+      // Another session on a finished job reopens it until it's finished again.
+      ...(job.done ? { done: false, completedAt: null } : {}),
+      ...(freshChecklist ? { checklist } : {}),
+    };
     try {
-      await updateDoc(doc(db, "jobs", job.id), {
-        startedAt: Date.now(),
-        ...(freshChecklist ? { checklist } : {}),
-      });
+      if (taking) await claim(changes);
+      else await waitBriefly(updateDoc(doc(db, "jobs", job.id), changes), SAVE_WAIT_MS, lateSaveFailed("Starting the timer"));
       tapImpact();
       setShowChecklist(true);
     } catch (e) {
-      console.warn("start cleaning failed:", e);
-      Alert.alert("Couldn't start the timer", "Check your connection and try again.");
+      if (taking) claimFailed(e, "Couldn't start the timer");
+      else {
+        console.warn("start cleaning failed:", e);
+        Alert.alert("Couldn't start the timer", "Check your connection and try again.");
+      }
     }
     setBusy(false);
   };
 
   const cancelTimer = () => {
-    if (!job || !canWork) return;
-    Alert.alert("Discard timer", "Throw away this timer without logging any time?", [
+    if (!job || !canWork || !job.startedAt) return;
+    const minutes = minutesBetween(job.startedAt, Date.now());
+    Alert.alert("Discard timer", `Throw away ${formatDuration(minutes)} without logging any time?`, [
       { text: "Keep timing", style: "cancel" },
       {
         text: "Discard",
         style: "destructive",
         onPress: async () => {
           try {
-            await updateDoc(doc(db, "jobs", job.id), { startedAt: null });
+            await waitBriefly(updateDoc(doc(db, "jobs", job.id), { startedAt: null }), SAVE_WAIT_MS, lateSaveFailed("Discarding the timer"));
             tapWarning();
+            if (!ownerAtPhone) sendPushToOwners(discardedMessage(job, selfName, minutes, house));
           } catch (e) {
             console.warn("discard timer failed:", e);
+            Alert.alert("Couldn't discard the timer", "It's still running. Check your connection and try again.");
           }
         },
       },
     ]);
   };
 
-  // Writes the time entry and closes the job in ONE batch so a retry can
-  // never double-log. Returns false if the cleaner record is gone.
-  const logTimeAndClose = async (opts: { cancel?: boolean; finishNote?: FinishNote | null; checklist?: ChecklistItem[] }) => {
+  // Writes the time entry and closes the job in ONE batch. The entry's id comes
+  // from the session, so a second Finish (no signal, or two phones) overwrites
+  // it instead of paying twice. Returns false if the cleaner record is gone.
+  const logTimeAndClose = async (opts: {
+    cancel?: boolean;
+    finishNote?: FinishNote | null;
+    checklist?: ChecklistItem[];
+    endedAt?: number;
+    checkedAtFinish?: number | null;
+  }) => {
     if (!job || !job.startedAt) return false;
     const emp = employees.find(e => e.id === job.assignedTo);
     if (!emp) {
       Alert.alert(
         "Cleaner not found",
-        "The assigned cleaner no longer exists, so no pay can be calculated. Reassign the job and try again, or discard the timer."
+        "The assigned cleaner no longer exists, so no pay can be calculated. Discard the timer, then add the time by hand in Payroll if it's owed."
       );
       return false;
     }
-    const endedAt = Date.now();
+    const endedAt = opts.endedAt ?? Date.now();
     const minutes = minutesBetween(job.startedAt, endedAt);
     const earned = computeEarned(minutes, emp.hourlyRate);
     const employeeName = job.assignedToName || emp.name;
     const batch = writeBatch(db);
-    batch.set(doc(collection(db, "timeEntries")), {
+    batch.set(doc(db, "timeEntries", sessionEntryId(job.id, job.startedAt)), {
       jobId: job.id,
       jobAddress: job.address,
       jobDate: job.date,
@@ -306,43 +421,61 @@ export default function JobDetail() {
       paidAt: null,
       method: null,
     });
+    const session = { employeeName, minutes, earned };
     batch.update(doc(db, "jobs", job.id), {
       startedAt: null,
       done: !opts.cancel,
       completedAt: opts.cancel ? null : endedAt,
-      timeSummary: { employeeName, minutes, earned },
+      // Earlier sessions on this job stay counted; this one adds to them.
+      timeSummary: mergeSummary(job.timeSummary, session),
       ...(opts.cancel
         ? { cancelled: true, cancelledAt: endedAt, cancelReason: "Cancelled by owner" }
-        : { finishNote: opts.finishNote || null }),
+        : { finishNote: opts.finishNote || job.finishNote || null, checkedAtFinish: opts.checkedAtFinish ?? null }),
       // Keep the list the cleaner was shown, so the finished job reads back
       // the same rooms even if nothing was ticked. A "check all" finish
       // writes its fully ticked list in the same batch as the time.
       ...(opts.checklist ? { checklist: opts.checklist } : freshChecklist ? { checklist } : {}),
     });
-    await batch.commit();
-    return { employeeName, minutes, earned };
+    const saved = await waitBriefly(batch.commit(), SAVE_WAIT_MS, lateSaveFailed("Finishing the cleaning"));
+    return { ...session, queued: saved === "queued" };
   };
 
-  // reason is required when steps are unchecked; FinishSheet collects it.
-  // allChecked: the cleaner says everything was done - tick it all and finish.
-  const completeCleaning = async (reason: string | null, allChecked = false) => {
+  // note: required (the reason) when steps are unchecked, optional otherwise;
+  // FinishSheet collects it. allChecked: everything was done - tick it all.
+  // endedAt: when a long session really ended, from EndTimeSheet.
+  const completeCleaning = async (note: string | null, allChecked = false, endedAt?: number) => {
     if (!job || !job.startedAt || busy || !canWork) return;
+    if (endedAt === undefined && isLongSession(job.startedAt, Date.now())) {
+      setShowFinish(false);
+      setTimeout(() => setEndTimeFor({ note, allChecked }), 450);
+      return;
+    }
     const actor = selfName || (isOwner ? "Owner" : null);
     const unchecked = taskCount - checkedCount;
-    const finishNote: FinishNote | null = !allChecked && reason && unchecked > 0
-      ? { text: reason, by: actor, at: Date.now(), skipped: unchecked }
+    const finishNote: FinishNote | null = note
+      ? { text: note, by: actor, at: Date.now(), skipped: allChecked ? 0 : unchecked }
       : null;
     const base = checklistRef.current.length > 0 ? checklistRef.current : checklist;
     setBusy(true);
     try {
-      const result = await logTimeAndClose({ finishNote, checklist: allChecked ? checkAll(base, actor, Date.now()) : undefined });
+      const result = await logTimeAndClose({
+        finishNote,
+        endedAt,
+        checklist: allChecked ? checkAll(base, actor, Date.now()) : undefined,
+        checkedAtFinish: allChecked && unchecked > 0 ? unchecked : null,
+      });
       if (result) {
         tapSuccess();
         setShowChecklist(false);
         setShowFinish(false);
+        setEndTimeFor(null);
+        if (finishNote && !ownerAtPhone) sendPushToOwners(finishNoteMessage(job, finishNote, house));
         alertSoon(
           "Cleaning finished",
-          `${result.employeeName} worked ${formatDuration(result.minutes)} and earned ${formatMoney(result.earned)}. It's been added to payroll.`
+          `${result.employeeName} worked ${formatDuration(result.minutes)} and earned ${formatMoney(result.earned)}. ` +
+            (result.queued
+              ? "It's saved on this phone and goes to payroll when the signal comes back. Keep TurnTrack open until the yellow bar is gone."
+              : "It's been added to payroll.")
         );
       }
     } catch (e) {
@@ -357,11 +490,21 @@ export default function JobDetail() {
 
   const finishCleaning = () => {
     if (!job || !job.startedAt || busy || !canWork) return;
-    if (taskCount - checkedCount > 0) {
-      setShowFinish(true);
+    // The owner's phone shows the same Finish button on a cleaner's live job;
+    // one stray tap would end their timer.
+    if (isOwner && job.assignedTo) {
+      const first = job.assignedToName?.split(" ")[0] || "The cleaner";
+      Alert.alert(
+        `End ${first}'s timer?`,
+        `${first} has ${formatDuration(minutesBetween(job.startedAt, Date.now()))} on the clock. Finish the cleaning for them?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Finish it", onPress: () => setShowFinish(true) },
+        ]
+      );
       return;
     }
-    completeCleaning(null);
+    setShowFinish(true);
   };
 
   const cancelCleaning = () => {
@@ -491,6 +634,15 @@ export default function JobDetail() {
   const toggleChecklistItem = async (index: number) => {
     if (!job || !canWork) return;
     if (checklist[index] && checklist[index].heading) return;
+    // Ticking is part of the cleaning, so the clock should be running; a list
+    // worked with no timer pays one minute at the end.
+    if (!isOwner && !job.startedAt && !job.done) {
+      Alert.alert("Start the timer first?", "The clock should be running while you work through the checklist.", [
+        { text: "Not now", style: "cancel" },
+        { text: "Start timer", onPress: startCleaning },
+      ]);
+      return;
+    }
     // Who ticked it: the signed-in cleaner, or the owner working the job.
     const actor = selfName || (isOwner ? "Owner" : null);
     const base = checklistRef.current.length > 0 ? checklistRef.current : checklist;
@@ -518,10 +670,18 @@ export default function JobDetail() {
     }
   };
 
+  if (loadError && !job) {
+    return (
+      <View style={styles.container}>
+        <ScreenHeader onBack={goBack} title="Couldn't load this job" subtitle="TurnTrack couldn't reach the database. Check your signal, then try again." />
+        <BrandButton label="Try again" icon="refresh" variant="outline" onPress={() => setReloadKey(k => k + 1)} />
+      </View>
+    );
+  }
   if (missing) {
     return (
       <View style={styles.container}>
-        <ScreenHeader onBack={goBack} title="Job not found" subtitle="This job was deleted or couldn't be loaded." />
+        <ScreenHeader onBack={goBack} title="Job not found" subtitle="This job was deleted." />
       </View>
     );
   }
@@ -652,9 +812,14 @@ export default function JobDetail() {
         {days !== null && days >= 0 && days <= 1 ? (
           <View style={styles.giveBackUrgent}>
             <Ionicons name="call-outline" size={16} color={colors.goldDark} />
-            <Text style={styles.giveBackUrgentText}>
-              This cleaning is {days === 0 ? "today" : "tomorrow"}. Call the owner too, so it gets covered in time.
-            </Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.giveBackUrgentText}>
+                This cleaning is {days === 0 ? "today" : "tomorrow"}. Call the owner too, so it gets covered in time.
+              </Text>
+              <TouchableOpacity style={styles.callRow} onPress={() => Linking.openURL(`tel:${OWNER_PHONE}`)} hitSlop={6} accessibilityRole="button">
+                <Text style={styles.callText}>Call {OWNER_PHONE_LABEL}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         ) : null}
         <BrandButton label={busy ? "Giving it back…" : "Give it back"} icon="arrow-undo" variant="outline" onPress={giveBack} disabled={busy} style={{ marginTop: 14 }} />
@@ -667,9 +832,27 @@ export default function JobDetail() {
         busy={busy}
         onClose={() => setShowFinish(false)}
         onReview={() => { setShowFinish(false); setTimeout(() => setShowChecklist(true), 450); }}
-        onFinish={(reason) => completeCleaning(reason)}
-        onCheckAll={() => completeCleaning(null, true)}
+        onFinish={(note) => completeCleaning(note)}
+        onCheckAll={(note) => completeCleaning(note, true)}
       />
+
+      {job.startedAt ? (
+        <EndTimeSheet
+          visible={!!endTimeFor}
+          startedAt={job.startedAt}
+          now={Date.now()}
+          busy={busy}
+          onClose={() => setEndTimeFor(null)}
+          onPick={(endedAt) => endTimeFor && completeCleaning(endTimeFor.note, endTimeFor.allChecked, endedAt)}
+        />
+      ) : null}
+
+      {pendingWrites ? (
+        <View style={styles.pendingBar}>
+          <Ionicons name="cloud-offline-outline" size={16} color={colors.goldDark} />
+          <Text style={styles.pendingBarText}>Saved on this phone, waiting for signal. Keep TurnTrack open until this goes away.</Text>
+        </View>
+      ) : null}
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 150 }}>
         <View style={styles.pillRow}>
@@ -768,7 +951,10 @@ export default function JobDetail() {
           </View>
         </Card>
 
-        {!isPending && codes.length > 0 && (
+        {!isPending && codes.length > 0 && !(isOwner || isMine || viewingAs) && !job.done && (
+          <Text style={styles.codesLocked}>Door codes show here once this cleaning is yours.</Text>
+        )}
+        {!isPending && codes.length > 0 && (isOwner || isMine || viewingAs) && (
           <Card>
             <View style={styles.cardHeaderRow}>
               <Text style={type.section}>Access codes</Text>
@@ -824,7 +1010,7 @@ export default function JobDetail() {
               <View style={styles.timerBlock}>
                 <View style={styles.liveRow}>
                   <View style={styles.liveDot} />
-                  <Text style={styles.liveText}>{job.assignedToName} is cleaning</Text>
+                  <Text style={styles.liveText}>{job.assignedToName ? `${job.assignedToName} is cleaning` : "Timer running"}</Text>
                 </View>
                 <ElapsedTimer startedAt={job.startedAt} />
                 <Text style={styles.startedText}>
@@ -840,12 +1026,16 @@ export default function JobDetail() {
               <View style={styles.summaryStrip}>
                 <Ionicons name="checkmark-circle" size={19} color={colors.teal} />
                 <Text style={styles.summaryText}>
-                  {job.timeSummary.employeeName} · {formatDuration(job.timeSummary.minutes)} · {formatMoney(job.timeSummary.earned)}
+                  {job.timeSummary.employeeName} · {formatDuration(job.timeSummary.minutes)}
+                  {/* Pay is between the owner and the cleaner who did it. */}
+                  {isOwner || isMine || viewingAs ? ` · ${formatMoney(job.timeSummary.earned)}` : ""}
                 </Text>
               </View>
             ) : (
               <Text style={styles.timerHint}>
-                {canWork
+                {viewingAs
+                  ? "You're viewing as a cleaner, so this job is read-only. Switch back to the owner to work it."
+                  : canWork
                   ? "Tap Start cleaning below when you arrive. The checklist pops up and the clock starts."
                   : job.assignedToName
                     ? `Only ${job.assignedToName.split(" ")[0]} or the owner can start this timer.`
@@ -867,12 +1057,19 @@ export default function JobDetail() {
               <Ionicons name="alert-circle" size={17} color={colors.goldDark} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.finishNoteTitle}>
-                  Finished with {finishNote.skipped} step{finishNote.skipped === 1 ? "" : "s"} not done
+                  {finishNote.skipped > 0
+                    ? `Finished with ${finishNote.skipped} step${finishNote.skipped === 1 ? "" : "s"} not done`
+                    : "Note at finish"}
                   {finishNote.by ? ` · ${finishNote.by.split(" ")[0]}` : ""} · {formatClockTime(finishNote.at)}
                 </Text>
                 <Text style={styles.finishNoteText}>&ldquo;{finishNote.text}&rdquo;</Text>
               </View>
             </View>
+          ) : null}
+          {isOwner && job.done && job.checkedAtFinish ? (
+            <Text style={styles.checklistActivity}>
+              {job.checkedAtFinish} step{job.checkedAtFinish === 1 ? " was" : "s were"} checked off in one tap at the finish.
+            </Text>
           ) : null}
           {renderChecklist()}
         </Card>}
@@ -896,10 +1093,14 @@ export default function JobDetail() {
               <BrandButton label="Checklist" icon="list" variant="outline" onPress={() => setShowChecklist(true)} style={{ flex: 1 }} />
               <BrandButton label={busy ? "Saving…" : "Finish cleaning"} icon="checkmark-circle" onPress={finishCleaning} disabled={busy} style={{ flex: 1.4 }} />
             </View>
+          ) : canTake && days !== null && days > 0 ? (
+            // Days ahead, a cleaner is signing up for it, not starting a clock.
+            <BrandButton label={busy ? "Taking…" : "Take this job"} icon="hand-right-outline" onPress={takeJob} disabled={busy} />
           ) : (
             <BrandButton
-              label={busy ? "Starting…" : canWork ? (job.timeSummary ? "Start another session" : "Start cleaning") : "Take this job & start"}
+              label={busy ? "Starting…" : canWork ? (job.done ? "Start another session" : "Start cleaning") : "Take this job & start"}
               icon="play"
+              variant={job.done ? "outline" : "primary"}
               onPress={startCleaning}
               disabled={busy}
             />
@@ -998,5 +1199,13 @@ const styles = StyleSheet.create({
     flexDirection: "row", alignItems: "flex-start", gap: 8, backgroundColor: colors.goldSoft,
     borderRadius: radius.md, padding: 12, marginTop: 12, borderWidth: 1, borderColor: "#F0DDBA",
   },
-  giveBackUrgentText: { flex: 1, fontSize: 13.5, color: colors.goldDark, lineHeight: 19, fontWeight: "600" },
+  giveBackUrgentText: { fontSize: 13.5, color: colors.goldDark, lineHeight: 19, fontWeight: "600" },
+  callRow: { minHeight: 40, justifyContent: "center", alignSelf: "flex-start" },
+  callText: { fontSize: 14.5, fontWeight: "700", color: colors.tealDark },
+  pendingBar: {
+    flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.goldSoft,
+    borderRadius: radius.md, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: "#F0DDBA",
+  },
+  pendingBarText: { flex: 1, fontSize: 13, color: colors.goldDark, lineHeight: 18, fontWeight: "600" },
+  codesLocked: { fontSize: 13, color: colors.muted, marginBottom: 12, marginLeft: 2 },
 });

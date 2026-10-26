@@ -96,9 +96,12 @@ test("week ranges read short, naming the month again only when it changes", () =
   assert.equal(weekRangeLabel("2026-10-04"), "Oct 4 – 10");
 });
 
-test("a month splits into cleanings had and still ahead", () => {
-  const jobs = [job("2026-10-03"), job("2026-10-24"), job("2026-10-25"), job("2026-10-30"), job("2026-11-02"), job("2026-10-26", { cancelled: true })];
-  assert.deepEqual(monthTotals(jobs, { year: 2026, month: 9 }, "2026-10-25"), { had: 2, ahead: 2 });
+test("a month splits into cleanings done and still to do", () => {
+  const jobs = [
+    job("2026-10-03", { done: true }), job("2026-10-24"), job("2026-10-25", { done: true }),
+    job("2026-10-30"), job("2026-11-02", { done: true }), job("2026-10-26", { cancelled: true }),
+  ];
+  assert.deepEqual(monthTotals(jobs, { year: 2026, month: 9 }), { done: 2, left: 2 });
 });
 
 test("the month list spans the first to the last cleaning, always including today", () => {
