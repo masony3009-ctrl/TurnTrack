@@ -292,8 +292,10 @@ function WeekCounts({ weekStarts, counts, maxWeek, today }: {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
-  monthBar: { flexGrow: 0, marginBottom: 12, marginHorizontal: -20 },
-  monthBarContent: { paddingHorizontal: 20, gap: 8, alignItems: "center" },
+  // A ScrollView may shrink by default, and the tall page under this one
+  // squeezed it until the chips were cut off. It keeps its full height.
+  monthBar: { flexGrow: 0, flexShrink: 0, marginBottom: 12, marginHorizontal: -20 },
+  monthBarContent: { paddingHorizontal: 20, paddingVertical: 2, gap: 8, alignItems: "center" },
   monthChipWrap: { flexDirection: "row", alignItems: "center", gap: 8 },
   yearMark: { fontSize: 15, fontWeight: "800", color: colors.ink, marginHorizontal: 4 },
   monthChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
