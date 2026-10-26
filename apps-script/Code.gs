@@ -27,7 +27,8 @@ var MAX_THREADS = 25;
 var TURNO_MAIL = "(from:info@turno.com OR from:donotreply@e.turno.com OR from:e.turno.com) in:anywhere -in:trash";
 
 // "Start time: Sunday, October 25, 2026 11:00 AM" (Turno's casing changed too).
-var START_TIME = /Start Time:\s*([A-Za-z]{3,9},?\s*[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i;
+// Group 1 is the date; group 2 the time, when the email gives one.
+var START_TIME = /Start Time:\s*([A-Za-z]{3,9},?\s*[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})(?:,?\s*(?:at\s+)?(\d{1,2}(?::\d{2})?\s*[ap]\.?\s*m\.?|\d{1,2}:\d{2}))?/i;
 
 // The Firestore rules require request.auth, so every call carries an anonymous
 // ID token. WEB_API_KEY is the same public key the app ships with - not a
@@ -39,6 +40,7 @@ var cachedIdToken = null;
 // ---- entry point ---------------------------------------------------------
 
 function scanAllEmails() {
+  // Throws, ending the run before anything is written, if any read fails.
   var ctx = loadContext();
   // Everything this run adds or cancels, so one notification can list it.
   ctx.changes = { created: [], cancelled: [] };
@@ -59,16 +61,46 @@ function bool(v) { return { booleanValue: !!v }; }
 function int(v) { return { integerValue: String(v) }; }
 function nul() { return { nullValue: null }; }
 
+// 404 means the document isn't there, which some callers expect: null. Any
+// other failure - a 429 rate limit, a 5xx, a refused token - throws. It used to
+// come back as null too, and an empty-looking read made the run create
+// duplicate iCal cleanings and file real Turno emails as offers.
 function fsGet(path) {
   var res = UrlFetchApp.fetch(FS + path, { headers: authHeaders(), muteHttpExceptions: true });
-  if (res.getResponseCode() >= 300) return null;
+  var code = res.getResponseCode();
+  if (code === 404) return null;
+  if (code < 200 || code >= 300) {
+    throw new Error("Firestore read " + path.split("?")[0] + " failed: " + code + " " + String(res.getContentText()).slice(0, 200));
+  }
   return JSON.parse(res.getContentText());
 }
 
-// ---- context: property registry + existing jobs, fetched once per run ----
+// Every document in a collection, across pages. Listing a collection that has
+// no documents answers 200, so a 404 here is a failure like any other.
+function fsList(collection) {
+  var out = [], token = "";
+  do {
+    var doc = fsGet("/" + collection + "?pageSize=300" + (token ? "&pageToken=" + encodeURIComponent(token) : ""));
+    if (!doc) throw new Error("Firestore listing /" + collection + " answered 404");
+    out = out.concat(doc.documents || []);
+    token = doc.nextPageToken || "";
+  } while (token);
+  return out;
+}
+
+function docId(name) { return String(name || "").split("/").pop(); }
+
+// ---- context: registry, existing jobs and push recipients, once per run ---
+//
+// All read before anything is written. A read that fails throws and ends the
+// run here: a job list that only looks empty makes the iCal feeds create every
+// cleaning again, and a registry that only looks empty files real Turno emails
+// as offers and marks them read. The next run, 15 minutes on, tries again.
 
 function loadContext() {
-  return { properties: loadProperties(), jobs: loadJobs() };
+  var ctx = { properties: loadProperties(), jobs: loadJobs() };
+  recipientsCache = loadRecipients();
+  return ctx;
 }
 
 // Counts are stored as whole numbers or decimals (2 vs 2.5); read either.
@@ -80,7 +112,10 @@ function numberField(v) {
 
 function loadProperties() {
   var doc = fsGet("/settings/properties");
-  if (!doc || !doc.fields || !doc.fields.items) return [];
+  // Never deleted on purpose (it holds every house's codes), and running
+  // without it would turn every Turno email into an "unknown house" offer.
+  if (!doc) throw new Error("settings/properties is missing - not running without the house registry");
+  if (!doc.fields || !doc.fields.items) return [];
   return (doc.fields.items.arrayValue.values || []).map(function (v) {
     var f = v.mapValue.fields;
     return {
@@ -97,28 +132,22 @@ function loadProperties() {
 }
 
 function loadJobs() {
-  var out = [], token = "";
-  do {
-    var doc = fsGet("/jobs?pageSize=300" + (token ? "&pageToken=" + token : ""));
-    if (!doc) break;
-    (doc.documents || []).forEach(function (d) {
-      var f = d.fields || {};
-      out.push({
-        name: d.name,
-        dateKey: f.dateKey ? f.dateKey.stringValue : "",
-        date: f.date ? f.date.stringValue : "",
-        address: f.address ? f.address.stringValue : "",
-        property: f.property ? f.property.stringValue : "",
-        turnoProjectId: f.turnoProjectId ? String(f.turnoProjectId.stringValue || f.turnoProjectId.integerValue || "") : "",
-        source: f.source ? f.source.stringValue : "",
-        icalUid: f.icalUid ? f.icalUid.stringValue : "",
-        done: !!(f.done && f.done.booleanValue),
-        cancelled: !!(f.cancelled && f.cancelled.booleanValue)
-      });
-    });
-    token = doc.nextPageToken || "";
-  } while (token);
-  return out;
+  return fsList("jobs").map(function (d) {
+    var f = d.fields || {};
+    return {
+      name: d.name,
+      dateKey: f.dateKey ? f.dateKey.stringValue : "",
+      date: f.date ? f.date.stringValue : "",
+      address: f.address ? f.address.stringValue : "",
+      property: f.property ? f.property.stringValue : "",
+      turnoProjectId: f.turnoProjectId ? String(f.turnoProjectId.stringValue || f.turnoProjectId.integerValue || "") : "",
+      source: f.source ? f.source.stringValue : "",
+      icalUid: f.icalUid ? f.icalUid.stringValue : "",
+      sameDayTurnover: !!(f.sameDayTurnover && f.sameDayTurnover.booleanValue),
+      done: !!(f.done && f.done.booleanValue),
+      cancelled: !!(f.cancelled && f.cancelled.booleanValue)
+    };
+  });
 }
 
 // ---- property matching ---------------------------------------------------
@@ -173,6 +202,24 @@ function inferYear(monthIndex, day) {
   return thisYear < cutoff ? now.getFullYear() + 1 : now.getFullYear();
 }
 
+// "11:00 AM" / "2:30pm" / "9 a.m." / "14:00" -> "HH:MM", 24-hour: the app's
+// job.time (jobTime.ts isTime). Anything else -> "", since no time beats a
+// wrong one.
+function toTime(text) {
+  var m = String(text || "").match(/^\s*(\d{1,2})(?::(\d{2}))?\s*(?:([ap])\.?\s*m\.?)?\s*$/i);
+  if (!m) return "";
+  var h = parseInt(m[1], 10);
+  var min = m[2] ? parseInt(m[2], 10) : 0;
+  if (min > 59) return "";
+  if (m[3]) {
+    if (h < 1 || h > 12) return "";
+    h = (h % 12) + (m[3].toLowerCase() === "p" ? 12 : 0);
+  } else if (!m[2] || h > 23) {
+    return "";
+  }
+  return pad2(h) + ":" + pad2(min);
+}
+
 function labelFromKey(key) {
   var p = String(key).split("-");
   var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
@@ -213,22 +260,26 @@ function scanTurnoEmails(ctx) {
     for (var j = 0; j < msgs.length; j++) {
       var id = msgs[j].getId();
       if (isAlreadyProcessed(id)) continue;
+      // Marked read only once it is dealt with. A failed write throws and
+      // leaves the email for the next run; an offer is marked once the owner
+      // has been told (reportOffers).
       try {
-        handleTurnoMessage(ctx, msgs[j]);
+        if (handleTurnoMessage(ctx, msgs[j])) markAsProcessed(id);
       } catch (e) {
-        Logger.log("turno message failed: " + e);
+        Logger.log("turno message left for the next run: " + e);
       }
-      markAsProcessed(id);
     }
   }
 }
 
+// True when the message is finished with; false while it waits on the offer
+// report. Throws when the cleaning couldn't be saved.
 function handleTurnoMessage(ctx, msg) {
   var subject = msg.getSubject() || "";
   // "Cleaning projects available" (plural) is the marketplace digest - open
   // offers nobody assigned to us. Only "New Cleaning project available at X"
   // is real work.
-  if (subject.indexOf("New Cleaning project") === -1) return;
+  if (subject.indexOf("New Cleaning project") === -1) return true;
 
   var text = cleanBody(msg.getBody());
   var nameMatch = subject.match(/available at\s+(.+?)\s*$/i);
@@ -238,14 +289,15 @@ function handleTurnoMessage(ctx, msg) {
   var startMatch = text.match(START_TIME);
   if (!startMatch) {
     Logger.log("no Start Time found: " + subject);
-    return;
+    return true;
   }
   var dateKey = toDateKey(startMatch[1]);
   if (!dateKey) {
     Logger.log("unreadable Start Time: " + startMatch[1]);
-    return;
+    return true;
   }
-  if (dateKey < todayKey()) return;
+  if (dateKey < todayKey()) return true;
+  var time = toTime(startMatch[2]);
   var idMatch = text.match(/Project\s*#\s*(\d{5,})/i);
   var projectId = idMatch ? idMatch[1] : "";
 
@@ -257,12 +309,16 @@ function handleTurnoMessage(ctx, msg) {
   // the Turno calendar sync adds it once it really is ours.
   if (!property) {
     Logger.log("offer at unknown house, not scheduled: " + propertyName + " " + dateKey);
-    ctx.offers.push({ dateKey: dateKey, place: propertyName || "a new house", projectId: projectId });
-    return;
+    ctx.offers.push({ dateKey: dateKey, place: propertyName || "a new house", projectId: projectId, msgId: msg.getId() });
+    return false;
   }
 
   createJob(ctx, {
     dateKey: dateKey,
+    time: time,
+    // The Turno time this job was given, so the calendar sync can tell a time
+    // Turno changed from one the owner set in the app.
+    turnoTime: time,
     address: property.address,
     property: property.name,
     type: "Turno Cleaning",
@@ -271,6 +327,7 @@ function handleTurnoMessage(ctx, msg) {
     bedrooms: property.bedrooms,
     bathrooms: property.bathrooms
   });
+  return true;
 }
 
 // One message per run listing every offer, owner only.
@@ -280,18 +337,27 @@ function reportOffers(ctx) {
   var places = {};
   ctx.offers.forEach(function (o) { places[o.place] = true; });
   var lines = ctx.offers.map(function (o) { return "- " + labelFromKey(o.dateKey) + " · " + o.place; });
-  alertOwnerTelegram(
+  var told = alertOwnerTelegram(
     "Turno offered " + ctx.offers.length + " project" + (ctx.offers.length === 1 ? "" : "s") + " at a house TurnTrack doesn't know",
     lines.join("\n") + "\n\nNot added to the app: Turno hasn't put them on your calendar. " +
     "If they're yours, accept them in Turno and add the house to the property list (" + Object.keys(places).join(", ") + ")."
   );
+  // The report is the only thing an offer email turns into, so it is marked
+  // read only once the owner has it; otherwise the next run tries again.
+  if (!told) {
+    Logger.log("offer report not delivered; " + ctx.offers.length + " email(s) left for the next run");
+    return;
+  }
+  ctx.offers.forEach(function (o) { markAsProcessed(o.msgId); });
 }
 
 // ---- job creation --------------------------------------------------------
 
 // One cleaning per property per day. Turno re-sends the same notification and
 // the copies can land in different threads, so the guard has to be the job
-// itself, not the message id.
+// itself, not the message id. True when it made one, false for a duplicate;
+// throws when Firestore refuses the write, so nothing reports a cleaning that
+// isn't there.
 function createJob(ctx, opts) {
   var key = dedupeKey(opts.property, opts.address);
   for (var i = 0; i < ctx.jobs.length; i++) {
@@ -307,6 +373,8 @@ function createJob(ctx, opts) {
   var fields = {
     date: str(labelFromKey(opts.dateKey)),
     dateKey: str(opts.dateKey),
+    // "HH:MM", 24-hour, or null for no set time - the same as the app writes.
+    time: opts.time ? str(opts.time) : nul(),
     address: str(opts.address),
     property: str(opts.property || ""),
     type: str(opts.type),
@@ -324,6 +392,7 @@ function createJob(ctx, opts) {
   };
   // Lets the Turno calendar sync track this job when Turno moves or cancels it.
   if (opts.turnoProjectId) fields.turnoProjectId = str(opts.turnoProjectId);
+  if (opts.turnoTime) fields.turnoTime = str(opts.turnoTime);
   // The booking's iCal UID: how a date change or cancellation finds this job.
   if (opts.icalUid) fields.icalUid = str(opts.icalUid);
   if (opts.bedrooms) fields.bedrooms = int(opts.bedrooms);
@@ -336,14 +405,16 @@ function createJob(ctx, opts) {
     payload: JSON.stringify({ fields: fields }),
     muteHttpExceptions: true
   });
-  if (res.getResponseCode() >= 300) {
-    Logger.log("create failed: " + res.getContentText());
-    return false;
+  var code = res.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error("create failed for " + opts.dateKey + " at " + (opts.property || opts.address) + ": " +
+      code + " " + String(res.getContentText()).slice(0, 200));
   }
   var created = JSON.parse(res.getContentText());
   ctx.jobs.push({
     name: created.name, dateKey: opts.dateKey, address: opts.address, property: opts.property || "",
-    turnoProjectId: opts.turnoProjectId || "", source: opts.source, icalUid: opts.icalUid || "", done: false, cancelled: false
+    turnoProjectId: opts.turnoProjectId || "", source: opts.source, icalUid: opts.icalUid || "",
+    sameDayTurnover: !!opts.sameDay, done: false, cancelled: false
   });
   Logger.log("created " + opts.dateKey + " - " + opts.address);
   // Each source reports in its own notification (Turno's, or the iCal one).
@@ -371,12 +442,14 @@ function scanCancellationEmails(ctx) {
     for (var j = 0; j < msgs.length; j++) {
       var id = msgs[j].getId();
       if (isAlreadyProcessed(id)) continue;
+      // A cancellation that couldn't be written, or a notice that didn't reach
+      // the owner, throws and stays unread for the next run.
       try {
         handleCancellation(ctx, msgs[j]);
+        markAsProcessed(id);
       } catch (e) {
-        Logger.log("cancellation failed: " + e);
+        Logger.log("cancellation left for the next run: " + e);
       }
-      markAsProcessed(id);
     }
   }
 }
@@ -391,7 +464,7 @@ function handleCancellation(ctx, msg) {
   var startMatch = text.match(START_TIME);
   var dateKey = toDateKey(startMatch ? startMatch[1] : subject);
   if (!dateKey) {
-    notifyPhones("Cancellation received", "Couldn't read the date from a Turno cancellation - check the app and your inbox.");
+    ownerNotice("Cancellation received", "Couldn't read the date from a Turno cancellation - check the app and your inbox.");
     return;
   }
   if (dateKey < todayKey()) return;
@@ -403,9 +476,15 @@ function handleCancellation(ctx, msg) {
   for (var i = 0; i < ctx.jobs.length; i++) {
     var j = ctx.jobs[i];
     if (!j.name || j.dateKey !== dateKey) continue;
-    // The project number, when both sides have it, settles it outright.
-    var sameProject = projectId && j.turnoProjectId === projectId;
-    if (!sameProject && property && dedupeKey(j.property, j.address) !== dedupeKey(property.name, property.address)) continue;
+    // Project numbers on both sides settle it outright, either way: a
+    // different number is a different project, even at the same house on the
+    // same day. Only when one side has none does the house decide - and a
+    // house this email can't be matched to matches nothing.
+    if (projectId && j.turnoProjectId) {
+      if (j.turnoProjectId !== projectId) continue;
+    } else if (!property || dedupeKey(j.property, j.address) !== dedupeKey(property.name, property.address)) {
+      continue;
+    }
     if (j.cancelled) { alreadyCancelled = true; continue; }
     if (j.done) continue;
     matches.push(j);
@@ -416,7 +495,7 @@ function handleCancellation(ctx, msg) {
   // Only ever act on an unambiguous match: cancelling the wrong cleaning is
   // worse than asking a human to look.
   if (matches.length === 1) {
-    cancelJob(matches[0]);
+    if (!cancelJob(matches[0])) throw new Error("couldn't cancel job " + jobIdOf(matches[0]));
     matches[0].cancelled = true;
     // Reported in the run's single notification alongside any new cleanings.
     if (ctx.changes) {
@@ -428,26 +507,19 @@ function handleCancellation(ctx, msg) {
     }
     return;
   }
-  notifyPhones("Cancellation received",
+  ownerNotice("Cancellation received",
     "A Turno cancellation for " + labelFromKey(dateKey) + " came in but " +
     (matches.length === 0 ? "no matching cleaning was found" : "more than one cleaning matches") +
     " - take it off in the app yourself.");
 }
 
+// True once Firestore has taken it.
 function cancelJob(job) {
-  var mask = "?updateMask.fieldPaths=cancelled&updateMask.fieldPaths=cancelledAt" +
-             "&updateMask.fieldPaths=cancelReason&updateMask.fieldPaths=startedAt";
-  UrlFetchApp.fetch("https://firestore.googleapis.com/v1/" + job.name + mask, {
-    method: "patch",
-    contentType: "application/json",
-    headers: authHeaders(),
-    payload: JSON.stringify({ fields: {
-      cancelled: bool(true),
-      cancelledAt: int(Date.now()),
-      cancelReason: str("Cancelled by host (Turno email)"),
-      startedAt: nul()
-    } }),
-    muteHttpExceptions: true
+  return patchDoc(job.name, {
+    cancelled: bool(true),
+    cancelledAt: int(Date.now()),
+    cancelReason: str("Cancelled by host (Turno email)"),
+    startedAt: nul()
   });
 }
 
@@ -489,7 +561,12 @@ function scanIcalFeeds(ctx) {
       return;
     }
     clearIcalProblem(house);
-    applyIcalPlan(ctx, house, plan, today);
+    try {
+      applyIcalPlan(ctx, house, plan, today);
+    } catch (e) {
+      // Whatever was written before this still goes in the notification.
+      Logger.log("ical changes at " + house.name + " stopped part way: " + e);
+    }
   });
   var d = buildDigest(ctx, "Airbnb", ctx.icalChanges);
   if (d) notifyPhones(d.title, d.body, d.data);
@@ -528,7 +605,7 @@ function parseIcal(text) {
 
 // Works out every change for one house before anything is written.
 function planIcalHouse(stays, jobs, house, today) {
-  var plan = { create: [], move: [], restore: [], cancel: [], badRead: false };
+  var plan = { create: [], move: [], restore: [], cancel: [], flag: [], badRead: false };
   var checkIns = {};
   stays.forEach(function (s) { checkIns[s.checkIn] = true; });
 
@@ -549,6 +626,9 @@ function planIcalHouse(stays, jobs, house, today) {
     if (!mine) { plan.create.push({ stay: s, sameDay: sameDay }); return; }
     if (mine.cancelled) plan.restore.push({ job: mine, stay: s, sameDay: sameDay });
     else if (mine.dateKey !== s.checkOut) plan.move.push({ job: mine, stay: s, sameDay: sameDay, from: mine.dateKey });
+    // Already on the right day, but another stay's check-in can land on or
+    // leave this checkout, which flips the Same-day pill and the reminder.
+    else if (!mine.done && !!mine.sameDayTurnover !== sameDay) plan.flag.push({ job: mine, sameDay: sameDay });
   });
 
   // Never cancel a cleaning dated today or earlier: a booking is never
@@ -564,6 +644,9 @@ function planIcalHouse(stays, jobs, house, today) {
   return plan;
 }
 
+// Every write is checked: a change is reported (and remembered for the rest
+// of the run) only once Firestore has taken it. Anything that failed is simply
+// planned again on the next run.
 function applyIcalPlan(ctx, house, plan, today) {
   var report = ctx.icalChanges;
   plan.create.forEach(function (c) {
@@ -572,34 +655,50 @@ function applyIcalPlan(ctx, house, plan, today) {
     var existing = liveJobAt(ctx, house, c.stay.checkOut);
     if (existing) {
       if (!existing.icalUid && existing.name) {
-        patchJobFields(existing.name, { icalUid: str(c.stay.uid) });
-        existing.icalUid = c.stay.uid;
+        var tag = { icalUid: str(c.stay.uid) };
+        if (!!existing.sameDayTurnover !== c.sameDay) tag.sameDayTurnover = bool(c.sameDay);
+        if (patchDoc(existing.name, tag)) {
+          existing.icalUid = c.stay.uid;
+          existing.sameDayTurnover = c.sameDay;
+        }
       }
       return;
     }
-    createJob(ctx, {
-      dateKey: c.stay.checkOut, address: house.address, property: house.name, type: ICAL_JOB_TYPE,
-      source: ICAL_SOURCE, icalUid: c.stay.uid, sameDay: c.sameDay,
-      bedrooms: house.bedrooms, bathrooms: house.bathrooms, changes: report
-    });
+    try {
+      createJob(ctx, {
+        dateKey: c.stay.checkOut, address: house.address, property: house.name, type: ICAL_JOB_TYPE,
+        source: ICAL_SOURCE, icalUid: c.stay.uid, sameDay: c.sameDay,
+        bedrooms: house.bedrooms, bathrooms: house.bathrooms, changes: report
+      });
+    } catch (e) {
+      Logger.log("ical " + e);
+    }
   });
   plan.move.forEach(function (m) {
-    patchJobFields(m.job.name, { dateKey: str(m.stay.checkOut), date: str(labelFromKey(m.stay.checkOut)), sameDayTurnover: bool(m.sameDay) });
+    if (!patchDoc(m.job.name, { dateKey: str(m.stay.checkOut), date: str(labelFromKey(m.stay.checkOut)), sameDayTurnover: bool(m.sameDay) })) return;
     report.moved.push({ from: m.from, to: m.stay.checkOut, property: house.name, jobId: jobIdOf(m.job) });
     m.job.dateKey = m.stay.checkOut;
+    m.job.sameDayTurnover = m.sameDay;
   });
   plan.restore.forEach(function (r) {
-    patchJobFields(r.job.name, {
+    var restored = patchDoc(r.job.name, {
       cancelled: bool(false), cancelledAt: nul(), cancelReason: nul(),
       dateKey: str(r.stay.checkOut), date: str(labelFromKey(r.stay.checkOut)), sameDayTurnover: bool(r.sameDay)
     });
+    if (!restored) return;
     report.restored.push({ dateKey: r.stay.checkOut, property: house.name, jobId: jobIdOf(r.job) });
     r.job.cancelled = false;
+    r.job.dateKey = r.stay.checkOut;
+    r.job.sameDayTurnover = r.sameDay;
   });
   plan.cancel.forEach(function (j) {
-    patchJobFields(j.name, { cancelled: bool(true), cancelledAt: int(Date.now()), cancelReason: str("Booking no longer on the host's Airbnb calendar") });
+    if (!patchDoc(j.name, { cancelled: bool(true), cancelledAt: int(Date.now()), cancelReason: str("Booking no longer on the host's Airbnb calendar") })) return;
     report.cancelled.push({ dateKey: j.dateKey, property: house.name, jobId: jobIdOf(j) });
     j.cancelled = true;
+  });
+  // Only the same-day flag changed: nothing anyone needs a push about.
+  plan.flag.forEach(function (f) {
+    if (patchDoc(f.job.name, { sameDayTurnover: bool(f.sameDay) })) f.job.sameDayTurnover = f.sameDay;
   });
 }
 
@@ -613,18 +712,24 @@ function liveJobAt(ctx, house, dateKey) {
   return null;
 }
 
-function jobIdOf(job) { return String(job.name || "").split("/").pop(); }
+function jobIdOf(job) { return docId(job.name); }
 
-function patchJobFields(jobName, fields) {
+// Partial update of one document, by its full resource name; fields not named
+// are left alone. Returns whether Firestore took it. `precondition` is an
+// extra query parameter such as currentDocument.updateTime=...
+function patchDoc(docName, fields, precondition) {
   var mask = Object.keys(fields).map(function (k) { return "updateMask.fieldPaths=" + k; }).join("&");
-  var res = UrlFetchApp.fetch("https://firestore.googleapis.com/v1/" + jobName + "?" + mask, {
+  var res = UrlFetchApp.fetch("https://firestore.googleapis.com/v1/" + docName + "?" + mask + (precondition ? "&" + precondition : ""), {
     method: "patch",
     contentType: "application/json",
     headers: authHeaders(),
     payload: JSON.stringify({ fields: fields }),
     muteHttpExceptions: true
   });
-  if (res.getResponseCode() >= 300) Logger.log("patch failed: " + res.getContentText());
+  var code = res.getResponseCode();
+  if (code >= 200 && code < 300) return true;
+  Logger.log("patch " + docId(docName) + " failed: " + code + " " + String(res.getContentText()).slice(0, 200));
+  return false;
 }
 
 // One owner alert per house per day while a feed is broken, so a revoked
@@ -784,37 +889,133 @@ function sendDigest(ctx) {
 }
 
 // ---- push ----------------------------------------------------------------
+//
+// Who hears about cleanings: phones signed in as the owner, and phones signed
+// in as a cleaner who is still on the team (an /employees record whose active
+// isn't false). Every other device record - an old phone, a former cleaner -
+// is skipped. The legacy /pushTokens list is not read at all: it can't say
+// whose phone a token belongs to.
+
+var EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
+var recipientsCache = null; // loaded with the run's context (loadContext)
+
+function loadRecipients() {
+  var active = {};
+  fsList("employees").forEach(function (d) {
+    var f = d.fields || {};
+    if (!(f.active && f.active.booleanValue === false)) active[docId(d.name)] = true;
+  });
+  var out = [];
+  fsList("devices").forEach(function (d) {
+    var f = d.fields || {};
+    var token = f.pushToken && f.pushToken.stringValue;
+    var owner = !!(f.role && f.role.stringValue === "owner");
+    var employeeId = f.employeeId && f.employeeId.stringValue;
+    if (!token || !(owner || (employeeId && active[employeeId]))) return;
+    out.push({ device: d.name, updateTime: d.updateTime || "", token: token, owner: owner });
+  });
+  return out;
+}
+
+function pushRecipients() {
+  if (!recipientsCache) recipientsCache = loadRecipients();
+  return recipientsCache;
+}
 
 // `data` rides along with the push; { jobId } makes tapping it open that job.
+// Returns how many phones Expo accepted it for.
 function notifyPhones(title, body, data) {
-  var messages = [];
-  var seen = {};
-  function add(token) {
-    if (token && !seen[token]) {
-      seen[token] = true;
-      messages.push({ to: token, title: title, body: body, sound: "default", data: data || {} });
-    }
+  return sendPush(pushRecipients(), title, body, data);
+}
+
+// Owner phones only: anything the crew can't act on.
+function pushToOwnerDevices(title, body) {
+  var owners = pushRecipients().filter(function (r) { return r.owner; });
+  if (!owners.length) {
+    Logger.log("no owner device has a push token; not delivered: " + title);
+    return false;
   }
-  var legacy = fsGet("/pushTokens?pageSize=100");
-  ((legacy && legacy.documents) || []).forEach(function (d) {
-    if (d.fields && d.fields.token) add(d.fields.token.stringValue);
+  var sent = sendPush(owners, title, body);
+  if (sent) Logger.log("alerted " + sent + " owner device(s)");
+  return sent > 0;
+}
+
+// For an email that only turns into a notice: throwing keeps it unread, so the
+// next run tries again rather than the owner never hearing.
+function ownerNotice(title, body) {
+  if (!pushToOwnerDevices(title, body)) throw new Error("owner notice not delivered: " + title);
+}
+
+function sendPush(recipients, title, body, data) {
+  var byToken = {}, tokens = [];
+  recipients.forEach(function (r) {
+    if (!r.token) return; // cleared earlier this run (DeviceNotRegistered)
+    if (!byToken[r.token]) { byToken[r.token] = []; tokens.push(r.token); }
+    byToken[r.token].push(r);
   });
-  // The app stores each phone's token on its device record.
-  var devices = fsGet("/devices?pageSize=200");
-  ((devices && devices.documents) || []).forEach(function (d) {
-    if (d.fields && d.fields.pushToken) add(d.fields.pushToken.stringValue);
+  if (!tokens.length) return 0;
+  var messages = tokens.map(function (t) {
+    // "default" is the Android channel the app creates; Android holds
+    // normal-priority pushes while the phone dozes.
+    return { to: t, title: title, body: body, sound: "default", channelId: "default", priority: "high", data: data || {} };
   });
-  if (messages.length === 0) return;
-  UrlFetchApp.fetch("https://exp.host/--/api/v2/push/send", {
+  var res = UrlFetchApp.fetch(EXPO_PUSH_URL, {
     method: "post",
     contentType: "application/json",
+    headers: { Accept: "application/json" },
     payload: JSON.stringify(messages),
     muteHttpExceptions: true
   });
+  var code = res.getResponseCode();
+  if (code < 200 || code >= 300) {
+    Logger.log("push failed: " + code + " " + String(res.getContentText()).slice(0, 200));
+    return 0;
+  }
+  // Expo answers 200 even when single messages fail; its tickets, in message
+  // order, say which.
+  var tickets = expoTickets(res.getContentText());
+  if (!tickets) {
+    Logger.log("push answer had no tickets; counting all " + tokens.length + " as sent");
+    return tokens.length;
+  }
+  var accepted = 0;
+  tokens.forEach(function (t, i) {
+    var ticket = tickets[i] || {};
+    if (ticket.status === "ok") { accepted++; return; }
+    var error = (ticket.details && ticket.details.error) || "";
+    var devices = byToken[t].map(function (r) { return docId(r.device); }).join(", ");
+    Logger.log("push not accepted for " + devices + ": " + error + " " + (ticket.message || ""));
+    if (error === "DeviceNotRegistered") byToken[t].forEach(forgetPushToken);
+  });
+  return accepted;
+}
+
+function expoTickets(text) {
+  try {
+    var data = JSON.parse(text).data;
+    return Array.isArray(data) ? data : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Expo says this phone's token is dead (the app was removed, or the token was
+// replaced). Clearing it stops every later push trying it; the app saves a new
+// one when it next registers. The precondition skips a device record that has
+// changed since it was read - it may already hold a new, working token.
+function forgetPushToken(r) {
+  var when = r.updateTime ? "currentDocument.updateTime=" + encodeURIComponent(r.updateTime) : "currentDocument.exists=true";
+  var cleared = patchDoc(r.device, {
+    pushToken: nul(),
+    pushError: str("Expo no longer accepts this phone's push token (DeviceNotRegistered)."),
+    pushErrorAt: int(Date.now())
+  }, when);
+  if (cleared) Logger.log("cleared the dead push token on " + docId(r.device));
+  r.token = "";
 }
 
 function testPush() {
-  notifyPhones("TurnTrack test", "Push notifications are working.");
+  Logger.log("accepted by " + notifyPhones("TurnTrack test", "Push notifications are working.") + " phone(s)");
 }
 
 // ---- Airbnb sync watchdog ------------------------------------------------
@@ -885,39 +1086,11 @@ function alertOwnerTelegram(title, body) {
   return true;
 }
 
-// Fallback channel, and the default until a Telegram bot token is stored.
-// Only devices whose role is "owner" - the crew does not need to hear that a
-// scraper fell over. Runs in Google's cloud, so it still fires when the PC
-// that hosts the Airbnb sync is off, which is the whole point of this watchdog.
-function pushToOwnerDevices(title, body) {
-  var doc = fsGet("/devices?pageSize=200");
-  var messages = [], seen = {};
-  ((doc && doc.documents) || []).forEach(function (d) {
-    var f = d.fields || {};
-    if (!f.role || f.role.stringValue !== "owner") return;
-    var t = f.pushToken && f.pushToken.stringValue;
-    if (t && !seen[t]) {
-      seen[t] = true;
-      messages.push({ to: t, title: title, body: body, sound: "default" });
-    }
-  });
-  if (messages.length === 0) {
-    Logger.log("no owner device has a push token; alert not delivered: " + title);
-    return false;
-  }
-  var res = UrlFetchApp.fetch("https://exp.host/--/api/v2/push/send", {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify(messages),
-    muteHttpExceptions: true
-  });
-  if (res.getResponseCode() >= 300) {
-    Logger.log("owner push failed: " + res.getContentText());
-    return false;
-  }
-  Logger.log("alerted " + messages.length + " owner device(s)");
-  return true;
-}
+// The fallback channel, and the default until a Telegram bot token is stored,
+// is pushToOwnerDevices (in the push section above): only devices whose role
+// is "owner" - the crew does not need to hear that a scraper fell over. It
+// runs in Google's cloud, so it still fires when the PC that hosts the Airbnb
+// sync is off, which is the whole point of this watchdog.
 
 function testAirbnbWatchdog() {
   var doc = fsGet("/settings/airbnbSync");
