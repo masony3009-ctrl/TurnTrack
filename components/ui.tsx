@@ -99,12 +99,14 @@ export const calendarTheme = {
   textSectionTitleColor: colors.faint,
 };
 
-export function ScreenHeader({ title, subtitle, right, onBack, backLabel }: {
+export function ScreenHeader({ title, subtitle, right, onBack, backLabel, onSubtitlePress }: {
   title: string;
   subtitle?: string;
   right?: ReactNode;
   onBack?: () => void;
   backLabel?: string;
+  // Makes the subtitle a link, with a chevron so it reads as one.
+  onSubtitlePress?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   return (
@@ -119,7 +121,14 @@ export function ScreenHeader({ title, subtitle, right, onBack, backLabel }: {
           <Text style={type.wordmark}>TurnTrack</Text>
         )}
         <Text style={[type.title, { marginTop: 2 }]} numberOfLines={2}>{title}</Text>
-        {subtitle ? <Text style={[type.subtitle, { marginTop: 3 }]}>{subtitle}</Text> : null}
+        {subtitle && onSubtitlePress ? (
+          <TouchableOpacity onPress={onSubtitlePress} style={styles.subtitleLink} hitSlop={8}>
+            <Text style={[type.subtitle, styles.subtitleLinkText]}>{subtitle}</Text>
+            <Ionicons name="chevron-forward" size={15} color={colors.tealDark} />
+          </TouchableOpacity>
+        ) : subtitle ? (
+          <Text style={[type.subtitle, { marginTop: 3 }]}>{subtitle}</Text>
+        ) : null}
       </View>
       {right ? <View style={[styles.headerRight, onBack && { marginTop: 0 }]}>{right}</View> : null}
     </View>
@@ -478,6 +487,8 @@ const styles = StyleSheet.create({
   headerRight: { flexDirection: "row", gap: 8, marginBottom: 2 },
   backRow: { flexDirection: "row", alignItems: "center", marginBottom: 6, alignSelf: "flex-start", marginLeft: -4 },
   backText: { fontSize: 15, fontWeight: "600", color: colors.tealDark },
+  subtitleLink: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 2, marginTop: 3 },
+  subtitleLinkText: { color: colors.tealDark, fontWeight: "600" },
   iconBtn: {
     width: 44, height: 44, borderRadius: 22, backgroundColor: colors.card,
     alignItems: "center", justifyContent: "center",
