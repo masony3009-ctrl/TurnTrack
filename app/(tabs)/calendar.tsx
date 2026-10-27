@@ -1,7 +1,7 @@
 import { useRouter } from "expo-router";
 import { collection, onSnapshot } from "firebase/firestore";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Animated, PanResponder, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
 import { tapSelect } from "../../components/haptics";
 import { useProfile } from "../../components/ProfileProvider";
 import { AssigneeRow, Card, ColorDot, ErrorState, IconButton, Pill, ScreenHeader, SheetModal } from "../../components/ui";
@@ -18,6 +18,8 @@ import {
   monthOfKey,
   monthTotals,
   scheduleMonths,
+  stepMonth,
+  swipeDirection,
   weekRangeLabel,
   weekStatus,
   weekSummary,
@@ -92,6 +94,36 @@ export default function CalendarScreen() {
     setMonth(m);
   };
 
+  // Swiping the grid sideways flips months: the grid follows the finger, slides
+  // out, and the next month slides in from the other side. The handlers are
+  // made once, so they read the current months and width through a ref.
+  const { width } = useWindowDimensions();
+  const slide = useRef(new Animated.Value(0)).current;
+  const swipeState = useRef({ months, month, width });
+  swipeState.current = { months, month, width };
+  const pan = useRef(PanResponder.create({
+    // Only clearly sideways drags: scrolling the page and tapping a day still work.
+    onMoveShouldSetPanResponderCapture: (_, g) => Math.abs(g.dx) > 14 && Math.abs(g.dx) > Math.abs(g.dy) * 1.6,
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderMove: (_, g) => slide.setValue(g.dx),
+    onPanResponderRelease: (_, g) => {
+      const { months: ms, month: current, width: w } = swipeState.current;
+      const dir = swipeDirection(g.dx, g.vx);
+      const next = dir ? stepMonth(ms, current, dir) : null;
+      if (!next) {
+        Animated.spring(slide, { toValue: 0, useNativeDriver: true, bounciness: 6 }).start();
+        return;
+      }
+      Animated.timing(slide, { toValue: -dir * w, duration: 140, useNativeDriver: true }).start(() => {
+        tapSelect();
+        setMonth(next);
+        slide.setValue(dir * w);
+        Animated.timing(slide, { toValue: 0, duration: 180, useNativeDriver: true }).start();
+      });
+    },
+    onPanResponderTerminate: () => Animated.spring(slide, { toValue: 0, useNativeDriver: true }).start(),
+  })).current;
+
   if (loadError) {
     return (
       <View style={styles.container}>
@@ -135,7 +167,11 @@ export default function CalendarScreen() {
           </View>
         ) : (
           <>
-            <View style={styles.gridCard}>
+            <Animated.View
+              style={[styles.gridCard, { transform: [{ translateX: slide }] }]}
+              accessibilityHint="Swipe left or right to change the month"
+              {...pan.panHandlers}
+            >
               <View style={styles.weekdayRow}>
                 {WEEKDAYS.map((d, i) => <Text key={i} style={styles.weekday}>{d}</Text>)}
               </View>
@@ -155,7 +191,7 @@ export default function CalendarScreen() {
                   ))}
                 </View>
               ))}
-            </View>
+            </Animated.View>
 
             <View style={styles.legend}>
               {employees.filter(e => e.active || shownCleaners.has(e.id)).map(e => (

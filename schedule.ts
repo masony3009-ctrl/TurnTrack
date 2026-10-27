@@ -169,3 +169,21 @@ export function scheduleMonths(jobs: ScheduleJob[], today: string): Month[] {
   }
   return monthsBetween(monthOfKey(first), monthOfKey(last));
 }
+
+// A sideways drag on the month grid: 1 = next month (the finger moved left),
+// -1 = the previous one, 0 = not far or fast enough to count.
+export const SWIPE_DISTANCE = 50;
+
+export function swipeDirection(dx: number, vx: number): -1 | 0 | 1 {
+  if (dx <= -SWIPE_DISTANCE || (dx < -15 && vx < -0.4)) return 1;
+  if (dx >= SWIPE_DISTANCE || (dx > 15 && vx > 0.4)) return -1;
+  return 0;
+}
+
+// The month `delta` steps from `current` in the offered list, or null past
+// either end (nothing booked out there, nothing on record before).
+export function stepMonth(months: Month[], current: Month, delta: number): Month | null {
+  const i = months.findIndex((m) => monthKey(m) === monthKey(current));
+  if (i < 0) return null;
+  return months[i + delta] || null;
+}

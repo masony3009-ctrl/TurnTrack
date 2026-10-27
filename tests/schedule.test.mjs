@@ -138,3 +138,23 @@ test("calendar labels use the registry's short name first", () => {
   assert.equal(houseLabel({ date: "", property: "Mountain View: Private Pool", address: "" }, houses), "Mountain View");
   assert.equal(houseLabel({ date: "", address: "", type: "Deep-Cleaning" }, houses), "Deep-Cleaning");
 });
+
+test("a sideways drag far or fast enough flips the month", async () => {
+  const { swipeDirection } = await import("../schedule.ts");
+  assert.equal(swipeDirection(-80, 0), 1); // finger moved left: next month
+  assert.equal(swipeDirection(80, 0), -1);
+  assert.equal(swipeDirection(-20, -0.8), 1); // a quick flick counts
+  assert.equal(swipeDirection(20, 0.8), -1);
+  assert.equal(swipeDirection(-30, -0.1), 0); // a slow nudge doesn't
+  assert.equal(swipeDirection(10, 2), 0);
+});
+
+test("swiping steps through the offered months and stops at the ends", async () => {
+  const { stepMonth } = await import("../schedule.ts");
+  const months = [{ year: 2026, month: 10 }, { year: 2026, month: 11 }, { year: 2027, month: 0 }];
+  assert.deepEqual(stepMonth(months, { year: 2026, month: 11 }, 1), { year: 2027, month: 0 });
+  assert.deepEqual(stepMonth(months, { year: 2026, month: 11 }, -1), { year: 2026, month: 10 });
+  assert.equal(stepMonth(months, { year: 2027, month: 0 }, 1), null);
+  assert.equal(stepMonth(months, { year: 2026, month: 10 }, -1), null);
+  assert.equal(stepMonth(months, { year: 2025, month: 0 }, 1), null);
+});
