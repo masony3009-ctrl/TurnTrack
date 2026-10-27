@@ -169,8 +169,8 @@ export function ProfileGate() {
             {target?.creating && !useOwnerPin && (
               <Text style={styles.pinIntro}>
                 {target.kind === "owner"
-                  ? "First time here — set the PIN that protects the owner side of the app. Share it only with people who should see payroll."
-                  : "Pick a PIN only you know. You'll use it to sign in on any phone."}
+                  ? "Set the owner PIN. Share it only with people who should see payroll."
+                  : "Pick a PIN only you know."}
               </Text>
             )}
             <FormInput

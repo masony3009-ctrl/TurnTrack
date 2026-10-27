@@ -64,18 +64,18 @@ export function HouseSheet({ visible, house, busy, onClose, onSave }: {
   const save = () => {
     const name = form.name.trim();
     if (adding && (!name || !form.address.trim())) {
-      Alert.alert("Name and address", "A new house needs a name and its street address.");
+      Alert.alert("Name and address", "Add both to save a new house.");
       return;
     }
     const price = form.price.trim() ? parsePrice(form.price) : null;
     if (form.price.trim() && price === null) {
-      Alert.alert("Check the price", "Type the dollar amount for a regular cleaning, like 150.");
+      Alert.alert("Check the price", "Enter dollars, like 150.");
       return;
     }
     const bedrooms = roomCount(form.bedrooms);
     const bathrooms = roomCount(form.bathrooms);
     if (bedrooms === null || bathrooms === null) {
-      Alert.alert("Check the rooms", "Bedrooms and bathrooms are numbers, like 3 and 2.5.");
+      Alert.alert("Check the rooms", "Use numbers, like 3 and 2.5.");
       return;
     }
     const changes: RegistryChanges = {
@@ -96,14 +96,14 @@ export function HouseSheet({ visible, house, busy, onClose, onSave }: {
     <SheetModal visible={visible} title={adding ? "Add a house" : house.short || house.name} onClose={onClose}>
       {adding ? (
         <>
-          <FormInput label="Name (as it shows in Airbnb or Turno)" placeholder="e.g. Desert Oasis" value={form.name} onChangeText={set("name")} autoCapitalize="words" />
-          <FormInput label="Street address" placeholder="Street, city, ZIP" value={form.address} onChangeText={set("address")} autoCapitalize="words" />
+          <FormInput label="Listing name" placeholder="e.g. Desert Oasis" value={form.name} onChangeText={set("name")} autoCapitalize="words" />
+          <FormInput label="Address" placeholder="Street, city, ZIP" value={form.address} onChangeText={set("address")} autoCapitalize="words" />
         </>
       ) : (
         <Text style={styles.address}>{house.address}</Text>
       )}
-      <FormInput label="What we call it (short name)" placeholder="e.g. Desert Oasis" value={form.short} onChangeText={set("short")} autoCapitalize="words" />
-      <FormInput label="Regular cleaning price ($)" placeholder="e.g. 150" value={form.price} onChangeText={set("price")} keyboardType="decimal-pad" />
+      <FormInput label="Short name" placeholder="e.g. Desert Oasis" value={form.short} onChangeText={set("short")} autoCapitalize="words" />
+      <FormInput label="Price per cleaning ($)" placeholder="e.g. 150" value={form.price} onChangeText={set("price")} keyboardType="decimal-pad" />
       <View style={styles.pair}>
         <View style={{ flex: 1 }}>
           <FormInput label="Bedrooms" placeholder="3" value={form.bedrooms} onChangeText={set("bedrooms")} keyboardType="number-pad" />
@@ -112,7 +112,7 @@ export function HouseSheet({ visible, house, busy, onClose, onSave }: {
           <FormInput label="Bathrooms" placeholder="2.5" value={form.bathrooms} onChangeText={set("bathrooms")} keyboardType="decimal-pad" />
         </View>
       </View>
-      <Text style={styles.group}>Access codes · cleaners see these once a cleaning is theirs</Text>
+      <Text style={styles.group}>Codes</Text>
       <FormInput label="Front door" placeholder="Not set" value={form.doorCode} onChangeText={set("doorCode")} autoCapitalize="none" />
       <FormInput label="Garage" placeholder="Not set" value={form.garageCode} onChangeText={set("garageCode")} autoCapitalize="none" />
       <FormInput label="Supply closet" placeholder="Not set" value={form.supplyCode} onChangeText={set("supplyCode")} autoCapitalize="none" />
@@ -126,12 +126,12 @@ export function HouseSheet({ visible, house, busy, onClose, onSave }: {
       >
         <Ionicons name={billed ? "checkbox" : "square-outline"} size={24} color={billed ? colors.teal : colors.faint} />
         <View style={{ flex: 1 }}>
-          <Text style={styles.toggleText}>The host pays us directly</Text>
-          <Text style={styles.toggleSub}>Not through Turno. The app keeps a running total of what they owe.</Text>
+          <Text style={styles.toggleText}>Host pays us directly</Text>
+          <Text style={styles.toggleSub}>Not through Turno · tracks what they owe</Text>
         </View>
       </TouchableOpacity>
       {billed ? (
-        <DatePickerField label="Count cleanings from" value={form.billedFrom} onChange={(key) => setForm(prev => ({ ...prev, billedFrom: key }))} />
+        <DatePickerField label="Starting" value={form.billedFrom} onChange={(key) => setForm(prev => ({ ...prev, billedFrom: key }))} />
       ) : null}
       <BrandButton label={busy ? "Saving…" : adding ? "Add house" : "Save"} icon="checkmark" onPress={save} disabled={busy} />
     </SheetModal>

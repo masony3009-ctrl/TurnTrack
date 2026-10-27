@@ -295,8 +295,8 @@ export default function TeamScreen() {
             icon="people-outline"
             title="No cleaners yet"
             body={isOwner
-              ? "Add your first cleaner below. Once they're on the team you can assign jobs to them and track their hours for payroll."
-              : "The team list is empty right now."}
+              ? "Add your first cleaner below."
+              : "No one on the team yet."}
           />
         )}
         {orderedEmployees.map(emp => {

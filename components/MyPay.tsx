@@ -54,7 +54,7 @@ export function MyPay({ employee }: { employee: Employee }) {
             <>
               <Text style={styles.heroAmount}>{formatMoney(owed)}</Text>
               <Text style={styles.heroSub}>
-                {owed > 0 ? `${formatDuration(owedMinutes)} of work not paid yet` : "You're all paid up"}
+                {owed > 0 ? `${formatDuration(owedMinutes)} unpaid` : "All paid up"}
               </Text>
             </>
           ) : (
@@ -66,7 +66,7 @@ export function MyPay({ employee }: { employee: Employee }) {
         </View>
 
         {loadError ? (
-          <ErrorState title="Couldn't load your pay" body="Check your connection. This screen updates by itself once it's back." />
+          <ErrorState title="Couldn't load your pay" body="Check your signal. It updates on its own." />
         ) : null}
 
         {entries ? (
@@ -95,7 +95,7 @@ export function MyPay({ employee }: { employee: Employee }) {
 
             <SectionHeader title="Payments" count={payments.length} />
             {payments.length === 0 ? (
-              <EmptyState icon="wallet-outline" title="No payments yet" body="When the owner pays you, it shows here with the date and how it was sent." />
+              <EmptyState icon="wallet-outline" title="No payments yet" body="Payments show up here." />
             ) : (
               <Card>
                 {payments.slice(0, PAYMENTS_SHOWN).map((p, i) => (
@@ -113,7 +113,7 @@ export function MyPay({ employee }: { employee: Employee }) {
 
             <TouchableOpacity style={styles.help} onPress={() => Linking.openURL(`tel:${OWNER_PHONE}`)} accessibilityRole="button">
               <Ionicons name="call-outline" size={15} color={colors.tealDark} />
-              <Text style={styles.helpText}>Something look wrong? Call {OWNER_PHONE_LABEL}</Text>
+              <Text style={styles.helpText}>Questions? Call {OWNER_PHONE_LABEL}</Text>
             </TouchableOpacity>
           </>
         ) : null}

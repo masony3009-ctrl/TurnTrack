@@ -62,7 +62,7 @@ export function PushProblemCard({ result, checking, onRetry }: {
       </View>
       <Text style={styles.body} numberOfLines={5}>
         {denied
-          ? "Notifications are turned off for TurnTrack. Turn them on so you hear about new, changed and finished cleanings."
+          ? "Notifications are off for TurnTrack. Turn them on to hear about cleanings."
           : `Signing up for alerts failed: ${result.reason}`}
       </Text>
       {denied ? (

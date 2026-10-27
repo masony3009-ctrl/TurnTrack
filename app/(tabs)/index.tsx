@@ -15,7 +15,7 @@ import { withTime } from "../../jobTime";
 import { formatClockTime } from "../../payroll";
 import { type Property } from "../../properties";
 import { cleanerColor, colors, radius, unassignedColor } from "../../theme";
-import { daysFromToday, daysLeftInWeek, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, HIDE_AFTER_DAYS, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate, todayKey } from "../../turnover";
+import { daysFromToday, daysLeftInWeek, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate, todayKey } from "../../turnover";
 import { checklistProgress, currentRoom, DEFAULT_CHECKLIST, legacyItems, templateFromDoc, templateStats } from "../../checklist";
 import { isOpenJob } from "../../assign";
 import { Employee, Job, newJobDoc, parseChecklistText } from "../../types";
@@ -379,7 +379,7 @@ export default function JobsScreen() {
 
       <SheetModal visible={showChecklistEditor} title="Cleaning checklist" onClose={() => setShowChecklistEditor(false)}>
         <Text style={styles.sheetHint}>
-          One step per line. A line ending in a colon starts a room, like &quot;Kitchen:&quot;. Put a tip after a bar: &quot;Oven | Wipe the door glass&quot;. A line starting with &gt; is a note for the whole room. &quot;Bathroom #:&quot; repeats once per bathroom at each house, and &quot;Half bath:&quot; only shows at houses that have one. A room ending in &quot;(optional)&quot;, like &quot;Bedroom (optional):&quot;, stays hidden until someone taps Add a room on a cleaning.
+          {"One step per line.\nKitchen: starts a room · Oven | tip · > room note\nBathroom #: one per bath · Half bath: only if there is one · Bedroom (optional): added by hand"}
         </Text>
         <FormInput
           label="Checklist"
@@ -437,7 +437,7 @@ export default function JobsScreen() {
           />
           <View style={{ flex: 1 }}>
             <Text style={[styles.toggleText, newSameDayTurnover && { color: colors.goldDark }]}>Same-day turnover</Text>
-            <Text style={styles.toggleSub}>Guest checks out and a new one checks in the same day</Text>
+            <Text style={styles.toggleSub}>Checkout and check-in on the same day</Text>
           </View>
         </TouchableOpacity>
         <BrandButton label={saving ? "Adding…" : "Add cleaning"} icon="add" onPress={addJob} disabled={saving} />
@@ -445,7 +445,7 @@ export default function JobsScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 110 }}>
         {loadError && !allJobs ? (
-          <ErrorState title="Couldn't load the jobs" body={`Check your connection; the list updates by itself once it's back. (${loadError})`} />
+          <ErrorState title="Couldn't load the jobs" body={`Check your signal. It updates on its own. (${loadError})`} />
         ) : !allJobs ? (
           <View style={styles.loading}>
             <ActivityIndicator color={colors.teal} />
@@ -456,7 +456,7 @@ export default function JobsScreen() {
             <EmptyState
               icon="close-circle-outline"
               title="No cancelled cleanings"
-              body={`Cleanings cancelled in the last ${CANCELLED_WINDOW_DAYS} days show up here, so you can open one and restore it.`}
+              body={`Cancelled in the last ${CANCELLED_WINDOW_DAYS} days. Open one to restore it.`}
             />
           ) : (
             <>
@@ -469,19 +469,19 @@ export default function JobsScreen() {
             <EmptyState
               icon="checkmark-done-outline"
               title="No open cleanings"
-              body="Every upcoming cleaning has someone on it. When one opens up, it shows here for you to take."
+              body="Every upcoming cleaning is covered."
             />
           ) : scope === "mine" && roleJobs.length > 0 ? (
             <EmptyState
               icon="person-outline"
               title="Nothing assigned to you yet"
-              body="When a job gets assigned to you it shows up here. Switch to All jobs to see the whole schedule."
+              body="Your cleanings show here once assigned."
             />
           ) : (
             <EmptyState
               icon="sparkles-outline"
               title="No cleanings coming up"
-              body={`Jobs from Airbnb, Turno, your booking emails and the website land here automatically${isOwner ? ", or tap Add cleaning" : ""}. Finished jobs clear out ${HIDE_AFTER_DAYS} days after the cleaning date.`}
+              body={`Airbnb, Turno and website bookings land here on their own${isOwner ? ", or tap Add cleaning" : ""}.`}
             />
           )
         ) : null}

@@ -128,7 +128,7 @@ export default function CalendarScreen() {
     return (
       <View style={styles.container}>
         <ScreenHeader title="Calendar" />
-        <ErrorState title="Couldn't load the cleanings" body={`Check the connection and try again. (${loadError})`} />
+        <ErrorState title="Couldn't load the cleanings" body={`Check your signal. (${loadError})`} />
       </View>
     );
   }
@@ -305,7 +305,7 @@ function WeekCounts({ weekStarts, counts, maxWeek, today }: {
   return (
     <>
       <Text style={styles.sectionTitle}>Cleanings per week</Text>
-      <Text style={styles.sectionHint}>Sunday to Saturday. Past weeks count what we had, this week what&apos;s done, later weeks what&apos;s booked.</Text>
+      <Text style={styles.sectionHint}>Sunday to Saturday</Text>
       <View style={styles.weekCard}>
         {weekStarts.map(start => {
           const count = counts.get(start);

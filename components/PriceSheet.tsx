@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { parsePrice } from "../money";
-import { formatMoney } from "../payroll";
+import { formatDollars } from "../payroll";
 import { colors, radius } from "../theme";
 import { tapSelect } from "./haptics";
 import { BrandButton, FormInput, SheetModal } from "./ui";
@@ -34,25 +34,23 @@ export function PriceSheet({ visible, price, housePrice, billed, hostPaid, busy,
     const trimmed = text.trim();
     const next = trimmed ? parsePrice(trimmed) : null;
     if (trimmed && next === null) {
-      Alert.alert("Check the price", "Type the dollar amount, like 150 or 175.50.");
+      Alert.alert("Check the price", "Enter dollars, like 150.");
       return;
     }
     onSave({ price: next, hostPaid: billed && paid });
   };
 
   return (
-    <SheetModal visible={visible} title="What this cleaning pays" onClose={onClose}>
+    <SheetModal visible={visible} title="Price" onClose={onClose}>
       <FormInput
-        label="Price for this cleaning ($)"
+        label="This cleaning ($)"
         placeholder={housePrice ? String(housePrice) : "e.g. 150"}
         value={text}
         onChangeText={setText}
         keyboardType="decimal-pad"
       />
       <Text style={styles.hint}>
-        {housePrice
-          ? `Leave it empty to use the house price, ${formatMoney(housePrice)}.`
-          : "This house has no regular price yet. Set one on the Houses tab, or price this cleaning here."}
+        {housePrice ? `Empty = house price (${formatDollars(housePrice)})` : "No house price yet"}
       </Text>
       {billed ? (
         <TouchableOpacity
@@ -64,8 +62,7 @@ export function PriceSheet({ visible, price, housePrice, billed, hostPaid, busy,
         >
           <Ionicons name={paid ? "checkbox" : "square-outline"} size={24} color={paid ? colors.teal : colors.faint} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.toggleText}>The host has paid for this one</Text>
-            <Text style={styles.toggleSub}>Paid cleanings drop off what the host owes on the Houses tab</Text>
+            <Text style={styles.toggleText}>Host paid</Text>
           </View>
         </TouchableOpacity>
       ) : null}

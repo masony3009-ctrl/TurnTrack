@@ -10,6 +10,15 @@ export function formatMoney(amount: number): string {
   return `${amount < 0 ? "-" : ""}$${Math.abs(amount).toFixed(2)}`;
 }
 
+// "$42,840" - totals, where cents are noise. Keeps cents only when there are some.
+export function formatDollars(amount: number): string {
+  const abs = Math.abs(amount);
+  const whole = Math.abs(abs - Math.round(abs)) < 0.005;
+  const [int, cents] = (whole ? Math.round(abs).toString() : abs.toFixed(2)).split(".");
+  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${amount < 0 ? "-" : ""}$${grouped}${cents ? `.${cents}` : ""}`;
+}
+
 export function formatDuration(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;

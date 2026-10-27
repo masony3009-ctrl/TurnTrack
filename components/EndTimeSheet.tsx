@@ -20,7 +20,7 @@ export function EndTimeSheet({ visible, startedAt, now, busy, onPick, onClose }:
   return (
     <SheetModal visible={visible} title="When did you finish?" onClose={onClose}>
       <Text style={styles.lead}>
-        The timer has run {formatDuration(fullMinutes)} since {formatClockTime(startedAt)}. If it was left on, pick when the cleaning actually ended.
+        Running {formatDuration(fullMinutes)} since {formatClockTime(startedAt)}. If it was left on, pick when you finished.
       </Text>
       <View style={styles.grid}>
         {choices.map((c) => (

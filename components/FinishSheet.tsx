@@ -47,9 +47,9 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
   if (count === 0) {
     return (
       <SheetModal visible={visible} title="Finish cleaning" onClose={onClose}>
-        <Text style={styles.lead}>{total > 0 ? `All ${total} steps are checked off.` : "Ready to stop the clock."}</Text>
+        <Text style={styles.lead}>{total > 0 ? `All ${total} steps checked.` : "Ready to stop the clock."}</Text>
         {picker}
-        <Text style={[styles.label, { marginTop: 14 }]}>Anything the owner should know? (optional)</Text>
+        <Text style={[styles.label, { marginTop: 14 }]}>Note for the owner (optional)</Text>
         <TextInput
           style={styles.input}
           multiline
@@ -58,7 +58,7 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
           onChangeText={setText}
           placeholder="Damage, something broken, anything odd"
           placeholderTextColor={colors.faint}
-          accessibilityLabel="Anything the owner should know?"
+          accessibilityLabel="Note for the owner"
         />
         <BrandButton label={busy ? "Saving…" : "Finish cleaning"} icon="checkmark-circle" onPress={() => onFinish(note, supplies)} disabled={busy} style={{ marginTop: 12 }} />
         <BrandButton label="Back to checklist" icon="list" variant="ghost" onPress={onReview} style={{ marginTop: 4 }} />
@@ -78,15 +78,15 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
   return (
     <SheetModal visible={visible} title={`${count} step${count === 1 ? "" : "s"} not checked`} onClose={onClose}>
       {picker}
-      <Text style={[styles.lead, { marginTop: 16 }]}>Did all of it but forgot to tick as you went? Check everything off and finish in one tap.</Text>
+      <Text style={[styles.lead, { marginTop: 16 }]}>Did it all but forgot to tick?</Text>
       <BrandButton
-        label={busy ? "Saving…" : `Everything's done — check all ${count} & finish`}
+        label={busy ? "Saving…" : `Check all ${count} & finish`}
         icon="checkmark-done"
         onPress={() => onCheckAll(note, supplies)}
         disabled={busy}
         style={{ marginTop: 12 }}
       />
-      <Text style={styles.divider}>If something really wasn&apos;t done, say why instead. The owner sees this note on the job.</Text>
+      <Text style={styles.divider}>Or say why these weren&apos;t done:</Text>
       <View style={styles.list}>
         {listed.map(room => (
           <View key={room.title} style={styles.room}>
@@ -98,7 +98,6 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
         ))}
         {hidden > 0 ? <Text style={styles.more}>+{hidden} more</Text> : null}
       </View>
-      <Text style={styles.label}>Why weren&apos;t these done?</Text>
       <TextInput
         style={styles.input}
         multiline
@@ -117,7 +116,7 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
         disabled={!ready || busy}
         style={{ marginTop: 12 }}
       />
-      {!ready ? <Text style={styles.hint}>Write a few words to finish.</Text> : null}
+      {!ready ? <Text style={styles.hint}>Add a few words to finish.</Text> : null}
       <BrandButton label="Back to checklist" icon="list" variant="ghost" onPress={onReview} style={{ marginTop: 4 }} />
     </SheetModal>
   );
@@ -127,7 +126,7 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
 function SupplyPicker({ selected, onToggle }: { selected: string[]; onToggle: (item: string) => void }) {
   return (
     <View style={styles.supplies}>
-      <Text style={styles.label}>Running low on anything? Tap what to restock</Text>
+      <Text style={styles.label}>Running low?</Text>
       <View style={styles.supplyGrid}>
         {SUPPLY_CHOICES.map(item => {
           const on = selected.includes(item);

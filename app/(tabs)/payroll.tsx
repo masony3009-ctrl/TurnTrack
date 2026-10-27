@@ -218,7 +218,7 @@ export default function PayrollScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="Owner only"
-          body="Payroll is only available on the owner's profile."
+          body="Only the owner sees payroll."
         />
       </View>
     );
@@ -226,7 +226,7 @@ export default function PayrollScreen() {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title="Payroll" subtitle="Hours tracked, pay owed, Zelle-ready" />
+      <ScreenHeader title="Payroll" />
 
       <SheetModal visible={editing !== null} title={`Fix ${editing?.employeeName.split(" ")[0] || ""}'s time`} onClose={() => setEditing(null)}>
         {editing ? <Text style={styles.editLead}>{editing.jobAddress} · logged at {formatMoney(editing.hourlyRate)}/hr</Text> : null}
@@ -287,14 +287,14 @@ export default function PayrollScreen() {
         {loadError && (
           <ErrorState
             title="Can't load payroll"
-            body="Firestore blocked access to the timeEntries collection. Update the security rules in the Firebase console, then reopen this screen."
+            body="Check your signal, then reopen this screen."
           />
         )}
         {!loadError && employees.length === 0 && (
           <EmptyState
             icon="cash-outline"
             title="No cleaners yet"
-            body="Add cleaners on the Team screen. Their tracked hours and pay will show up here."
+            body="Add cleaners on the Team tab."
           />
         )}
 

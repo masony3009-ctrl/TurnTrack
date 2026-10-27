@@ -33,7 +33,7 @@ export function WhenSheet({ visible, source, dateKey, time, busy, onClose, onSav
       {dateEditable ? (
         <DatePickerField label="Date" value={day} onChange={setDay} />
       ) : (
-        <Text style={styles.note}>The date comes from {from}, so it changes when the booking does. You can still set a start time.</Text>
+        <Text style={styles.note}>Date comes from {from}. You can set the time.</Text>
       )}
       <TimeChips label="Start time" value={at} onChange={setAt} />
       <BrandButton

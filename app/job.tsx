@@ -21,7 +21,7 @@ import {
 } from "../notifications";
 import { WhenSheet } from "../components/WhenSheet";
 import { canEditDate, formatTime, withTime } from "../jobTime";
-import { computeEarned, formatClockTime, formatDuration, formatMoney, minutesBetween } from "../payroll";
+import { computeEarned, formatClockTime, formatDollars, formatDuration, formatMoney, minutesBetween } from "../payroll";
 import { useProperties } from "../components/useProperties";
 import { isDeepClean, jobPrice } from "../money";
 import { accessCodes, findProperty, houseKey, type AccessCode } from "../properties";
@@ -724,7 +724,7 @@ export default function JobDetail() {
   if (loadError && !job) {
     return (
       <View style={styles.container}>
-        <ScreenHeader onBack={goBack} title="Couldn't load this job" subtitle="TurnTrack couldn't reach the database. Check your signal, then try again." />
+        <ScreenHeader onBack={goBack} title="Couldn't load this job" subtitle="Check your signal and try again." />
         <BrandButton label="Try again" icon="refresh" variant="outline" onPress={() => setReloadKey(k => k + 1)} />
       </View>
     );
@@ -751,7 +751,7 @@ export default function JobDetail() {
         <ScreenHeader
           onBack={goBack}
           title="Not scheduled yet"
-          subtitle="This website request hasn't been confirmed by the owner. It'll show up in Jobs once it is."
+          subtitle="Waiting for the owner to confirm."
         />
       </View>
     );
@@ -770,7 +770,7 @@ export default function JobDetail() {
   const dateHeading = key ? formatDayHeading(key) : job.date;
   const price = jobPrice(job, property);
   const priceHint = [
-    job.price ? "Set on this cleaning" : price !== null ? "The house's regular price" : isDeepClean(job) ? "Deep cleans are priced one at a time" : "Set it here or on the Houses tab",
+    job.price ? "This cleaning" : price !== null ? "House price" : isDeepClean(job) ? "Deep clean · set a price" : "Set a price",
     billed && job.done ? (job.hostPaid ? "Host paid" : "Host hasn't paid") : null,
   ].filter(Boolean).join(" · ");
 
@@ -829,7 +829,7 @@ export default function JobDetail() {
 
       <SheetModal visible={showAssign} title="Assign to" onClose={() => setShowAssign(false)}>
         {activeEmployees.length === 0 && (
-          <Text style={styles.sheetHint}>No active cleaners yet. Add one on the Team tab first.</Text>
+          <Text style={styles.sheetHint}>No cleaners yet. Add one on the Team tab.</Text>
         )}
         {activeEmployees.map(emp => (
           <TouchableOpacity
@@ -874,14 +874,14 @@ export default function JobDetail() {
 
       <SheetModal visible={showGiveBack} title="Give this job back?" onClose={() => setShowGiveBack(false)}>
         <Text style={styles.giveBackBody}>
-          {property?.short || job.address} on {job.date} goes back to unassigned so another cleaner can take it. The owner gets a notification.
+          {property?.short || job.address} · {job.date} goes back to the open list. The owner is notified.
         </Text>
         {days !== null && days >= 0 && days <= 1 ? (
           <View style={styles.giveBackUrgent}>
             <Ionicons name="call-outline" size={16} color={colors.goldDark} />
             <View style={{ flex: 1 }}>
               <Text style={styles.giveBackUrgentText}>
-                This cleaning is {days === 0 ? "today" : "tomorrow"}. Call the owner too, so it gets covered in time.
+                It&apos;s {days === 0 ? "today" : "tomorrow"}. Call the owner too.
               </Text>
               <TouchableOpacity style={styles.callRow} onPress={() => Linking.openURL(`tel:${OWNER_PHONE}`)} hitSlop={6} accessibilityRole="button">
                 <Text style={styles.callText}>Call {OWNER_PHONE_LABEL}</Text>
@@ -917,7 +917,7 @@ export default function JobDetail() {
       {pendingWrites ? (
         <View style={styles.pendingBar}>
           <Ionicons name="cloud-offline-outline" size={16} color={colors.goldDark} />
-          <Text style={styles.pendingBarText}>Saved on this phone, waiting for signal. Keep TurnTrack open until this goes away.</Text>
+          <Text style={styles.pendingBarText}>Waiting for signal. Keep TurnTrack open.</Text>
         </View>
       ) : null}
 
@@ -935,7 +935,7 @@ export default function JobDetail() {
           <View style={styles.cancelledBanner}>
             <Ionicons name="close-circle" size={17} color={colors.danger} />
             <Text style={styles.cancelledBannerText}>
-              This cleaning was cancelled{job.cancelReason ? ` (${job.cancelReason.toLowerCase()})` : ""}. It&apos;s hidden from the job list.
+              Cancelled{job.cancelReason ? ` · ${job.cancelReason}` : ""}
             </Text>
           </View>
         )}
@@ -943,10 +943,10 @@ export default function JobDetail() {
           <Card tone="gold">
             <View style={styles.pendingHeader}>
               <Ionicons name="mail-unread" size={18} color={colors.goldDark} />
-              <Text style={styles.pendingTitle}>Website request — not on the schedule yet</Text>
+              <Text style={styles.pendingTitle}>Website request · not scheduled</Text>
             </View>
             <Text style={styles.pendingBody}>
-              Confirm it once you&apos;ve agreed on the details with the customer. Until then, cleaners can&apos;t see it and no reminders fire.
+              Confirm once the details are set. Cleaners can&apos;t see it until then.
             </Text>
             <BrandButton label={busy ? "Confirming…" : "Confirm job"} icon="checkmark-circle" onPress={confirmRequest} disabled={busy} style={{ marginTop: 12 }} />
             <TouchableOpacity style={styles.declineBtn} onPress={declineRequest} hitSlop={6}>
@@ -958,7 +958,7 @@ export default function JobDetail() {
         {sameDay && !job.cancelled && (
           <View style={styles.sameDayBanner}>
             <Ionicons name="alert-circle" size={17} color={colors.goldDark} />
-            <Text style={styles.sameDayBannerText}>Checkout and a new check-in happen on this date. The clean has to be done between guests.</Text>
+            <Text style={styles.sameDayBannerText}>Same day: clean between checkout and check-in.</Text>
           </View>
         )}
 
@@ -988,54 +988,41 @@ export default function JobDetail() {
           </Card>
         ) : null}
 
-        {isOwner && !job.cancelled && (
-          <Card onPress={() => setShowWhen(true)}>
-            <View style={styles.addressRow}>
-              <View style={styles.addressIcon}>
-                <Ionicons name="calendar-outline" size={20} color={colors.tealDark} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={type.section}>Date & time</Text>
-                <Text style={styles.addressText}>{key ? formatDayHeading(key) : "No date yet"}</Text>
-                <Text style={styles.addressHint}>{formatTime(job.time) || "No set time"} · Tap to change</Text>
-              </View>
-              <Ionicons name="create-outline" size={22} color={colors.teal} />
-            </View>
-          </Card>
-        )}
-
-        {isOwner && !job.cancelled && !isPending && (
-          <Card onPress={() => setShowPrice(true)}>
-            <View style={styles.addressRow}>
-              <View style={styles.addressIcon}>
-                <Ionicons name="pricetag-outline" size={20} color={colors.tealDark} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={type.section}>Pays</Text>
-                <Text style={styles.addressText}>{price !== null ? formatMoney(price) : "No price set"}</Text>
-                <Text style={styles.addressHint}>{priceHint} · Tap to change</Text>
-              </View>
-              <Ionicons name="create-outline" size={22} color={colors.teal} />
-            </View>
-          </Card>
-        )}
-
-        <Card onPress={() => openInMaps(job.address)}>
-          <View style={styles.addressRow}>
-            <View style={styles.addressIcon}>
-              <Ionicons name="location" size={20} color={colors.tealDark} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={type.section}>Property</Text>
-              <Text style={styles.addressText}>{job.address}</Text>
-              <Text style={styles.addressHint}>Tap to open in Maps</Text>
-            </View>
-            <Ionicons name="navigate-circle-outline" size={26} color={colors.teal} />
-          </View>
+        {/* When, what it pays and where, in one card. Each row opens its editor (or Maps). */}
+        <Card style={styles.infoCard}>
+          {isOwner && !job.cancelled ? (
+            <InfoRow
+              icon="calendar-outline"
+              value={key ? formatDayHeading(key) : "No date yet"}
+              sub={formatTime(job.time) || "No set time"}
+              trailing="create-outline"
+              onPress={() => setShowWhen(true)}
+              label="Change date and time"
+            />
+          ) : null}
+          {isOwner && !job.cancelled && !isPending ? (
+            <InfoRow
+              icon="pricetag-outline"
+              value={price !== null ? formatDollars(price) : "No price"}
+              sub={priceHint}
+              trailing="create-outline"
+              onPress={() => setShowPrice(true)}
+              label="Change the price"
+              divider
+            />
+          ) : null}
+          <InfoRow
+            icon="location"
+            value={job.address}
+            trailing="navigate-circle-outline"
+            onPress={() => openInMaps(job.address)}
+            label="Open in Maps"
+            divider={isOwner && !job.cancelled}
+          />
         </Card>
 
         {!isPending && codes.length > 0 && !(isOwner || isMine || viewingAs) && !job.done && (
-          <Text style={styles.codesLocked}>Door codes show here once this cleaning is yours.</Text>
+          <Text style={styles.codesLocked}>Codes show once this cleaning is yours.</Text>
         )}
         {!isPending && codes.length > 0 && (isOwner || isMine || viewingAs) && (
           <Card>
@@ -1058,7 +1045,7 @@ export default function JobDetail() {
               ))}
             </View>
             <Text style={styles.codeHint}>
-              {copied ? `${copied} code copied` : "Tap a code to copy it"}
+              {copied ? `${copied} code copied` : "Tap to copy"}
             </Text>
           </Card>
         )}
@@ -1117,12 +1104,12 @@ export default function JobDetail() {
             ) : (
               <Text style={styles.timerHint}>
                 {viewingAs
-                  ? "You're viewing as a cleaner, so this job is read-only. Switch back to the owner to work it."
+                  ? "Read-only while viewing as a cleaner."
                   : canWork
-                  ? "Tap Start cleaning below when you arrive. The checklist pops up and the clock starts."
+                  ? "Tap Start cleaning when you arrive."
                   : job.assignedToName
-                    ? `Only ${job.assignedToName.split(" ")[0]} or the owner can start this timer.`
-                    : "Assign a cleaner to start tracking time."}
+                    ? `Only ${job.assignedToName.split(" ")[0]} or the owner can start this.`
+                    : "Assign a cleaner to track time."}
               </Text>
             )}
           </Card>
@@ -1153,7 +1140,7 @@ export default function JobDetail() {
             <View style={styles.finishNote}>
               <Ionicons name="cart-outline" size={17} color={colors.goldDark} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.finishNoteTitle}>Running low at the finish</Text>
+                <Text style={styles.finishNoteTitle}>Running low</Text>
                 <Text style={styles.finishNoteText}>{supplyList(job.lowSupplies)}</Text>
               </View>
             </View>
@@ -1203,7 +1190,41 @@ export default function JobDetail() {
   );
 }
 
+// One tappable line of the job's info card: an icon, the value, an optional
+// second line, and the icon for what tapping does.
+function InfoRow({ icon, value, sub, trailing, onPress, label, divider }: {
+  icon: keyof typeof Ionicons.glyphMap;
+  value: string;
+  sub?: string;
+  trailing: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  label: string;
+  divider?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.infoRow, divider && styles.infoDivider]}
+      onPress={onPress}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={`${value}. ${label}`}
+    >
+      <View style={styles.addressIcon}>
+        <Ionicons name={icon} size={19} color={colors.tealDark} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.addressText}>{value}</Text>
+        {sub ? <Text style={styles.addressHint}>{sub}</Text> : null}
+      </View>
+      <Ionicons name={trailing} size={22} color={colors.teal} />
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
+  infoCard: { paddingVertical: 4 },
+  infoRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10, minHeight: 56 },
+  infoDivider: { borderTopWidth: 1, borderTopColor: colors.bg },
   container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
   pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 12 },
   sheetHint: { fontSize: 14, color: colors.muted, marginBottom: 12 },

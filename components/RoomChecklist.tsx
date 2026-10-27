@@ -70,7 +70,7 @@ export function RoomChecklist({ items, canWork, closed, onToggle, roomsToAdd, on
         adding ? (
           <View style={styles.addPanel}>
             <Text style={styles.addTitle}>Add a room to this cleaning</Text>
-            <Text style={styles.addHint}>For a room this house&apos;s list is missing. Only this cleaning changes.</Text>
+            <Text style={styles.addHint}>Only this cleaning changes.</Text>
             {roomsToAdd.map(r => (
               <TouchableOpacity
                 key={r.base}

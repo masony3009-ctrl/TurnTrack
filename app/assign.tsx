@@ -142,7 +142,7 @@ export default function AssignScreen() {
     }
     Alert.alert(
       "Ask the crew",
-      `Send a notification to ${crew.length} cleaner${crew.length === 1 ? "" : "s"} about the ${openTotal} open cleaning${openTotal === 1 ? "" : "s"}? Tapping it shows them the open ones to take.`,
+      `Notify ${crew.length} cleaner${crew.length === 1 ? "" : "s"} about ${openTotal} open cleaning${openTotal === 1 ? "" : "s"}?`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -153,9 +153,9 @@ export default function AssignScreen() {
             setAsking(false);
             if (reached > 0) {
               tapSuccess();
-              Alert.alert("Sent", `It reached ${reached} phone${reached === 1 ? "" : "s"}. Cleanings they take show up with their color here.`);
+              Alert.alert("Sent", `Reached ${reached} phone${reached === 1 ? "" : "s"}.`);
             } else {
-              Alert.alert("Nobody got it", "None of the crew's phones could be reached (notifications off, or not signed in). Text them instead.");
+              Alert.alert("Nobody got it", "No phone could be reached. Text them instead.");
             }
           },
         },
@@ -167,7 +167,7 @@ export default function AssignScreen() {
     return (
       <View style={styles.container}>
         <ScreenHeader title="Assign cleanings" onBack={() => router.back()} />
-        <EmptyState icon="lock-closed-outline" title="Owner only" body="Only the owner hands out cleanings. Open cleanings show under Open on the Jobs tab." />
+        <EmptyState icon="lock-closed-outline" title="Owner only" body="Open cleanings are under Open on the Jobs tab." />
       </View>
     );
   }
@@ -216,12 +216,12 @@ export default function AssignScreen() {
             <Text style={styles.loadingText}>Loading cleanings…</Text>
           </View>
         ) : crew.length === 0 ? (
-          <EmptyState icon="people-outline" title="No cleaners yet" body="Add cleaners on the Team tab, then come back here to hand out the open cleanings." />
+          <EmptyState icon="people-outline" title="No cleaners yet" body="Add cleaners on the Team tab first." />
         ) : days.length === 0 ? (
           <EmptyState
             icon="checkmark-done-outline"
             title={`${RANGE_LABELS[range]} is covered`}
-            body={range === "later" ? "Nothing further out needs a cleaner yet." : "Every cleaning in this stretch has someone on it."}
+            body="Everyone's assigned."
           />
         ) : (
           days.map(day => (
@@ -272,7 +272,7 @@ export default function AssignScreen() {
 
       {jobs && openTotal > 0 && crew.length > 0 ? (
         <BottomBar>
-          <BrandButton label={asking ? "Sending…" : "Ask the crew to pick some up"} icon="megaphone-outline" variant="outline" onPress={askCrew} disabled={asking} />
+          <BrandButton label={asking ? "Sending…" : "Ask the crew"} icon="megaphone-outline" variant="outline" onPress={askCrew} disabled={asking} />
         </BottomBar>
       ) : null}
     </View>

@@ -5,15 +5,15 @@ import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacit
 import { tapSelect, tapSuccess } from "../../components/haptics";
 import { HouseSheet } from "../../components/HouseSheet";
 import { useProfile } from "../../components/ProfileProvider";
-import { BrandButton, Card, EmptyState, ErrorState, IconButton, Pill, ScreenHeader, SectionHeader } from "../../components/ui";
+import { EmptyState, ErrorState, IconButton, ScreenHeader, SectionHeader } from "../../components/ui";
 import { useProperties } from "../../components/useProperties";
 import { useSupplies } from "../../components/useSupplies";
 import { db } from "../../firebase";
 import {
-  deepCleanStatus, DEEP_CLEAN_EVERY, groupByHouse, hostOwed, houseMoney, OTHER_HOUSE, perCleaning, PERIOD_LABELS, periodRange, sumMoney,
+  deepCleanStatus, groupByHouse, hostOwed, houseMoney, OTHER_HOUSE, perCleaning, PERIOD_LABELS, periodRange, sumMoney,
   type DeepCleanStatus, type HouseMoney, type Period,
 } from "../../money";
-import { formatDuration, formatEntryDate, formatMoney } from "../../payroll";
+import { formatDollars, formatDuration, formatEntryDate } from "../../payroll";
 import { houseKey, patchRegistry, type Property, type RegistryChanges } from "../../properties";
 import { type SupplyReport } from "../../supplies";
 import { colors, radius, shadow } from "../../theme";
@@ -21,6 +21,7 @@ import { formatShortDate, todayKey } from "../../turnover";
 import { Job } from "../../types";
 
 const PERIODS: Period[] = ["month", "lastMonth", "year", "all"];
+const CHIP_LABELS: Record<Period, string> = { month: "Month", lastMonth: "Last month", year: "Year", all: "All" };
 
 type Row = {
   key: string;
@@ -33,20 +34,21 @@ type Row = {
   deep: DeepCleanStatus | null;
   owed: { amount: number; jobs: Job[] };
   supplies: SupplyReport | null;
-  // Every cleaning on record at the house.
-  total: number;
 };
 
-function needsAttention(r: Row): boolean {
-  if (!r.house) return false;
-  return !!r.supplies || !!r.deep?.due || r.owed.amount > 0 || !r.house.doorCode || (!r.house.price && r.total > 0);
-}
+type Flag = { text: string; tone: "warn" | "danger" | "muted" };
 
-function deepLine(d: DeepCleanStatus): string {
-  if (d.booked) return `Deep clean booked for ${formatShortDate(d.booked)}`;
-  const n = `${d.since} cleaning${d.since === 1 ? "" : "s"}`;
-  const base = d.lastDeep ? `${n} since the last deep clean (${formatShortDate(d.lastDeep)})` : `${n} and no deep clean on record`;
-  return d.due ? `${base} · time to pitch one to the host` : base;
+// Only what needs doing, as short as it can be said.
+function flagsOf(r: Row): Flag[] {
+  const out: Flag[] = [];
+  if (!r.house) return out;
+  if (r.owed.amount > 0) out.push({ text: `Owes ${formatDollars(r.owed.amount)}`, tone: "danger" });
+  if (r.deep?.due) out.push({ text: "Deep clean due", tone: "warn" });
+  else if (r.deep?.booked) out.push({ text: `Deep clean ${formatShortDate(r.deep.booked)}`, tone: "muted" });
+  if (r.supplies) out.push({ text: `Low on ${r.supplies.items.length}`, tone: "warn" });
+  if (!r.house.doorCode) out.push({ text: "No door code", tone: "warn" });
+  if (!r.house.price) out.push({ text: "No price", tone: "warn" });
+  return out;
 }
 
 export default function HousesScreen() {
@@ -81,29 +83,26 @@ export default function HousesScreen() {
       .map(g => ({
         key: g.key,
         house: g.house,
-        label: g.house ? g.house.short || g.house.name : "Other addresses",
+        label: g.house ? g.house.short || g.house.name : "Other clients",
         money: houseMoney(g, range),
         per: perCleaning(houseMoney(g, null)),
         deep: g.house ? deepCleanStatus(g.jobs, today) : null,
         owed: hostOwed(g.jobs as Job[], g.house),
         supplies: suppliesByKey.get(g.key) || null,
-        total: g.jobs.length,
       }))
       .sort((a, b) =>
         Number(a.key === OTHER_HOUSE) - Number(b.key === OTHER_HOUSE) ||
         b.money.revenue - a.money.revenue ||
         b.money.cleanings - a.money.cleanings ||
-        b.total - a.total ||
         a.label.localeCompare(b.label)
       );
   }, [groups, period, today, suppliesByKey]);
   const totals = useMemo(() => sumMoney(rows.map(r => r.money)), [rows]);
-  const attention = rows.filter(needsAttention).length;
   const houseCount = rows.filter(r => r.house).length;
 
   const saveHouse = async (name: string, changes: RegistryChanges) => {
     if (adding && properties.some(p => houseKey(p.name) === houseKey(name))) {
-      Alert.alert("Already on the list", `There's already a house called ${name}. Tap it to edit it instead.`);
+      Alert.alert("Already on the list", `${name} is already a house. Tap it to edit.`);
       return;
     }
     setSaving(true);
@@ -120,7 +119,7 @@ export default function HousesScreen() {
       setAdding(false);
     } catch (e) {
       console.warn("save house failed:", e);
-      Alert.alert("Couldn't save the house", "Nothing changed. Saving a house needs a connection; check your signal and try again.");
+      Alert.alert("Couldn't save", "Nothing changed. Check your signal and try again.");
     }
     setSaving(false);
   };
@@ -131,22 +130,22 @@ export default function HousesScreen() {
       await updateDoc(doc(db, "settings", "supplies"), new FieldPath("houses", report.key, "items"), arrayRemove(item));
     } catch (e) {
       console.warn("restock failed:", e);
-      Alert.alert("Couldn't update the list", "It's still on the shopping list. Check your connection and try again.");
+      Alert.alert("Couldn't update the list", "Check your signal and try again.");
     }
   };
 
   const restockAll = (report: SupplyReport) => {
-    Alert.alert("All restocked?", `Clear everything on ${report.name}'s list?`, [
+    Alert.alert("All restocked?", `Clear ${report.name}'s list?`, [
       { text: "Cancel", style: "cancel" },
       {
-        text: "Clear it",
+        text: "Clear",
         onPress: async () => {
           try {
             await updateDoc(doc(db, "settings", "supplies"), new FieldPath("houses", report.key), deleteField());
             tapSuccess();
           } catch (e) {
             console.warn("restock all failed:", e);
-            Alert.alert("Couldn't update the list", "It's still on the shopping list. Check your connection and try again.");
+            Alert.alert("Couldn't update the list", "Check your signal and try again.");
           }
         },
       },
@@ -163,39 +162,40 @@ export default function HousesScreen() {
         tapSuccess();
       } catch (e) {
         console.warn("mark host paid failed:", e);
-        Alert.alert("Couldn't mark it paid", "The cleanings still show as owed. Check your connection and try again.");
+        Alert.alert("Couldn't mark it paid", "Check your signal and try again.");
       }
     };
     const n = row.owed.jobs.length;
-    Alert.alert(
-      "Host paid?",
-      `Mark ${formatMoney(row.owed.amount)} for ${n} cleaning${n === 1 ? "" : "s"} at ${row.label} as paid?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Paid by Zelle", onPress: () => settle("Zelle") },
-        { text: "Paid by check", onPress: () => settle("Check") },
-        { text: "Paid in cash", onPress: () => settle("Cash") },
-      ]
-    );
+    Alert.alert(`${row.label} paid?`, `${formatDollars(row.owed.amount)} for ${n} cleaning${n === 1 ? "" : "s"}.`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Zelle", onPress: () => settle("Zelle") },
+      { text: "Check", onPress: () => settle("Check") },
+      { text: "Cash", onPress: () => settle("Cash") },
+    ]);
   };
 
   if (!isOwner) {
     return (
       <View style={styles.container}>
         <ScreenHeader title="Houses" />
-        <EmptyState icon="lock-closed-outline" title="Owner only" body="House prices and earnings are only on the owner's profile." />
+        <EmptyState icon="lock-closed-outline" title="Owner only" body="Only the owner sees house prices and earnings." />
       </View>
     );
   }
 
   const untimed = totals.cleanings - totals.timed;
   const margin = totals.revenue > 0 ? Math.round((totals.profit / totals.revenue) * 100) : null;
+  const notes = [
+    totals.unpriced > 0 ? `${totals.unpriced} without a price` : null,
+    untimed > 0 && totals.timed > 0 ? `Pay counts the ${totals.timed} timed cleaning${totals.timed === 1 ? "" : "s"} of ${totals.cleanings}` : null,
+    untimed > 0 && totals.timed === 0 ? "No timed cleanings, so no pay counted" : null,
+  ].filter(Boolean);
 
   return (
     <View style={styles.container}>
       <ScreenHeader
         title="Houses"
-        subtitle={jobs ? `${houseCount} house${houseCount === 1 ? "" : "s"}${attention ? ` · ${attention} need${attention === 1 ? "s" : ""} attention` : ""}` : "Loading houses…"}
+        subtitle={jobs ? `${houseCount} house${houseCount === 1 ? "" : "s"}` : "Loading houses…"}
         right={<IconButton icon="add" onPress={() => { setEditing(null); setAdding(true); }} label="Add a house" />}
       />
 
@@ -209,7 +209,7 @@ export default function HousesScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         {loadError && !jobs ? (
-          <ErrorState title="Couldn't load the houses" body={`Check your connection and try again. (${loadError})`} />
+          <ErrorState title="Couldn't load the houses" body={`Check your signal. (${loadError})`} />
         ) : !jobs ? (
           <View style={styles.loading}>
             <ActivityIndicator color={colors.teal} />
@@ -219,38 +219,36 @@ export default function HousesScreen() {
           <>
             {supplies.length > 0 ? (
               <>
-                <SectionHeader title="Shopping list" count={supplies.length} tone="warn" />
-                {supplies.map(report => (
-                  <Card key={report.key} tone="gold">
-                    <View style={styles.rowTop}>
-                      <Text style={styles.houseName} numberOfLines={1}>{report.name}</Text>
-                      <TouchableOpacity onPress={() => restockAll(report)} hitSlop={8} accessibilityRole="button">
-                        <Text style={styles.link}>All restocked</Text>
-                      </TouchableOpacity>
-                    </View>
-                    <Text style={styles.sub}>
-                      Flagged {report.by ? `by ${report.by.split(" ")[0]} ` : ""}{report.at ? formatEntryDate(report.at) : ""} · tap an item once it&apos;s restocked
-                    </Text>
-                    <View style={styles.itemRow}>
-                      {report.items.map(item => (
-                        <TouchableOpacity
-                          key={item}
-                          style={styles.item}
-                          onPress={() => restockItem(report, item)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${item}. Tap once it's restocked`}
-                        >
-                          <Ionicons name="cart-outline" size={14} color={colors.goldDark} />
-                          <Text style={styles.itemText}>{item}</Text>
+                <SectionHeader title="Shopping list · tap when restocked" count={supplies.length} tone="warn" />
+                <View style={[styles.list, styles.listGold]}>
+                  {supplies.map((report, i) => (
+                    <View key={report.key} style={[styles.shopRow, i > 0 && styles.divider]}>
+                      <View style={styles.rowTop}>
+                        <Text style={styles.name} numberOfLines={1}>{report.name}</Text>
+                        <TouchableOpacity onPress={() => restockAll(report)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Clear ${report.name}'s list`}>
+                          <Text style={styles.link}>Clear</Text>
                         </TouchableOpacity>
-                      ))}
+                      </View>
+                      <View style={styles.itemRow}>
+                        {report.items.map(item => (
+                          <TouchableOpacity
+                            key={item}
+                            style={styles.item}
+                            onPress={() => restockItem(report, item)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${item}. Tap once it's restocked`}
+                          >
+                            <Text style={styles.itemText}>{item}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                      <Text style={styles.meta}>{[report.by?.split(" ")[0], report.at ? formatEntryDate(report.at) : null].filter(Boolean).join(" · ")}</Text>
                     </View>
-                  </Card>
-                ))}
+                  ))}
+                </View>
               </>
             ) : null}
 
-            <SectionHeader title="Money" />
             <View style={styles.periodRow}>
               {PERIODS.map(p => (
                 <TouchableOpacity
@@ -260,45 +258,40 @@ export default function HousesScreen() {
                   accessibilityRole="tab"
                   accessibilityState={{ selected: period === p }}
                 >
-                  <Text style={[styles.periodText, period === p && styles.periodTextOn]} numberOfLines={1}>{PERIOD_LABELS[p]}</Text>
+                  <Text style={[styles.periodText, period === p && styles.periodTextOn]} numberOfLines={1}>{CHIP_LABELS[p]}</Text>
                 </TouchableOpacity>
               ))}
             </View>
             <View style={[styles.hero, shadow.card]}>
               <Text style={styles.heroLabel}>EARNED · {PERIOD_LABELS[period].toUpperCase()}</Text>
-              <Text style={styles.heroAmount}>{formatMoney(totals.revenue)}</Text>
-              <Text style={styles.heroSub}>
-                {totals.cleanings} cleaning{totals.cleanings === 1 ? "" : "s"} done · pay {formatMoney(totals.labor)} · {totals.revenue > 0
-                  ? `profit ${formatMoney(totals.profit)}${margin !== null ? ` (${margin}%)` : ""}`
-                  : "set house prices to see profit"}
-              </Text>
+              <Text style={styles.heroAmount}>{formatDollars(totals.revenue)}</Text>
+              <View style={styles.heroStats}>
+                <HeroStat label="Cleanings" value={String(totals.cleanings)} />
+                <HeroStat label="Pay" value={formatDollars(Math.round(totals.labor))} />
+                <HeroStat label={margin !== null ? `Profit · ${margin}%` : "Profit"} value={totals.revenue > 0 ? formatDollars(Math.round(totals.profit)) : "—"} />
+              </View>
               {totals.booked > 0 ? (
-                <Text style={styles.heroSub}>
-                  {totals.booked} more on the schedule{totals.bookedRevenue > 0 ? ` · ${formatMoney(totals.bookedRevenue)} to come` : ""}
-                </Text>
+                <Text style={styles.heroSub}>+ {totals.booked} booked{totals.bookedRevenue > 0 ? ` · ${formatDollars(totals.bookedRevenue)}` : ""}</Text>
               ) : null}
             </View>
-            {totals.unpriced > 0 || untimed > 0 ? (
-              <View style={styles.gaps}>
-                <Ionicons name="information-circle-outline" size={16} color={colors.muted} />
-                <Text style={styles.gapsText}>
-                  {[
-                    totals.unpriced > 0 ? `${totals.unpriced} finished cleaning${totals.unpriced === 1 ? " has" : "s have"} no price, so ${totals.unpriced === 1 ? "it isn't" : "they aren't"} in the total. Tap a house to set its price.` : null,
-                    untimed > 0 ? `${untimed} ran without the timer, so ${untimed === 1 ? "its" : "their"} pay isn't counted and profit reads high.` : null,
-                  ].filter(Boolean).join(" ")}
-                </Text>
-              </View>
-            ) : null}
+            {notes.length ? <Text style={styles.notes}>{notes.join(" · ")}</Text> : null}
 
             <SectionHeader title="By house" count={houseCount} />
             {rows.length === 0 ? (
-              <EmptyState icon="home-outline" title="No houses yet" body="Tap + to add a house, with its price and door codes." />
+              <EmptyState icon="home-outline" title="No houses yet" body="Tap + to add one." />
             ) : (
-              rows.map(row => <HouseCard key={row.key} row={row} onPress={row.house ? () => { setAdding(false); setEditing(row.house); } : undefined} onMarkPaid={() => markHostPaid(row)} />)
+              <View style={styles.list}>
+                {rows.map((row, i) => (
+                  <HouseRow
+                    key={row.key}
+                    row={row}
+                    first={i === 0}
+                    onPress={row.house ? () => { setAdding(false); setEditing(row.house); } : undefined}
+                    onMarkPaid={() => markHostPaid(row)}
+                  />
+                ))}
+              </View>
             )}
-            <Text style={styles.footnote}>
-              Pay and time per cleaning average every cleaning that had the timer running. A house is flagged for a deep clean after {DEEP_CLEAN_EVERY} regular cleanings without one.
-            </Text>
           </>
         )}
       </ScrollView>
@@ -306,55 +299,60 @@ export default function HousesScreen() {
   );
 }
 
-function HouseCard({ row, onPress, onMarkPaid }: { row: Row; onPress?: () => void; onMarkPaid: () => void }) {
-  const { house, money, per, deep, owed } = row;
-  const losing = per.margin !== null && per.margin < 0;
+function HeroStat({ label, value }: { label: string; value: string }) {
   return (
-    <Card onPress={onPress}>
-      <View style={styles.rowTop}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.houseName} numberOfLines={1}>{row.label}</Text>
-          <Text style={styles.sub} numberOfLines={1}>
-            {house
-              ? [
-                house.bedrooms ? `${house.bedrooms} bd` : null,
-                house.bathrooms ? `${house.bathrooms} ba` : null,
-                house.price ? `${formatMoney(house.price)} a cleaning` : null,
-              ].filter(Boolean).join(" · ") || "Tap to add details"
-              : "One-off cleanings at addresses not on the house list"}
-          </Text>
-        </View>
-        <View style={styles.moneyCol}>
-          <Text style={styles.money}>{formatMoney(money.revenue)}</Text>
-          <Text style={styles.moneySub}>{money.cleanings} done{money.booked ? ` · ${money.booked} to go` : ""}</Text>
-        </View>
-      </View>
+    <View style={styles.heroStat}>
+      <Text style={styles.heroStatValue} numberOfLines={1}>{value}</Text>
+      <Text style={styles.heroStatLabel}>{label}</Text>
+    </View>
+  );
+}
 
-      <Text style={[styles.line, per.minutes === null && { color: colors.faint }]}>
-        {per.minutes === null
-          ? "No timed cleanings yet, so no average time or pay"
-          : `Avg ${formatDuration(per.minutes)} · ${formatMoney(per.labor || 0)} pay`}
-        {per.margin !== null ? (
-          <Text style={[styles.margin, losing && { color: colors.danger }]}>
-            {losing ? ` · loses ${formatMoney(-per.margin)} a cleaning` : ` · ${formatMoney(per.margin)} left a cleaning`}
-          </Text>
+// One line per house: what it earned, what a cleaning there is worth, and
+// anything that needs doing. Tap to edit the house.
+function HouseRow({ row, first, onPress, onMarkPaid }: { row: Row; first: boolean; onPress?: () => void; onMarkPaid: () => void }) {
+  const { house, money, per } = row;
+  const losing = per.margin !== null && per.margin < 0;
+  const detail = [
+    `${money.cleanings} done`,
+    money.booked ? `${money.booked} booked` : null,
+    per.minutes !== null ? formatDuration(per.minutes) : house?.price ? `${formatDollars(house.price)} each` : null,
+  ].filter(Boolean).join(" · ");
+  const flags = flagsOf(row);
+  const body = (
+    <View style={[styles.row, !first && styles.divider]}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.name} numberOfLines={1}>{row.label}</Text>
+        <Text style={styles.meta} numberOfLines={2}>
+          {detail}
+          {per.margin !== null ? (
+            <Text style={[styles.margin, losing && { color: colors.danger }]}>
+              {losing ? ` · loses ${formatDollars(Math.round(-per.margin))}` : ` · ${formatDollars(Math.round(per.margin))} kept`}
+            </Text>
+          ) : null}
+        </Text>
+        {flags.length ? (
+          <View style={styles.flagRow}>
+            {flags.map(f => (
+              <Text key={f.text} style={[styles.flag, f.tone === "danger" ? styles.flagDanger : f.tone === "warn" ? styles.flagWarn : styles.flagMuted]}>{f.text}</Text>
+            ))}
+            {row.owed.amount > 0 ? (
+              <TouchableOpacity onPress={onMarkPaid} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Mark ${row.label} paid`}>
+                <Text style={styles.link}>Mark paid</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         ) : null}
-      </Text>
-      {deep ? <Text style={[styles.line, deep.due && { color: colors.goldDark, fontWeight: "700" }]}>{deepLine(deep)}</Text> : null}
-
-      {house ? (
-        <View style={styles.pillRow}>
-          {!house.price && row.total > 0 ? <Pill label="No price" tone="gold" icon="pricetag-outline" /> : null}
-          {!house.doorCode ? <Pill label="No door code" tone="gold" icon="keypad-outline" /> : null}
-          {deep?.due ? <Pill label="Deep clean due" tone="gold" icon="sparkles-outline" /> : null}
-          {row.supplies ? <Pill label={`Low on ${row.supplies.items.length}`} tone="gold" icon="cart-outline" /> : null}
-          {owed.amount > 0 ? <Pill label={`Host owes ${formatMoney(owed.amount)}`} tone="danger" icon="cash-outline" /> : null}
-        </View>
-      ) : null}
-      {owed.amount > 0 ? (
-        <BrandButton label={`Mark ${formatMoney(owed.amount)} paid`} icon="checkmark-circle" variant="outline" compact onPress={onMarkPaid} style={{ marginTop: 10, alignSelf: "flex-start" }} />
-      ) : null}
-    </Card>
+      </View>
+      <Text style={[styles.money, money.revenue === 0 && { color: colors.faint }]}>{formatDollars(money.revenue)}</Text>
+      {onPress ? <Ionicons name="chevron-forward" size={16} color={colors.faint} /> : null}
+    </View>
+  );
+  if (!onPress) return body;
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.7} accessibilityRole="button" accessibilityHint="Edit this house">
+      {body}
+    </TouchableOpacity>
   );
 }
 
@@ -362,35 +360,40 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
   loading: { alignItems: "center", paddingVertical: 48, gap: 10 },
   loadingText: { fontSize: 14, color: colors.muted },
-  rowTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10 },
-  houseName: { fontSize: 16.5, fontWeight: "700", color: colors.ink, flexShrink: 1 },
-  sub: { fontSize: 12.5, color: colors.muted, marginTop: 2 },
+  list: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, marginBottom: 12, ...shadow.card },
+  listGold: { borderColor: colors.gold, backgroundColor: colors.goldSoft },
+  divider: { borderTopWidth: 1, borderTopColor: colors.line },
+  row: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 11, minHeight: 52 },
+  shopRow: { paddingVertical: 11 },
+  rowTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  name: { fontSize: 15, fontWeight: "700", color: colors.ink, flexShrink: 1 },
+  meta: { fontSize: 12.5, color: colors.muted, marginTop: 2 },
+  margin: { fontWeight: "700", color: colors.tealDark },
+  money: { fontSize: 15.5, fontWeight: "700", color: colors.tealDark },
   link: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
-  itemRow: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 10 },
-  item: {
-    flexDirection: "row", alignItems: "center", gap: 5, minHeight: 36, paddingHorizontal: 11,
-    borderRadius: radius.pill, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.gold,
-  },
-  itemText: { fontSize: 13.5, fontWeight: "600", color: colors.goldDark },
+  flagRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 5 },
+  flag: { fontSize: 11.5, fontWeight: "700", paddingHorizontal: 7, paddingVertical: 2, borderRadius: radius.pill, overflow: "hidden" },
+  flagWarn: { color: colors.goldDark, backgroundColor: colors.goldSoft },
+  flagDanger: { color: colors.danger, backgroundColor: colors.dangerSoft },
+  flagMuted: { color: colors.muted, backgroundColor: colors.bg },
+  itemRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
+  item: { minHeight: 34, paddingHorizontal: 11, borderRadius: radius.pill, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.gold, justifyContent: "center" },
+  itemText: { fontSize: 13, fontWeight: "600", color: colors.goldDark },
   periodRow: { flexDirection: "row", gap: 6, marginBottom: 10 },
   periodChip: {
-    flex: 1, minHeight: 38, paddingHorizontal: 6, borderRadius: radius.pill, borderWidth: 1,
+    flex: 1, minHeight: 36, paddingHorizontal: 6, borderRadius: radius.pill, borderWidth: 1,
     borderColor: colors.line, backgroundColor: colors.card, alignItems: "center", justifyContent: "center",
   },
   periodChipOn: { backgroundColor: colors.dark, borderColor: colors.dark },
   periodText: { fontSize: 12.5, fontWeight: "600", color: colors.muted },
   periodTextOn: { color: colors.white },
-  hero: { backgroundColor: colors.dark, borderRadius: radius.lg, padding: 20, marginBottom: 10 },
+  hero: { backgroundColor: colors.dark, borderRadius: radius.lg, padding: 18, marginBottom: 8 },
   heroLabel: { fontSize: 11, fontWeight: "700", color: "#9FB4BE", letterSpacing: 1.5 },
-  heroAmount: { fontSize: 34, fontWeight: "700", color: colors.white, marginTop: 4 },
-  heroSub: { fontSize: 13, color: "#B9CAD2", marginTop: 4, lineHeight: 18 },
-  gaps: { flexDirection: "row", gap: 7, paddingHorizontal: 4, marginBottom: 6 },
-  gapsText: { flex: 1, fontSize: 12.5, color: colors.muted, lineHeight: 18 },
-  moneyCol: { alignItems: "flex-end" },
-  money: { fontSize: 17, fontWeight: "700", color: colors.tealDark },
-  moneySub: { fontSize: 12, color: colors.muted, marginTop: 1 },
-  line: { fontSize: 13, color: colors.ink, marginTop: 8, lineHeight: 18 },
-  margin: { fontWeight: "700", color: colors.tealDark },
-  pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 },
-  footnote: { fontSize: 12, color: colors.faint, lineHeight: 17, marginTop: 6, paddingHorizontal: 4 },
+  heroAmount: { fontSize: 32, fontWeight: "700", color: colors.white, marginTop: 2 },
+  heroStats: { flexDirection: "row", gap: 8, marginTop: 10 },
+  heroStat: { flex: 1, backgroundColor: "rgba(255,255,255,0.07)", borderRadius: radius.sm, paddingVertical: 7, paddingHorizontal: 9 },
+  heroStatValue: { fontSize: 14, fontWeight: "700", color: colors.white },
+  heroStatLabel: { fontSize: 11, color: "#9FB4BE", marginTop: 1 },
+  heroSub: { fontSize: 12.5, color: "#B9CAD2", marginTop: 8 },
+  notes: { fontSize: 12, color: colors.muted, paddingHorizontal: 4, marginBottom: 4 },
 });

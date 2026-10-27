@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatMoney, paymentsOf, weekStartMs, workedBetween } from "../payroll.ts";
+import { formatDollars, formatMoney, paymentsOf, weekStartMs, workedBetween } from "../payroll.ts";
+
+test("formatDollars drops empty cents and groups thousands", () => {
+  assert.equal(formatDollars(42840), "$42,840");
+  assert.equal(formatDollars(180), "$180");
+  assert.equal(formatDollars(304.58), "$304.58");
+  assert.equal(formatDollars(1234567.5), "$1,234,567.50");
+  assert.equal(formatDollars(-12), "-$12");
+  assert.equal(formatDollars(0), "$0");
+});
 
 test("formatMoney puts the minus sign before the dollar sign", () => {
   assert.equal(formatMoney(150), "$150.00");
