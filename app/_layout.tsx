@@ -7,7 +7,7 @@ import { useEffect, useRef } from "react";
 import { ActivityIndicator, AppState, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { ProfileGate } from "../components/ProfileGate";
 import { ProfileProvider, useProfile } from "../components/ProfileProvider";
-import { jobIdFromResponse } from "../notifications";
+import { filterFromResponse, jobIdFromResponse } from "../notifications";
 import { cleanerColor, colors, radius, shadow, type } from "../theme";
 
 function Splash({ message }: { message?: string }) {
@@ -32,19 +32,21 @@ function useNotificationTaps(ready: boolean) {
     if (Platform.OS === "web" || !ready) return;
 
     // navigate() lands on the existing job screen if it's already on top
-    // instead of stacking a second copy.
-    const open = (jobId: string | null) => {
+    // instead of stacking a second copy. A notification about several
+    // cleanings opens the Jobs list on the matching filter instead.
+    const open = (response: Notifications.NotificationResponse | null) => {
+      const jobId = jobIdFromResponse(response);
+      const filter = filterFromResponse(response);
       if (jobId) router.navigate({ pathname: "/job", params: { id: jobId } });
+      else if (filter) router.navigate({ pathname: "/", params: { filter, at: String(Date.now()) } });
     };
 
-    const sub = Notifications.addNotificationResponseReceivedListener(response => {
-      open(jobIdFromResponse(response));
-    });
+    const sub = Notifications.addNotificationResponseReceivedListener(open);
 
     if (!handledCold.current) {
       handledCold.current = true;
       Notifications.getLastNotificationResponseAsync()
-        .then(response => open(jobIdFromResponse(response)))
+        .then(open)
         .catch(() => {});
     }
 
@@ -88,6 +90,7 @@ function GatedApp() {
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="job" />
+        <Stack.Screen name="assign" />
       </Stack>
       <ViewingAsBanner />
     </View>

@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { addDoc, collection, deleteDoc, doc, onSnapshot, setDoc, updateDoc } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
@@ -15,11 +15,15 @@ import { withTime } from "../../jobTime";
 import { formatClockTime } from "../../payroll";
 import { type Property } from "../../properties";
 import { cleanerColor, colors, radius, unassignedColor } from "../../theme";
-import { daysFromToday, daysLeftInWeek, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, HIDE_AFTER_DAYS, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate } from "../../turnover";
+import { daysFromToday, daysLeftInWeek, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, HIDE_AFTER_DAYS, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate, todayKey } from "../../turnover";
 import { checklistProgress, currentRoom, DEFAULT_CHECKLIST, legacyItems, templateFromDoc, templateStats } from "../../checklist";
+import { isOpenJob } from "../../assign";
 import { Employee, Job, newJobDoc, parseChecklistText } from "../../types";
 
 type Section = { group: JobGroup; jobs: Job[] };
+
+// What a cleaner's list shows: everything, their own, or the ones nobody has.
+type Scope = "all" | "mine" | "open";
 
 // Picked from a list rather than typed, so the same kind of job is always
 // spelled the same way.
@@ -42,12 +46,14 @@ export default function JobsScreen() {
   const [newSameDayTurnover, setNewSameDayTurnover] = useState(false);
   const [newTime, setNewTime] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [mineOnly, setMineOnly] = useState(false);
+  const [scope, setScope] = useState<Scope>("all");
   const [showCancelled, setShowCancelled] = useState(false);
   const [showChecklistEditor, setShowChecklistEditor] = useState(false);
   const [checklistText, setChecklistText] = useState("");
   const [checklistTemplate, setChecklistTemplate] = useState<string[]>(DEFAULT_CHECKLIST);
   const router = useRouter();
+  // Set by a tapped notification about several cleanings ("open", "mine").
+  const { filter, at } = useLocalSearchParams<{ filter?: string; at?: string }>();
   const properties = useProperties();
   const { state, switchProfile, viewAs, employees, deviceId } = useProfile();
   const isOwner = state.status === "owner";
@@ -56,6 +62,10 @@ export default function JobsScreen() {
   const firstName = state.status === "cleaner" ? state.employee.name.split(" ")[0] : null;
 
   const push = usePushRegistration(deviceId);
+
+  useEffect(() => {
+    if (filter === "open" || filter === "mine") setScope(filter);
+  }, [filter, at]);
 
   // The owner's checklist template lives at settings/checklist.
   useEffect(() => {
@@ -180,6 +190,7 @@ export default function JobsScreen() {
 
   const openMore = () => {
     Alert.alert("More", undefined, [
+      { text: "Assign cleanings", onPress: () => router.push("/assign") },
       { text: "Edit cleaning checklist", onPress: openChecklistEditor },
       { text: "Send a test notification", onPress: sendTest },
       { text: "Close", style: "cancel" },
@@ -274,11 +285,15 @@ export default function JobsScreen() {
   const weekCount = upcoming.filter(j => (daysFromToday(j) as number) <= weekLeft).length;
   const unassignedCount = upcoming.filter(j => !j.assignedTo).length;
   const mineCount = selfId ? upcoming.filter(j => j.assignedTo === selfId).length : 0;
+  const today = todayKey();
+  const openJobs = useMemo(() => roleJobs.filter(j => isOpenJob(j, today)), [roleJobs, today]);
 
   const viewingCancelled = isOwner && showCancelled;
   const visibleJobs = viewingCancelled
     ? cancelledJobs
-    : selfId && mineOnly ? roleJobs.filter(j => j.assignedTo === selfId) : roleJobs;
+    : selfId && scope === "mine" ? roleJobs.filter(j => j.assignedTo === selfId)
+    : selfId && scope === "open" ? openJobs
+    : roleJobs;
 
   const sections: Section[] = useMemo(() => {
     if (viewingCancelled) return [];
@@ -340,14 +355,15 @@ export default function JobsScreen() {
         {selfId ? (
           <Stat label="Mine" value={mineCount} />
         ) : (
-          <Stat label="Unassigned" value={unassignedCount} warn={unassignedCount > 0} />
+          <Stat label="Unassigned" value={unassignedCount} warn={unassignedCount > 0} onPress={() => router.push("/assign")} />
         )}
       </View>
 
       {selfId && (
         <View style={styles.filterRow}>
-          <FilterChip label="All jobs" active={!mineOnly} onPress={() => { tapSelect(); setMineOnly(false); }} />
-          <FilterChip label="My jobs" active={mineOnly} onPress={() => { tapSelect(); setMineOnly(true); }} />
+          <FilterChip label="All jobs" active={scope === "all"} onPress={() => { tapSelect(); setScope("all"); }} />
+          <FilterChip label="My jobs" active={scope === "mine"} onPress={() => { tapSelect(); setScope("mine"); }} />
+          <FilterChip label={`Open${openJobs.length ? ` (${openJobs.length})` : ""}`} active={scope === "open"} onPress={() => { tapSelect(); setScope("open"); }} />
         </View>
       )}
       {isOwner && (
@@ -449,7 +465,13 @@ export default function JobsScreen() {
             </>
           )
         ) : visibleJobs.length === 0 ? (
-          mineOnly && roleJobs.length > 0 ? (
+          scope === "open" ? (
+            <EmptyState
+              icon="checkmark-done-outline"
+              title="No open cleanings"
+              body="Every upcoming cleaning has someone on it. When one opens up, it shows here for you to take."
+            />
+          ) : scope === "mine" && roleJobs.length > 0 ? (
             <EmptyState
               icon="person-outline"
               title="Nothing assigned to you yet"
@@ -481,12 +503,26 @@ export default function JobsScreen() {
   );
 }
 
-function Stat({ label, value, warn }: { label: string; value: number; warn?: boolean }) {
-  return (
-    <View style={[styles.statChip, warn && styles.statChipWarn]} accessible accessibilityLabel={`${label}: ${value}`}>
+function Stat({ label, value, warn, onPress }: { label: string; value: number; warn?: boolean; onPress?: () => void }) {
+  const body = (
+    <>
       <Text style={[styles.statNumber, warn && { color: colors.goldDark }]}>{value}</Text>
-      <Text style={[styles.statLabel, warn && { color: colors.goldDark }]}>{label}</Text>
-    </View>
+      <Text style={[styles.statLabel, warn && { color: colors.goldDark }]}>{label}{onPress ? " ›" : ""}</Text>
+    </>
+  );
+  if (!onPress) {
+    return <View style={[styles.statChip, warn && styles.statChipWarn]} accessible accessibilityLabel={`${label}: ${value}`}>{body}</View>;
+  }
+  return (
+    <TouchableOpacity
+      style={[styles.statChip, warn && styles.statChipWarn]}
+      onPress={onPress}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}: ${value}. Opens the assign screen`}
+    >
+      {body}
+    </TouchableOpacity>
   );
 }
 

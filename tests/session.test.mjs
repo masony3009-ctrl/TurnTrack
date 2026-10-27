@@ -40,15 +40,15 @@ test("end times run every half hour from just after the start until now", () => 
 });
 
 test("a second session adds to the first", () => {
-  const first = { employeeName: "Shane Stewart", minutes: 120, earned: 50 };
+  const first = { employeeName: "Sam Rivera", minutes: 120, earned: 50 };
   assert.deepEqual(mergeSummary(null, first), first);
-  assert.deepEqual(mergeSummary(first, { employeeName: "Shane Stewart", minutes: 30, earned: 12.5 }), {
-    employeeName: "Shane Stewart", minutes: 150, earned: 62.5,
+  assert.deepEqual(mergeSummary(first, { employeeName: "Sam Rivera", minutes: 30, earned: 12.5 }), {
+    employeeName: "Sam Rivera", minutes: 150, earned: 62.5,
   });
   const two = mergeSummary(first, { employeeName: "Ana Diaz", minutes: 60, earned: 20.1 });
-  assert.equal(two.employeeName, "Shane Stewart & Ana Diaz");
+  assert.equal(two.employeeName, "Sam Rivera & Ana Diaz");
   assert.equal(two.earned, 70.1);
-  assert.equal(mergeSummary(two, { employeeName: "Ana Diaz", minutes: 1, earned: 0.3 }).employeeName, "Shane Stewart & Ana Diaz");
+  assert.equal(mergeSummary(two, { employeeName: "Ana Diaz", minutes: 1, earned: 0.3 }).employeeName, "Sam Rivera & Ana Diaz");
 });
 
 test("starting a finished or future cleaning needs a second look", () => {

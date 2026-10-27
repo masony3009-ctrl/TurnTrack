@@ -51,6 +51,15 @@ export type Job = {
   // How many steps "check all" ticked in one tap at the finish, so the owner can
   // tell a list worked through from one ticked off at the end.
   checkedAtFinish?: number | null;
+  // Supplies the cleaner flagged as running low at the finish.
+  lowSupplies?: string[] | null;
+  // What this cleaning pays, when it differs from the house's regular price
+  // (deep cleans, one-offs). Unset = the house price.
+  price?: number | null;
+  // For houses whose host pays us directly: whether this one has been paid.
+  hostPaid?: boolean;
+  hostPaidAt?: number | null;
+  hostPaidMethod?: string | null;
   // Website requests arrive as pending: the owner confirms them into real
   // jobs. Cleaners never see a pending job.
   pending?: boolean;

@@ -3,9 +3,11 @@ import * as Notifications from "expo-notifications";
 import { collection, deleteField, doc, getDocs, query, setDoc, where } from "firebase/firestore";
 import { Platform } from "react-native";
 import { db } from "./firebase";
+import { digestBody } from "./assign";
 import { reminderAt, withTime } from "./jobTime";
 import { formatClockTime } from "./payroll";
-import { hasSameDayTurnover, jobDate, jobDateKey } from "./turnover";
+import { finishReportText } from "./supplies";
+import { formatShortDate, hasSameDayTurnover, jobDate, jobDateKey, sortByDate } from "./turnover";
 import { Job } from "./types";
 
 const isWeb = Platform.OS === "web";
@@ -122,11 +124,24 @@ export async function sendPushToOwners(message: PushMessage): Promise<number> {
   return sendPushToDevices(where("role", "==", "owner"), message);
 }
 
-async function sendPushToDevices(filter: ReturnType<typeof where>, message: PushMessage): Promise<number> {
+// Sends a push to every phone signed in as one of these cleaners (the active
+// crew). Returns how many phones took it. Never throws.
+export async function sendPushToCrew(employeeIds: string[], message: PushMessage): Promise<number> {
+  const crew = new Set(employeeIds);
+  return sendPushToDevices(where("role", "==", "cleaner"), message, data => crew.has(data.employeeId));
+}
+
+async function sendPushToDevices(
+  filter: ReturnType<typeof where>,
+  message: PushMessage,
+  keep: (data: Record<string, any>) => boolean = () => true
+): Promise<number> {
   try {
     const snap = await getDocs(query(collection(db, "devices"), filter));
     const tokens = snap.docs
-      .map(d => d.data().pushToken)
+      .map(d => d.data())
+      .filter(keep)
+      .map(data => data.pushToken)
       .filter((t): t is string => typeof t === "string" && t.startsWith("ExponentPushToken") && t !== ownToken);
     if (tokens.length === 0) return 0;
 
@@ -220,14 +235,41 @@ export function discardedMessage(job: Job, by: string | null, minutes: number, h
   };
 }
 
-// The note a cleaner left when finishing: damage, low supplies, skipped steps.
-export function finishNoteMessage(job: Job, note: { text: string; by: string | null; skipped: number }, house: string): PushMessage {
-  const who = note.by ? note.by.split(" ")[0] : "The cleaner";
-  const skipped = note.skipped > 0 ? ` · ${note.skipped} step${note.skipped === 1 ? "" : "s"} not done` : "";
+// What a cleaner left at the finish: a note (damage, skipped steps) and/or
+// supplies running low.
+export function finishReportMessage(
+  job: Job,
+  report: { by: string | null; note: { text: string; skipped: number } | null; supplies: string[] },
+  house: string
+): PushMessage {
+  const who = report.by ? report.by.split(" ")[0] : "The cleaner";
+  return { ...finishReportText(who, house, report.note, report.supplies), data: { jobId: job.id } };
+}
+
+// Several cleanings handed to one cleaner in one sitting: one notification,
+// not one per job. Tapping it opens their jobs.
+export function assignmentDigestMessage(jobs: Job[], houseOf: (job: Job) => string): PushMessage {
   return {
-    title: `Note from ${who} · ${house}${skipped}`,
-    body: note.text,
-    data: { jobId: job.id },
+    title: `${jobs.length} new cleanings assigned to you`,
+    body: digestBody(sortByDate(jobs).map(j => {
+      const key = jobDateKey(j);
+      return { house: houseOf(j), date: key ? formatShortDate(key) : j.date };
+    })),
+    data: { screen: "mine" },
+  };
+}
+
+// The owner asking the crew to pick up cleanings nobody has yet.
+export function openJobsMessage(counts: { week: number; next: number; later: number }): PushMessage {
+  const parts = [
+    counts.week ? `${counts.week} this week` : null,
+    counts.next ? `${counts.next} next week` : null,
+    counts.later ? `${counts.later} after that` : null,
+  ].filter(Boolean);
+  return {
+    title: "Open cleanings need someone",
+    body: `${parts.join(", ")}. Tap to see them and take one.`,
+    data: { screen: "open" },
   };
 }
 
@@ -326,4 +368,12 @@ export async function sendTestNotification() {
 export function jobIdFromResponse(response: Notifications.NotificationResponse | null | undefined): string | null {
   const jobId = response?.notification?.request?.content?.data?.jobId;
   return typeof jobId === "string" && jobId ? jobId : null;
+}
+
+// A notification about a list rather than one job: which Jobs filter it opens.
+export type JobsFilter = "open" | "mine";
+
+export function filterFromResponse(response: Notifications.NotificationResponse | null | undefined): JobsFilter | null {
+  const screen = response?.notification?.request?.content?.data?.screen;
+  return screen === "open" || screen === "mine" ? screen : null;
 }

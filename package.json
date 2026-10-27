@@ -9,7 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --test tests/checklist.test.mjs tests/apps-script.test.mjs tests/jobTime.test.mjs tests/schedule.test.mjs tests/session.test.mjs tests/turnover.test.mjs"
+    "test": "node --test tests/checklist.test.mjs tests/apps-script.test.mjs tests/jobTime.test.mjs tests/schedule.test.mjs tests/session.test.mjs tests/turnover.test.mjs tests/money.test.mjs tests/assign.test.mjs tests/supplies.test.mjs tests/payroll.test.mjs tests/properties.test.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

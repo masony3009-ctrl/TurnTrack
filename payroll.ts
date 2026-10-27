@@ -7,7 +7,7 @@ export function minutesBetween(startMs: number, endMs: number): number {
 }
 
 export function formatMoney(amount: number): string {
-  return `$${amount.toFixed(2)}`;
+  return `${amount < 0 ? "-" : ""}$${Math.abs(amount).toFixed(2)}`;
 }
 
 export function formatDuration(minutes: number): string {
@@ -42,4 +42,46 @@ export function parseRate(input: string): number | null {
   const rate = parseFloat(cleaned);
   if (isNaN(rate) || rate <= 0 || rate > 500) return null;
   return Math.round(rate * 100) / 100;
+}
+
+// Midnight on the Sunday that starts this week (weeksBack = 1 for last week),
+// local time: pay weeks run Sunday to Saturday like the calendar.
+export function weekStartMs(now: number, weeksBack = 0): number {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay() - 7 * weeksBack);
+  return d.getTime();
+}
+
+type PayEntry = { minutes: number; earned: number; endedAt: number; paid: boolean; paidAt: number | null; method: string | null };
+
+// Time worked and pay earned for entries that ended in [fromMs, toMs).
+export function workedBetween(entries: PayEntry[], fromMs: number, toMs: number): { minutes: number; earned: number; count: number } {
+  let minutes = 0;
+  let earned = 0;
+  let count = 0;
+  for (const e of entries) {
+    if (e.endedAt < fromMs || e.endedAt >= toMs) continue;
+    minutes += e.minutes;
+    earned += e.earned;
+    count += 1;
+  }
+  return { minutes, earned: Math.round(earned * 100) / 100, count };
+}
+
+export type Payment = { paidAt: number; amount: number; count: number; method: string | null };
+
+// Paid entries grouped into the payments they were settled in. "Mark paid"
+// stamps every entry it settles with the same paidAt, so one payment = one
+// paidAt. Newest first.
+export function paymentsOf(entries: PayEntry[]): Payment[] {
+  const byTime = new Map<number, Payment>();
+  for (const e of entries) {
+    if (!e.paid || !e.paidAt) continue;
+    const p = byTime.get(e.paidAt) || { paidAt: e.paidAt, amount: 0, count: 0, method: e.method };
+    p.amount = Math.round((p.amount + e.earned) * 100) / 100;
+    p.count += 1;
+    byTime.set(e.paidAt, p);
+  }
+  return [...byTime.values()].sort((a, b) => b.paidAt - a.paidAt);
 }

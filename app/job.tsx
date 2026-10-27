@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { collection, deleteDoc, doc, getDocs, onSnapshot, query, runTransaction, updateDoc, where, writeBatch } from "firebase/firestore";
+import { arrayUnion, collection, deleteDoc, doc, getDocs, onSnapshot, query, runTransaction, updateDoc, where, writeBatch } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { OWNER_PHONE, OWNER_PHONE_LABEL } from "../business";
@@ -10,20 +10,23 @@ import { tapImpact, tapSelect, tapSuccess, tapWarning } from "../components/hapt
 import { openInMaps } from "../components/maps";
 import { useProfile } from "../components/ProfileProvider";
 import { FinishSheet } from "../components/FinishSheet";
+import { PriceSheet } from "../components/PriceSheet";
 import { RoomChecklist } from "../components/RoomChecklist";
 import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
 import { addableRooms, addRoom, checkAll, checklistForJob, checklistProgress, ownsList, removeRoom, roomMinutes, templateFromDoc, toggleStep, type ChecklistItem } from "../checklist";
 import { db } from "../firebase";
 import {
-  assignmentMessage, cancellationMessage, discardedMessage, finishNoteMessage, givenBackMessage, movedMessage, roomDoneMessage,
+  assignmentMessage, cancellationMessage, discardedMessage, finishReportMessage, givenBackMessage, movedMessage, roomDoneMessage,
   sendPushToEmployee, sendPushToOwners, unassignedMessage,
 } from "../notifications";
 import { WhenSheet } from "../components/WhenSheet";
 import { canEditDate, formatTime, withTime } from "../jobTime";
 import { computeEarned, formatClockTime, formatDuration, formatMoney, minutesBetween } from "../payroll";
 import { useProperties } from "../components/useProperties";
-import { accessCodes, findProperty, type AccessCode } from "../properties";
+import { isDeepClean, jobPrice } from "../money";
+import { accessCodes, findProperty, houseKey, type AccessCode } from "../properties";
 import { isLongSession, mergeSummary, otherRunningJob, sessionEntryId, startCheck, waitBriefly } from "../session";
+import { supplyList } from "../supplies";
 import { cleanerColor, colors, radius, type, unassignedColor } from "../theme";
 import { daysFromToday, formatDateLabel, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
 import { Employee, FinishNote, Job } from "../types";
@@ -45,8 +48,9 @@ export default function JobDetail() {
   const [showFinish, setShowFinish] = useState(false);
   const [showGiveBack, setShowGiveBack] = useState(false);
   const [showWhen, setShowWhen] = useState(false);
+  const [showPrice, setShowPrice] = useState(false);
   // A long session waiting on "when did you finish?", with what Finish chose.
-  const [endTimeFor, setEndTimeFor] = useState<{ note: string | null; allChecked: boolean } | null>(null);
+  const [endTimeFor, setEndTimeFor] = useState<{ note: string | null; allChecked: boolean; supplies: string[] } | null>(null);
   // True while a change made on this phone hasn't reached the server.
   const [pendingWrites, setPendingWrites] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -122,6 +126,9 @@ export default function JobDetail() {
   const property = findProperty(properties, job);
   const codes = accessCodes(property);
   const house = property?.short || job?.property || job?.address || "the house";
+  // A host who pays us directly: this cleaning can be marked paid.
+  const jobKey = job ? jobDateKey(job) : null;
+  const billed = !!property?.billedFrom && !!jobKey && jobKey >= property.billedFrom;
 
   // Until someone ticks something, a job shows the current template for its
   // house (one room per bathroom); the list is written to the job when
@@ -191,6 +198,31 @@ export default function JobDetail() {
       console.warn("assign failed:", e);
       Alert.alert("Couldn't assign", "The assignment didn't save. Check your connection and try again.");
     }
+  };
+
+  // The owner prices this one cleaning (or clears it back to the house price)
+  // and, for a host who pays us directly, marks it paid.
+  const savePrice = async (next: { price: number | null; hostPaid: boolean }) => {
+    if (!job || !isOwner || busy) return;
+    setBusy(true);
+    try {
+      await updateDoc(doc(db, "jobs", job.id), {
+        price: next.price,
+        ...(billed
+          ? {
+            hostPaid: next.hostPaid,
+            hostPaidAt: next.hostPaid ? job.hostPaidAt || Date.now() : null,
+            hostPaidMethod: next.hostPaid ? job.hostPaidMethod || null : null,
+          }
+          : {}),
+      });
+      setShowPrice(false);
+      tapSuccess();
+    } catch (e) {
+      console.warn("save price failed:", e);
+      Alert.alert("Couldn't save the price", "Nothing changed. Check your connection and try again.");
+    }
+    setBusy(false);
   };
 
   // The owner moves a job or sets its start time. A synced job's date stays
@@ -391,6 +423,7 @@ export default function JobDetail() {
     checklist?: ChecklistItem[];
     endedAt?: number;
     checkedAtFinish?: number | null;
+    lowSupplies?: string[];
   }) => {
     if (!job || !job.startedAt) return false;
     const emp = employees.find(e => e.id === job.assignedTo);
@@ -430,12 +463,26 @@ export default function JobDetail() {
       timeSummary: mergeSummary(job.timeSummary, session),
       ...(opts.cancel
         ? { cancelled: true, cancelledAt: endedAt, cancelReason: "Cancelled by owner" }
-        : { finishNote: opts.finishNote || job.finishNote || null, checkedAtFinish: opts.checkedAtFinish ?? null }),
+        : {
+          finishNote: opts.finishNote || job.finishNote || null,
+          checkedAtFinish: opts.checkedAtFinish ?? null,
+          lowSupplies: opts.lowSupplies?.length ? opts.lowSupplies : null,
+        }),
       // Keep the list the cleaner was shown, so the finished job reads back
       // the same rooms even if nothing was ticked. A "check all" finish
       // writes its fully ticked list in the same batch as the time.
       ...(opts.checklist ? { checklist: opts.checklist } : freshChecklist ? { checklist } : {}),
     });
+    // Low supplies go on the house's shopping list in the same save, added to
+    // whatever is already waiting there until the owner restocks.
+    if (!opts.cancel && opts.lowSupplies?.length) {
+      const name = property?.short || property?.name || job.property || job.address;
+      batch.set(doc(db, "settings", "supplies"), {
+        houses: { [houseKey(property?.name || job.property || job.address)]: {
+          name, items: arrayUnion(...opts.lowSupplies), at: endedAt, by: employeeName, jobId: job.id,
+        } },
+      }, { merge: true });
+    }
     const saved = await waitBriefly(batch.commit(), SAVE_WAIT_MS, lateSaveFailed("Finishing the cleaning"));
     return { ...session, queued: saved === "queued" };
   };
@@ -443,11 +490,12 @@ export default function JobDetail() {
   // note: required (the reason) when steps are unchecked, optional otherwise;
   // FinishSheet collects it. allChecked: everything was done - tick it all.
   // endedAt: when a long session really ended, from EndTimeSheet.
-  const completeCleaning = async (note: string | null, allChecked = false, endedAt?: number) => {
+  // supplies: what the cleaner flagged as running low.
+  const completeCleaning = async (note: string | null, allChecked = false, endedAt?: number, supplies: string[] = []) => {
     if (!job || !job.startedAt || busy || !canWork) return;
     if (endedAt === undefined && isLongSession(job.startedAt, Date.now())) {
       setShowFinish(false);
-      setTimeout(() => setEndTimeFor({ note, allChecked }), 450);
+      setTimeout(() => setEndTimeFor({ note, allChecked, supplies }), 450);
       return;
     }
     const actor = selfName || (isOwner ? "Owner" : null);
@@ -463,13 +511,16 @@ export default function JobDetail() {
         endedAt,
         checklist: allChecked ? checkAll(base, actor, Date.now()) : undefined,
         checkedAtFinish: allChecked && unchecked > 0 ? unchecked : null,
+        lowSupplies: supplies,
       });
       if (result) {
         tapSuccess();
         setShowChecklist(false);
         setShowFinish(false);
         setEndTimeFor(null);
-        if (finishNote && !ownerAtPhone) sendPushToOwners(finishNoteMessage(job, finishNote, house));
+        if ((finishNote || supplies.length) && !ownerAtPhone) {
+          sendPushToOwners(finishReportMessage(job, { by: actor, note: finishNote, supplies }, house));
+        }
         alertSoon(
           "Cleaning finished",
           `${result.employeeName} worked ${formatDuration(result.minutes)} and earned ${formatMoney(result.earned)}. ` +
@@ -717,6 +768,11 @@ export default function JobDetail() {
   const assignedEmployee = employees.find(e => e.id === job.assignedTo);
   const assignedColor = job.assignedTo ? cleanerColor(assignedEmployee || { id: job.assignedTo }) : unassignedColor;
   const dateHeading = key ? formatDayHeading(key) : job.date;
+  const price = jobPrice(job, property);
+  const priceHint = [
+    job.price ? "Set on this cleaning" : price !== null ? "The house's regular price" : isDeepClean(job) ? "Deep cleans are priced one at a time" : "Set it here or on the Houses tab",
+    billed && job.done ? (job.hostPaid ? "Host paid" : "Host hasn't paid") : null,
+  ].filter(Boolean).join(" · ");
 
   // Live record of what has been ticked. The owner sees this update as the
   // cleaner works, because the job document streams from Firestore.
@@ -758,6 +814,17 @@ export default function JobDetail() {
         busy={busy}
         onClose={() => setShowWhen(false)}
         onSave={saveWhen}
+      />
+
+      <PriceSheet
+        visible={showPrice}
+        price={job.price ?? null}
+        housePrice={isDeepClean(job) ? null : property?.price ?? null}
+        billed={billed}
+        hostPaid={job.hostPaid === true}
+        busy={busy}
+        onClose={() => setShowPrice(false)}
+        onSave={savePrice}
       />
 
       <SheetModal visible={showAssign} title="Assign to" onClose={() => setShowAssign(false)}>
@@ -832,8 +899,8 @@ export default function JobDetail() {
         busy={busy}
         onClose={() => setShowFinish(false)}
         onReview={() => { setShowFinish(false); setTimeout(() => setShowChecklist(true), 450); }}
-        onFinish={(note) => completeCleaning(note)}
-        onCheckAll={(note) => completeCleaning(note, true)}
+        onFinish={(note, supplies) => completeCleaning(note, false, undefined, supplies)}
+        onCheckAll={(note, supplies) => completeCleaning(note, true, undefined, supplies)}
       />
 
       {job.startedAt ? (
@@ -843,7 +910,7 @@ export default function JobDetail() {
           now={Date.now()}
           busy={busy}
           onClose={() => setEndTimeFor(null)}
-          onPick={(endedAt) => endTimeFor && completeCleaning(endTimeFor.note, endTimeFor.allChecked, endedAt)}
+          onPick={(endedAt) => endTimeFor && completeCleaning(endTimeFor.note, endTimeFor.allChecked, endedAt, endTimeFor.supplies)}
         />
       ) : null}
 
@@ -931,6 +998,22 @@ export default function JobDetail() {
                 <Text style={type.section}>Date & time</Text>
                 <Text style={styles.addressText}>{key ? formatDayHeading(key) : "No date yet"}</Text>
                 <Text style={styles.addressHint}>{formatTime(job.time) || "No set time"} · Tap to change</Text>
+              </View>
+              <Ionicons name="create-outline" size={22} color={colors.teal} />
+            </View>
+          </Card>
+        )}
+
+        {isOwner && !job.cancelled && !isPending && (
+          <Card onPress={() => setShowPrice(true)}>
+            <View style={styles.addressRow}>
+              <View style={styles.addressIcon}>
+                <Ionicons name="pricetag-outline" size={20} color={colors.tealDark} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={type.section}>Pays</Text>
+                <Text style={styles.addressText}>{price !== null ? formatMoney(price) : "No price set"}</Text>
+                <Text style={styles.addressHint}>{priceHint} · Tap to change</Text>
               </View>
               <Ionicons name="create-outline" size={22} color={colors.teal} />
             </View>
@@ -1063,6 +1146,15 @@ export default function JobDetail() {
                   {finishNote.by ? ` · ${finishNote.by.split(" ")[0]}` : ""} · {formatClockTime(finishNote.at)}
                 </Text>
                 <Text style={styles.finishNoteText}>&ldquo;{finishNote.text}&rdquo;</Text>
+              </View>
+            </View>
+          ) : null}
+          {job.done && job.lowSupplies?.length ? (
+            <View style={styles.finishNote}>
+              <Ionicons name="cart-outline" size={17} color={colors.goldDark} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.finishNoteTitle}>Running low at the finish</Text>
+                <Text style={styles.finishNoteText}>{supplyList(job.lowSupplies)}</Text>
               </View>
             </View>
           ) : null}

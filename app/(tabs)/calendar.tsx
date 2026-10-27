@@ -57,7 +57,7 @@ export default function CalendarScreen() {
     );
   }, []);
 
-  const all = jobs || [];
+  const all = useMemo(() => jobs || [], [jobs]);
   const byDay = useMemo(() => {
     const map = new Map<string, Job[]>();
     sortByDate(all.filter(countsAsCleaning)).forEach(job => {

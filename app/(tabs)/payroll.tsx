@@ -3,6 +3,7 @@ import * as Clipboard from "expo-clipboard";
 import { addDoc, collection, deleteDoc, doc, onSnapshot, updateDoc, writeBatch } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { MyPay } from "../../components/MyPay";
 import { useProfile } from "../../components/ProfileProvider";
 import { alertSoon, Avatar, BrandButton, Card, DatePickerField, EmptyState, ErrorState, FormInput, ScreenHeader, SheetModal } from "../../components/ui";
 import { db } from "../../firebase";
@@ -38,7 +39,8 @@ export default function PayrollScreen() {
   const { state, employees } = useProfile();
   const isOwner = state.status === "owner";
 
-  // Pay is the owner's business: cleaners' phones never download it.
+  // Everyone's pay is the owner's business: cleaners' phones only ever load
+  // their own (MyPay).
   useEffect(() => {
     if (!isOwner) return;
     const unsub = onSnapshot(collection(db, "timeEntries"), (snapshot) => {
@@ -207,6 +209,8 @@ export default function PayrollScreen() {
 
   const editPreview = parseInt(editMinutes, 10);
 
+  // A cleaner (or the owner viewing as one) sees only their own pay.
+  if (state.status === "cleaner") return <MyPay employee={state.employee} />;
   if (!isOwner) {
     return (
       <View style={styles.container}>

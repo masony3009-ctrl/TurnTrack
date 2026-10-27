@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { StyleSheet, Text, TextInput, View } from "react-native";
+import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { checklistProgress, unfinishedByRoom, type ChecklistItem } from "../checklist";
+import { SUPPLY_CHOICES } from "../supplies";
+import { tapSelect } from "./haptics";
 import { colors, radius } from "../theme";
 import { BrandButton, SheetModal } from "./ui";
 
 // Shown on every Finish. With everything ticked it just offers an optional
-// note for the owner (damage, low supplies). With steps unchecked the cleaner
+// note for the owner (damage, anything odd). With steps unchecked the cleaner
 // can tick them all in one go, or finish after saying why they weren't done.
+// Either way they can tap what's running low, which lands on the owner's
+// shopping list for that house.
 const MAX_LISTED = 8;
 const MIN_REASON = 3;
 
@@ -17,12 +21,23 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
   onClose: () => void;
   onReview: () => void;
   // note: optional when everything is ticked, required (the reason) otherwise.
-  onFinish: (note: string | null) => void;
+  onFinish: (note: string | null, supplies: string[]) => void;
   // Everything was done, just not ticked: tick it all and finish.
-  onCheckAll: (note: string | null) => void;
+  onCheckAll: (note: string | null, supplies: string[]) => void;
 }) {
   const [text, setText] = useState("");
-  useEffect(() => { if (!visible) setText(""); }, [visible]);
+  const [supplies, setSupplies] = useState<string[]>([]);
+  useEffect(() => {
+    if (!visible) {
+      setText("");
+      setSupplies([]);
+    }
+  }, [visible]);
+  const toggleSupply = (item: string) => {
+    tapSelect();
+    setSupplies(prev => (prev.includes(item) ? prev.filter(s => s !== item) : [...prev, item]));
+  };
+  const picker = <SupplyPicker selected={supplies} onToggle={toggleSupply} />;
   const rooms = useMemo(() => unfinishedByRoom(items), [items]);
   const total = checklistProgress(items).total;
   const count = rooms.reduce((n, r) => n + r.steps.length, 0);
@@ -33,6 +48,7 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
     return (
       <SheetModal visible={visible} title="Finish cleaning" onClose={onClose}>
         <Text style={styles.lead}>{total > 0 ? `All ${total} steps are checked off.` : "Ready to stop the clock."}</Text>
+        {picker}
         <Text style={[styles.label, { marginTop: 14 }]}>Anything the owner should know? (optional)</Text>
         <TextInput
           style={styles.input}
@@ -40,11 +56,11 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
           textAlignVertical="top"
           value={text}
           onChangeText={setText}
-          placeholder="Damage, low supplies, anything odd"
+          placeholder="Damage, something broken, anything odd"
           placeholderTextColor={colors.faint}
           accessibilityLabel="Anything the owner should know?"
         />
-        <BrandButton label={busy ? "Saving…" : "Finish cleaning"} icon="checkmark-circle" onPress={() => onFinish(note)} disabled={busy} style={{ marginTop: 12 }} />
+        <BrandButton label={busy ? "Saving…" : "Finish cleaning"} icon="checkmark-circle" onPress={() => onFinish(note, supplies)} disabled={busy} style={{ marginTop: 12 }} />
         <BrandButton label="Back to checklist" icon="list" variant="ghost" onPress={onReview} style={{ marginTop: 4 }} />
       </SheetModal>
     );
@@ -61,11 +77,12 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
 
   return (
     <SheetModal visible={visible} title={`${count} step${count === 1 ? "" : "s"} not checked`} onClose={onClose}>
-      <Text style={styles.lead}>Did all of it but forgot to tick as you went? Check everything off and finish in one tap.</Text>
+      {picker}
+      <Text style={[styles.lead, { marginTop: 16 }]}>Did all of it but forgot to tick as you went? Check everything off and finish in one tap.</Text>
       <BrandButton
         label={busy ? "Saving…" : `Everything's done — check all ${count} & finish`}
         icon="checkmark-done"
-        onPress={() => onCheckAll(note)}
+        onPress={() => onCheckAll(note, supplies)}
         disabled={busy}
         style={{ marginTop: 12 }}
       />
@@ -96,7 +113,7 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
         label={busy ? "Saving…" : "Finish with this note"}
         icon="checkmark-circle"
         variant="outline"
-        onPress={() => onFinish(note)}
+        onPress={() => onFinish(note, supplies)}
         disabled={!ready || busy}
         style={{ marginTop: 12 }}
       />
@@ -106,7 +123,41 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
   );
 }
 
+// Multi-select chips for supplies that are running low at the house.
+function SupplyPicker({ selected, onToggle }: { selected: string[]; onToggle: (item: string) => void }) {
+  return (
+    <View style={styles.supplies}>
+      <Text style={styles.label}>Running low on anything? Tap what to restock</Text>
+      <View style={styles.supplyGrid}>
+        {SUPPLY_CHOICES.map(item => {
+          const on = selected.includes(item);
+          return (
+            <TouchableOpacity
+              key={item}
+              style={[styles.supplyChip, on && styles.supplyChipOn]}
+              onPress={() => onToggle(item)}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: on }}
+            >
+              <Text style={[styles.supplyText, on && styles.supplyTextOn]}>{on ? "✓ " : ""}{item}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  supplies: { marginTop: 16 },
+  supplyGrid: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
+  supplyChip: {
+    minHeight: 38, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1,
+    borderColor: colors.line, backgroundColor: colors.bg, justifyContent: "center",
+  },
+  supplyChipOn: { backgroundColor: colors.goldSoft, borderColor: colors.gold },
+  supplyText: { fontSize: 13.5, fontWeight: "600", color: colors.ink },
+  supplyTextOn: { color: colors.goldDark },
   lead: { fontSize: 14, color: colors.muted, lineHeight: 20 },
   divider: {
     fontSize: 13.5, color: colors.muted, lineHeight: 19, marginTop: 18, paddingTop: 14,

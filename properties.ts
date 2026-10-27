@@ -14,6 +14,12 @@ export type Property = {
   doorCode?: string;
   garageCode?: string;
   supplyCode?: string;
+  // What a regular cleaning here pays us, in dollars. Deep cleans and one-offs
+  // are priced on the job instead.
+  price?: number;
+  // "YYYY-MM-DD": the host pays us directly (not through Turno) for cleanings
+  // from this day on, so the app tracks what they still owe.
+  billedFrom?: string;
 };
 
 export type AccessCode = { label: string; code: string };
@@ -22,6 +28,11 @@ export type AccessCode = { label: string; code: string };
 // three agree on when two names mean the same house.
 function normalize(v: string | null | undefined): string {
   return String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+// A stable id for a house, safe to use as a Firestore map key.
+export function houseKey(name: string | null | undefined): string {
+  return normalize(name);
 }
 
 // Match on the property name first, then the address, then the aliases.
@@ -79,5 +90,29 @@ export function parseProperties(raw: unknown): Property[] {
       doorCode: v.doorCode ? String(v.doorCode) : undefined,
       garageCode: v.garageCode ? String(v.garageCode) : undefined,
       supplyCode: v.supplyCode ? String(v.supplyCode) : undefined,
+      price: Number(v.price) > 0 ? Number(v.price) : undefined,
+      billedFrom: typeof v.billedFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.billedFrom) ? v.billedFrom : undefined,
     }));
+}
+
+export type RegistryChanges = Record<string, string | number | string[] | null>;
+
+// Applies an edit to the raw settings/properties items, keeping every field
+// this app doesn't know about (the scripts may store their own). A null or
+// empty value removes the field. A name that isn't in the list adds a house.
+export function patchRegistry(raw: unknown, name: string, changes: RegistryChanges): Record<string, unknown>[] {
+  const items = Array.isArray(raw)
+    ? raw.filter((v): v is Record<string, unknown> => !!v && typeof v === "object").map((v) => ({ ...v }))
+    : [];
+  let target = items.find((v) => v.name === name);
+  if (!target) {
+    target = { name, address: "", aliases: [], bedrooms: 0, bathrooms: 0 };
+    items.push(target);
+  }
+  for (const [field, value] of Object.entries(changes)) {
+    if (field === "name") continue;
+    if (value === null || value === "") delete target[field];
+    else target[field] = value;
+  }
+  return items;
 }
