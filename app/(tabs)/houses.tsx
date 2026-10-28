@@ -10,7 +10,7 @@ import { useProperties } from "../../components/useProperties";
 import { useSupplies } from "../../components/useSupplies";
 import { db } from "../../firebase";
 import {
-  deepCleanStatus, groupByHouse, hostOwed, houseMoney, OTHER_HOUSE, perCleaning, PERIOD_LABELS, periodRange, sumMoney,
+  deepCleanStatus, groupByHouse, hostOwed, houseMoney, OTHER_HOUSE, perCleaning, PERIOD_LABELS, periodRange, sumMoney, unlinkedClients,
   type DeepCleanStatus, type HouseMoney, type Period,
 } from "../../money";
 import { formatDollars, formatDuration, formatEntryDate } from "../../payroll";
@@ -97,10 +97,11 @@ export default function HousesScreen() {
         a.label.localeCompare(b.label)
       );
   }, [groups, period, today, suppliesByKey]);
+  const clients = useMemo(() => unlinkedClients(groups.get(OTHER_HOUSE)?.jobs || [], today), [groups, today]);
   const totals = useMemo(() => sumMoney(rows.map(r => r.money)), [rows]);
   const houseCount = rows.filter(r => r.house).length;
 
-  const saveHouse = async (name: string, changes: RegistryChanges) => {
+  const saveHouse = async (name: string, changes: RegistryChanges, aliases: string[]) => {
     if (adding && properties.some(p => houseKey(p.name) === houseKey(name))) {
       Alert.alert("Already on the list", `${name} is already a house. Tap it to edit.`);
       return;
@@ -112,7 +113,7 @@ export default function HousesScreen() {
       await runTransaction(db, async tx => {
         const ref = doc(db, "settings", "properties");
         const snap = await tx.get(ref);
-        tx.set(ref, { items: patchRegistry(snap.data()?.items, name, changes), updatedAt: Date.now() }, { merge: true });
+        tx.set(ref, { items: patchRegistry(snap.data()?.items, name, changes, aliases), updatedAt: Date.now() }, { merge: true });
       });
       tapSuccess();
       setEditing(null);
@@ -202,6 +203,7 @@ export default function HousesScreen() {
       <HouseSheet
         visible={adding || !!editing}
         house={editing}
+        clients={clients}
         busy={saving}
         onClose={() => { setEditing(null); setAdding(false); }}
         onSave={saveHouse}
@@ -286,7 +288,7 @@ export default function HousesScreen() {
                     key={row.key}
                     row={row}
                     first={i === 0}
-                    onPress={row.house ? () => { setAdding(false); setEditing(row.house); } : undefined}
+                    onPress={row.house ? () => { setAdding(false); setEditing(row.house); } : () => { setEditing(null); setAdding(true); }}
                     onMarkPaid={() => markHostPaid(row)}
                   />
                 ))}
@@ -310,7 +312,7 @@ function HeroStat({ label, value }: { label: string; value: string }) {
 
 // One line per house: what it earned, what a cleaning there is worth, and
 // anything that needs doing. Tap to edit the house.
-function HouseRow({ row, first, onPress, onMarkPaid }: { row: Row; first: boolean; onPress?: () => void; onMarkPaid: () => void }) {
+function HouseRow({ row, first, onPress, onMarkPaid }: { row: Row; first: boolean; onPress: () => void; onMarkPaid: () => void }) {
   const { house, money, per } = row;
   const losing = per.margin !== null && per.margin < 0;
   const detail = [
@@ -345,12 +347,11 @@ function HouseRow({ row, first, onPress, onMarkPaid }: { row: Row; first: boolea
         ) : null}
       </View>
       <Text style={[styles.money, money.revenue === 0 && { color: colors.faint }]}>{formatDollars(money.revenue)}</Text>
-      {onPress ? <Ionicons name="chevron-forward" size={16} color={colors.faint} /> : null}
+      <Ionicons name={house ? "chevron-forward" : "add-circle-outline"} size={house ? 16 : 18} color={house ? colors.faint : colors.tealDark} />
     </View>
   );
-  if (!onPress) return body;
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.7} accessibilityRole="button" accessibilityHint="Edit this house">
+    <TouchableOpacity onPress={onPress} activeOpacity={0.7} accessibilityRole="button" accessibilityHint={house ? "Edit this house" : "Make one of these a house"}>
       {body}
     </TouchableOpacity>
   );

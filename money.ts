@@ -3,7 +3,7 @@
 //
 // Pure (no React, no Firebase) so it runs under node --test.
 
-import { findProperty, houseKey, type Property } from "./properties.ts";
+import { findProperty, houseKey, streetOf, tidyAddress, type Property } from "./properties.ts";
 import { countsAsCleaning, type ScheduleJob } from "./schedule.ts";
 import { jobDateKey } from "./turnover.ts";
 
@@ -12,6 +12,7 @@ export type MoneyJob = ScheduleJob & {
   price?: number | null;
   timeSummary?: { minutes: number; earned: number } | null;
   hostPaid?: boolean | null;
+  contact?: { name?: string | null } | null;
 };
 
 export function isDeepClean(job: { type?: string | null }): boolean {
@@ -86,6 +87,75 @@ export function groupByHouse<J extends MoneyJob>(jobs: J[], properties: Property
     out.get(key)!.jobs.push(job);
   }
   return out;
+}
+
+// One place in the "other" bucket that could become a house.
+export type Client<J extends MoneyJob = MoneyJob> = {
+  key: string;
+  // The street, or the name the jobs go by ("Pony").
+  label: string;
+  // Starting values for the new house: a name only when the jobs carry one
+  // that isn't an address, an address only when it looks like one.
+  name: string;
+  address: string;
+  contact: string | null;
+  jobs: J[];
+  // The soonest one still to do, and the latest one before that.
+  next: string | null;
+  last: string | null;
+  // The price most of them were set at.
+  price: number | null;
+};
+
+const looksLikeAddress = (s: string) => /^\d/.test(s.trim());
+
+// Cleanings that don't belong to any house yet, one entry per place, so the
+// owner can turn one into a house. Places with something coming up first.
+export function unlinkedClients<J extends MoneyJob>(jobs: J[], today: string): Client<J>[] {
+  const byKey = new Map<string, J[]>();
+  for (const job of jobs) {
+    const key = houseKey(streetOf(job));
+    if (!key) continue;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key)!.push(job);
+  }
+  const out: Client<J>[] = [];
+  for (const [key, list] of byKey) {
+    let next: string | null = null;
+    let last: string | null = null;
+    let latest = list[0];
+    const prices = new Map<number, number>();
+    for (const job of list) {
+      const day = jobDateKey(job) || "";
+      if (!job.done && day >= today) {
+        if (!next || day < next) next = day;
+      } else if (!last || day > last) {
+        last = day;
+      }
+      if ((jobDateKey(latest) || "") < day) latest = job;
+      if (typeof job.price === "number" && job.price > 0) prices.set(job.price, (prices.get(job.price) || 0) + 1);
+    }
+    const property = String(latest.property || "").trim();
+    const address = tidyAddress(latest.address || latest.property);
+    const price = [...prices.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    out.push({
+      key,
+      label: streetOf(latest),
+      name: property && !looksLikeAddress(property) ? property : "",
+      address: looksLikeAddress(address) ? address : "",
+      contact: latest.contact?.name?.trim() || null,
+      jobs: list,
+      next,
+      last,
+      price,
+    });
+  }
+  return out.sort((a, b) =>
+    Number(!a.next) - Number(!b.next) ||
+    (a.next && b.next ? a.next.localeCompare(b.next) : 0) ||
+    (b.last || "").localeCompare(a.last || "") ||
+    a.label.localeCompare(b.label)
+  );
 }
 
 export type HouseMoney = {

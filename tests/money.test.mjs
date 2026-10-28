@@ -13,6 +13,7 @@ import {
   perCleaning,
   periodRange,
   sumMoney,
+  unlinkedClients,
 } from "../money.ts";
 
 const house = (name, extra = {}) => ({ name, address: `${name} Rd`, aliases: [], bedrooms: 2, bathrooms: 2, ...extra });
@@ -145,4 +146,31 @@ test("hostOwed counts finished, priced, unpaid cleanings from the billing date",
   assert.equal(owed.jobs.length, 2);
   assert.deepEqual(hostOwed([job("2026-10-02")], house("Palm", { price: 150 })), { amount: 0, jobs: [] });
   assert.deepEqual(hostOwed([job("2026-10-02")], null), { amount: 0, jobs: [] });
+});
+
+test("unlinkedClients groups loose cleanings by place, coming-up first", () => {
+  const jobs = [
+    job("2026-09-21", { property: "23 Elm St, Mesa, AZ 85201, USA", address: "23 Elm St, Mesa, AZ 85201, USA, Mesa, Mesa", price: 300 }),
+    job("2026-10-28", { address: "9 Bean Way", done: false, contact: { name: "Sam Rivera" } }),
+    job("2026-10-02", { property: "Pony", address: "Pony", price: 100 }),
+    job("2026-09-15", { property: "Pony", address: "Pony", price: 100 }),
+    job("2026-08-01", { property: "Pony", address: "Pony", price: 90 }),
+    job("2026-10-01", { address: "" }),
+  ];
+  const out = unlinkedClients(jobs, "2026-10-28");
+  assert.deepEqual(out.map(c => c.label), ["9 Bean Way", "Pony", "23 Elm St"]);
+  const [bean, pony, elm] = out;
+  assert.equal(bean.next, "2026-10-28");
+  assert.equal(bean.contact, "Sam Rivera");
+  assert.equal(bean.address, "9 Bean Way");
+  assert.equal(bean.name, "");
+  assert.equal(bean.price, null);
+  assert.equal(pony.jobs.length, 3);
+  assert.equal(pony.last, "2026-10-02");
+  assert.equal(pony.name, "Pony");
+  assert.equal(pony.address, "");
+  assert.equal(pony.price, 100);
+  assert.equal(elm.address, "23 Elm St, Mesa, AZ 85201");
+  assert.equal(elm.name, "");
+  assert.deepEqual(unlinkedClients([], "2026-10-28"), []);
 });

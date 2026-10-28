@@ -1,10 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { parsePrice } from "../money";
-import { type Property, type RegistryChanges } from "../properties";
+import { parsePrice, type Client } from "../money";
+import { aliasesToLink, type Property, type RegistryChanges } from "../properties";
 import { colors, radius } from "../theme";
-import { todayKey } from "../turnover";
+import { formatShortDate, todayKey } from "../turnover";
 import { tapSelect } from "./haptics";
 import { BrandButton, DatePickerField, FormInput, SheetModal } from "./ui";
 
@@ -44,22 +44,52 @@ function roomCount(text: string): number | null {
   return Number(t);
 }
 
+const CLIENTS_SHOWN = 5;
+
 // Edits one house in the registry, or adds one (house = null). Codes typed
-// here show up on every cleaning at that house, past and future.
-export function HouseSheet({ visible, house, busy, onClose, onSave }: {
+// here show up on every cleaning at that house, past and future. Cleanings
+// that aren't under a house yet can be linked to it, so their money counts.
+export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
   visible: boolean;
   house: Property | null;
+  clients: Client[];
   busy: boolean;
   onClose: () => void;
-  onSave: (name: string, changes: RegistryChanges) => void;
+  onSave: (name: string, changes: RegistryChanges, aliases: string[]) => void;
 }) {
   const [form, setForm] = useState<Form>(formOf(house));
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [showAll, setShowAll] = useState(false);
   useEffect(() => {
-    if (visible) setForm(formOf(house));
+    if (!visible) return;
+    setForm(formOf(house));
+    setPicked(new Set());
+    setShowAll(false);
   }, [visible, house]);
   const set = (field: keyof Form) => (value: string) => setForm(prev => ({ ...prev, [field]: value }));
   const adding = !house;
   const billed = form.billedFrom !== null;
+  const linked = clients.filter(c => picked.has(c.key));
+  const linkedCount = linked.reduce((n, c) => n + c.jobs.length, 0);
+
+  // Picking the first place fills in what it already knows; nothing typed is overwritten.
+  const pick = (client: Client) => {
+    tapSelect();
+    const on = !picked.has(client.key);
+    setPicked(prev => {
+      const next = new Set(prev);
+      if (on) next.add(client.key);
+      else next.delete(client.key);
+      return next;
+    });
+    if (!on || !adding) return;
+    setForm(prev => ({
+      ...prev,
+      name: prev.name || client.name,
+      address: prev.address || client.address,
+      price: prev.price || (client.price ? String(client.price) : ""),
+    }));
+  };
 
   const save = () => {
     const name = form.name.trim();
@@ -89,13 +119,32 @@ export function HouseSheet({ visible, house, busy, onClose, onSave }: {
       billedFrom: form.billedFrom,
     };
     if (adding) changes.address = form.address.trim();
-    onSave(adding ? name : house.name, changes);
+    const base: Property = house || { name, address: form.address.trim(), aliases: [], bedrooms: 0, bathrooms: 0 };
+    onSave(base.name, changes, aliasesToLink(base, linked.flatMap(c => c.jobs)));
   };
+
+  const shown = showAll ? clients : clients.slice(0, CLIENTS_SHOWN);
+  const linkList = clients.length ? (
+    <>
+      <Text style={styles.group}>{adding ? "Link cleanings already in" : "Link more cleanings"}</Text>
+      {shown.map(c => (
+        <ClientRow key={c.key} client={c} on={picked.has(c.key)} onPress={() => pick(c)} />
+      ))}
+      {clients.length > CLIENTS_SHOWN && !showAll ? (
+        <TouchableOpacity onPress={() => setShowAll(true)} hitSlop={8} style={styles.more} accessibilityRole="button">
+          <Text style={styles.moreText}>Show {clients.length - CLIENTS_SHOWN} more</Text>
+        </TouchableOpacity>
+      ) : null}
+    </>
+  ) : null;
+  const linkLabel = linkedCount ? ` · ${linkedCount} cleaning${linkedCount === 1 ? "" : "s"}` : "";
 
   return (
     <SheetModal visible={visible} title={adding ? "Add a house" : house.short || house.name} onClose={onClose}>
+      {adding ? linkList : null}
       {adding ? (
         <>
+          {clients.length ? <Text style={styles.group}>House</Text> : null}
           <FormInput label="Listing name" placeholder="e.g. Desert Oasis" value={form.name} onChangeText={set("name")} autoCapitalize="words" />
           <FormInput label="Address" placeholder="Street, city, ZIP" value={form.address} onChangeText={set("address")} autoCapitalize="words" />
         </>
@@ -133,8 +182,34 @@ export function HouseSheet({ visible, house, busy, onClose, onSave }: {
       {billed ? (
         <DatePickerField label="Starting" value={form.billedFrom} onChange={(key) => setForm(prev => ({ ...prev, billedFrom: key }))} />
       ) : null}
-      <BrandButton label={busy ? "Saving…" : adding ? "Add house" : "Save"} icon="checkmark" onPress={save} disabled={busy} />
+      {adding ? null : linkList}
+      <BrandButton label={busy ? "Saving…" : (adding ? "Add house" : "Save") + linkLabel} icon="checkmark" onPress={save} disabled={busy} />
     </SheetModal>
+  );
+}
+
+function ClientRow({ client, on, onPress }: { client: Client; on: boolean; onPress: () => void }) {
+  const today = todayKey();
+  const n = client.jobs.length;
+  const sub = [
+    client.next ? (client.next === today ? "Today" : `Next ${formatShortDate(client.next)}`) : client.last ? `Last ${formatShortDate(client.last)}` : null,
+    n > 1 ? `${n} cleanings` : null,
+    client.contact,
+  ].filter(Boolean).join(" · ");
+  return (
+    <TouchableOpacity
+      style={[styles.clientRow, on && styles.toggleRowOn]}
+      onPress={onPress}
+      activeOpacity={0.7}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: on }}
+    >
+      <Ionicons name={on ? "checkbox" : "square-outline"} size={22} color={on ? colors.teal : colors.faint} />
+      <View style={{ flex: 1 }}>
+        <Text style={styles.toggleText} numberOfLines={1}>{client.label}</Text>
+        {sub ? <Text style={styles.toggleSub} numberOfLines={1}>{sub}</Text> : null}
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -147,6 +222,12 @@ const styles = StyleSheet.create({
     borderRadius: radius.md, padding: 12, marginBottom: 14, backgroundColor: colors.bg,
   },
   toggleRowOn: { backgroundColor: colors.tealFaint, borderColor: colors.tealSoft },
+  clientRow: {
+    flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderColor: colors.line,
+    borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6, backgroundColor: colors.bg, minHeight: 48,
+  },
+  more: { alignSelf: "flex-start", paddingVertical: 4, marginBottom: 8 },
+  moreText: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
   toggleText: { fontSize: 14.5, fontWeight: "600", color: colors.ink },
   toggleSub: { fontSize: 12, color: colors.muted, marginTop: 1 },
 });

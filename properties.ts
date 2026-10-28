@@ -95,12 +95,50 @@ export function parseProperties(raw: unknown): Property[] {
     }));
 }
 
+// The street part of a job's address ("4 Oak Rd" out of "4 Oak Rd, Mesa, AZ"),
+// or its property name when there's no address.
+export function streetOf(job: PropertyLike): string {
+  return String(job.address || job.property || "").split(",")[0].trim();
+}
+
+// An address with the repeats and "USA" some sources tack on taken out:
+// "4 Oak Rd, Mesa, AZ 85201, USA, Mesa, Mesa" -> "4 Oak Rd, Mesa, AZ 85201".
+export function tidyAddress(raw: string | null | undefined): string {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const part of String(raw || "").split(",")) {
+    const p = part.trim();
+    const k = normalize(p);
+    if (!k || k === "usa" || seen.has(k)) continue;
+    seen.add(k);
+    parts.push(p);
+  }
+  return parts.join(", ");
+}
+
+// The aliases a house needs so every one of these jobs files under it. Most
+// need none (the name or address already matches); the rest get their street
+// address, which a neighbour's house never shares.
+export function aliasesToLink(house: Property, jobs: PropertyLike[]): string[] {
+  const added: string[] = [];
+  for (const job of jobs) {
+    const current = { ...house, aliases: [...house.aliases, ...added] };
+    if (findProperty([current], job)) continue;
+    const alias = [streetOf(job), String(job.address || ""), String(job.property || "")]
+      .map((a) => a.trim())
+      .find((a) => normalize(a).length >= 3 && findProperty([{ ...current, aliases: [...current.aliases, a] }], job));
+    if (alias) added.push(alias);
+  }
+  return added;
+}
+
 export type RegistryChanges = Record<string, string | number | string[] | null>;
 
 // Applies an edit to the raw settings/properties items, keeping every field
 // this app doesn't know about (the scripts may store their own). A null or
 // empty value removes the field. A name that isn't in the list adds a house.
-export function patchRegistry(raw: unknown, name: string, changes: RegistryChanges): Record<string, unknown>[] {
+// addAliases are added to the ones the house already has, never replacing them.
+export function patchRegistry(raw: unknown, name: string, changes: RegistryChanges, addAliases: string[] = []): Record<string, unknown>[] {
   const items = Array.isArray(raw)
     ? raw.filter((v): v is Record<string, unknown> => !!v && typeof v === "object").map((v) => ({ ...v }))
     : [];
@@ -113,6 +151,17 @@ export function patchRegistry(raw: unknown, name: string, changes: RegistryChang
     if (field === "name") continue;
     if (value === null || value === "") delete target[field];
     else target[field] = value;
+  }
+  if (addAliases.length) {
+    const aliases = Array.isArray(target.aliases) ? target.aliases.map(String) : [];
+    const have = new Set(aliases.map(normalize));
+    for (const a of addAliases) {
+      const k = normalize(a);
+      if (!k || have.has(k)) continue;
+      have.add(k);
+      aliases.push(a.trim());
+    }
+    target.aliases = aliases;
   }
   return items;
 }
