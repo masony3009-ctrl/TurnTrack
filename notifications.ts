@@ -17,6 +17,19 @@ const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 // notification back to the phone that triggered it.
 let ownToken: string | null = null;
 
+// True once this phone's device record holds its token and says
+// serverReminders. From then on the morning "Cleaning today!" reminders come
+// from the website Worker (src/reminders.js there), which reads the schedule
+// as each one goes out, so a cleaning moved overnight never announces itself
+// on its old day. A phone that can't get a token keeps scheduling its own.
+let serverReminders = false;
+
+// What a device record needs for pushes, and the server's reminders, to reach
+// this phone. Rewriting the record (switching profiles) must carry these over.
+export function pushRecordFields(): { pushToken?: string; serverReminders?: true } {
+  return ownToken && serverReminders ? { pushToken: ownToken, serverReminders: true } : {};
+}
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -87,7 +100,12 @@ async function recordRegistration(deviceId: string, result: PushRegistration): P
   const ref = doc(db, "devices", deviceId);
   if (result.status === "registered") {
     try {
-      await setDoc(ref, { pushToken: result.token, pushError: deleteField(), pushErrorAt: deleteField() }, { merge: true });
+      await setDoc(ref, { pushToken: result.token, serverReminders: true, pushError: deleteField(), pushErrorAt: deleteField() }, { merge: true });
+      if (!serverReminders) {
+        serverReminders = true;
+        // Drop the reminders this phone scheduled before it knew.
+        await clearScheduledReminders();
+      }
       return result;
     } catch (e) {
       console.warn("saving push token failed:", e);
@@ -98,7 +116,7 @@ async function recordRegistration(deviceId: string, result: PushRegistration): P
 
   const pushError = result.status === "denied" ? DENIED_REASON : result.reason;
   try {
-    await setDoc(ref, { pushError, pushErrorAt: Date.now() }, { merge: true });
+    await setDoc(ref, { pushError, pushErrorAt: Date.now(), serverReminders: deleteField() }, { merge: true });
   } catch (e) {
     // The caller still shows the problem on screen.
     console.warn("saving push error failed:", e);
@@ -281,9 +299,10 @@ export function cancellationMessage(job: Job): PushMessage {
   };
 }
 
-// Local reminders for upcoming jobs. Reschedules only when the set of
-// relevant jobs actually changes (not on every checklist tick), and a newer
-// run always wins over one still in flight so cancelAll can't race.
+// Local reminders for upcoming jobs, only on a phone the server doesn't
+// remind (see serverReminders). Reschedules only when the set of relevant
+// jobs actually changes (not on every checklist tick), and a newer run always
+// wins over one still in flight so cancelAll can't race.
 let scheduleGeneration = 0;
 let lastScheduleFingerprint = "";
 const MAX_REMINDER_JOBS = 30; // iOS keeps at most 64 pending local notifications
@@ -298,7 +317,7 @@ export async function clearScheduledReminders() {
 }
 
 export async function scheduleTodaysJobNotifications(jobs: Job[]) {
-  if (isWeb) return;
+  if (isWeb || serverReminders) return;
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -336,7 +355,7 @@ export async function scheduleTodaysJobNotifications(jobs: Job[]) {
 
     const morning = reminderAt(date, job.time);
     if (morning > now) {
-      await Notifications.scheduleNotificationAsync({
+      const id = await Notifications.scheduleNotificationAsync({
         content: {
           title: sameDay ? "Same-day turnover today!" : "Cleaning today!",
           body: jobSummary,
@@ -345,6 +364,11 @@ export async function scheduleTodaysJobNotifications(jobs: Job[]) {
         },
         trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: morning },
       });
+      // Cleared (or rescheduled) while this one was being set: take it back.
+      if (generation !== scheduleGeneration) {
+        await Notifications.cancelScheduledNotificationAsync(id).catch(e => console.warn("cancelling a stale reminder failed:", e));
+        return;
+      }
     }
   }
 }

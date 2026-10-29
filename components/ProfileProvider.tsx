@@ -3,7 +3,7 @@ import { collection, deleteDoc, doc, onSnapshot, setDoc } from "firebase/firesto
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { Platform } from "react-native";
 import { db, ensureSignedIn } from "../firebase";
-import { clearScheduledReminders } from "../notifications";
+import { clearScheduledReminders, pushRecordFields } from "../notifications";
 import { DeviceRecord, Employee } from "../types";
 
 export type ProfileState =
@@ -132,7 +132,9 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     assignDevice: async (record: DeviceRecord) => {
       if (!deviceId) return;
       setViewingAsId(null);
-      await setDoc(doc(db, "devices", deviceId), { ...record, updatedAt: Date.now() });
+      // Keeps this phone's push token, so pushes and morning reminders still
+      // reach it after a profile switch rewrites the record.
+      await setDoc(doc(db, "devices", deviceId), { ...record, ...pushRecordFields(), updatedAt: Date.now() });
     },
     switchProfile: async () => {
       if (!deviceId) return;
