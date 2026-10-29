@@ -84,9 +84,8 @@ export type Employee = {
 };
 
 // pushError/pushErrorAt say why a phone has no push token (set and cleared
-// by registerForPushNotifications). serverReminders: the website Worker sends
-// this phone's morning reminders, so the phone schedules none of its own.
-type DevicePush = { pushToken?: string | null; pushError?: string | null; pushErrorAt?: number | null; serverReminders?: boolean | null };
+// by registerForPushNotifications).
+type DevicePush = { pushToken?: string | null; pushError?: string | null; pushErrorAt?: number | null };
 
 export type DeviceRecord =
   | ({ role: "owner" } & DevicePush)
