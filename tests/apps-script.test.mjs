@@ -199,6 +199,8 @@ const jobDoc = (id, dateKey, extra) => doc(`jobs/${id}`, {
   done: B(false), cancelled: B(false), ...extra,
 });
 
+const shiftKey = (key, days) => new Date(Date.parse(`${key}T12:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
+
 // Answers like Firestore, Expo and Telegram; `override` returns [code, body]
 // to replace any single answer.
 function services({ registry = REGISTRY, jobs = [], devices = [OWNER, CREW], employees = EMPLOYEES, override } = {}) {
@@ -212,7 +214,12 @@ function services({ registry = REGISTRY, jobs = [], devices = [OWNER, CREW], emp
     // The laptop sync reported in just now, so the watchdog stays quiet.
     if (c.url.startsWith(`${FS_URL}/settings/airbnbSync`)) return [200, { fields: { lastSuccessAt: { integerValue: String(Date.now()) } } }];
     if (c.url.startsWith(`${FS_URL}/settings/`)) return [404, { error: { code: 404 } }];
-    if (c.method === "get" && c.url.startsWith(`${FS_URL}/jobs?`)) return [200, { documents: jobs }];
+    if (c.method === "post" && c.url === `${FS_URL}:runQuery`) {
+      // Like Firestore: only jobs with a dateKey at or after the asked-for day.
+      const since = c.body.structuredQuery.where.fieldFilter.value.stringValue;
+      const hits = jobs.filter((d) => d.fields.dateKey && d.fields.dateKey.stringValue >= since);
+      return [200, hits.length ? hits.map((d) => ({ document: d, readTime: "t" })) : [{ readTime: "t" }]];
+    }
     if (c.method === "get" && c.url.startsWith(`${FS_URL}/devices?`)) return [200, { documents: devices }];
     if (c.method === "get" && c.url.startsWith(`${FS_URL}/employees?`)) return [200, { documents: employees }];
     if (c.method === "post" && c.url === `${FS_URL}/jobs`) return [200, { name: `${DOCS}/jobs/new${++made}` }];
@@ -228,7 +235,8 @@ function run({ answer = services(), mail = {}, props = {} } = {}) {
   const searches = [];
   const box = vm.createContext({
     Logger: { log() {} },
-    Utilities: { formatDate: () => TODAY },
+    // TODAY, moved by however many days the date asked about is from now.
+    Utilities: { formatDate: (d) => shiftKey(TODAY, Math.round((d.getTime() - Date.now()) / 86400000)) },
     GmailApp: {
       search(q) {
         searches.push(q);
@@ -254,7 +262,8 @@ function run({ answer = services(), mail = {}, props = {} } = {}) {
   });
   vm.runInContext(code, box);
   const processed = () => (store.processedIds ? store.processedIds.split(",") : []);
-  const writes = () => calls.filter((c) => c.method !== "get" && !c.url.includes("identitytoolkit"));
+  // The jobs query is a POST, but only reads.
+  const writes = () => calls.filter((c) => c.method !== "get" && !c.url.includes("identitytoolkit") && !c.url.endsWith(":runQuery"));
   const pushes = () => calls.filter((c) => c.url.startsWith("https://exp.host/")).map((c) => c.body);
   return { gs: box, calls, store, searches, processed, writes, pushes };
 }
@@ -274,7 +283,7 @@ test("a missing document reads as null, but a failed read throws", () => {
 
 test("a run that can't read the jobs stops before reading mail or writing anything", () => {
   const s = run({
-    answer: services({ override: (c) => (c.method === "get" && c.url.includes("/jobs?") ? [429, "quota"] : null) }),
+    answer: services({ override: (c) => (c.url.endsWith(":runQuery") ? [429, "quota"] : null) }),
     mail: { turno: [thread(newProject("m1"))] },
   });
   assert.throws(() => s.gs.scanAllEmails(), /429/);
@@ -300,17 +309,15 @@ test("a run stops the same way when the registry, devices or employees can't be 
   assert.deepEqual(s.searches, []);
 });
 
-test("a job list whose second page fails throws instead of returning half", () => {
+test("a run reads the jobs from two weeks back on, never the whole collection", () => {
   const { gs, calls } = run({
-    answer: services({
-      override: (c) => {
-        if (c.method !== "get" || !c.url.includes("/jobs?")) return null;
-        return c.url.includes("pageToken=") ? [503, "unavailable"] : [200, { documents: [jobDoc("j1", "2026-11-01")], nextPageToken: "next+page/2=" }];
-      },
-    }),
+    answer: services({ jobs: [jobDoc("old", "2026-10-08"), jobDoc("edge", "2026-10-09"), jobDoc("soon", "2026-11-01")] }),
   });
-  assert.throws(() => gs.loadJobs(), /503/);
-  assert.ok(calls.some((c) => c.url.includes("pageToken=next%2Bpage%2F2%3D")), "page tokens are URL-encoded");
+  assert.deepEqual(plain(gs.loadJobs().map((j) => j.name.split("/").pop())), ["edge", "soon"]);
+  const q = calls.filter((c) => c.url.endsWith(":runQuery"));
+  assert.equal(q.length, 1);
+  assert.equal(q[0].body.structuredQuery.where.fieldFilter.value.stringValue, "2026-10-09");
+  assert.equal(calls.some((c) => c.url.includes("/jobs?")), false);
 });
 
 test("a Turno email becomes a cleaning with its start time, then a push", () => {
@@ -481,4 +488,31 @@ test("a hand-added cleaning tagged with its booking gets the booking's same-day 
   s.gs.applyIcalPlan(ctx, HOUSE, planRaw(gs.parseIcal(FEED), ctx.jobs, HOUSE, TODAY), TODAY);
   const tag = s.writes().find((c) => c.url.includes("/jobs/m?"));
   assert.deepEqual(plain(tag.body.fields), { icalUid: S("1418fb94e984-aaa111@airbnb.com"), sameDayTurnover: B(true) });
+});
+
+test("the job read asks for two weeks back on, never the whole collection", () => {
+  assert.equal(gs.JOB_LOOKBACK_DAYS, 14);
+  assert.deepEqual(plain(gs.jobsQuery("2026-10-15")), {
+    structuredQuery: {
+      from: [{ collectionId: "jobs" }],
+      where: { fieldFilter: { field: { fieldPath: "dateKey" }, op: "GREATER_THAN_OR_EQUAL", value: { stringValue: "2026-10-15" } } },
+    },
+  });
+});
+
+test("query rows become jobs; an empty answer is no jobs, a strange one throws", () => {
+  const rows = [
+    { document: { name: "projects/x/databases/(default)/documents/jobs/a", fields: {
+      dateKey: { stringValue: "2026-10-20" }, property: { stringValue: "Client House" },
+      turnoProjectId: { integerValue: "123456" }, cancelled: { booleanValue: true },
+    } }, readTime: "t" },
+    { document: { name: "projects/x/databases/(default)/documents/jobs/b", fields: { icalUid: { stringValue: "u1" } } }, readTime: "t" },
+  ];
+  const jobs = plain(gs.jobsFromRows(rows));
+  assert.deepEqual(jobs.map((j) => [j.name.split("/").pop(), j.dateKey, j.turnoProjectId, j.icalUid, j.cancelled, j.done]), [
+    ["a", "2026-10-20", "123456", "", true, false],
+    ["b", "", "", "u1", false, false],
+  ]);
+  assert.deepEqual(plain(gs.jobsFromRows([{ readTime: "t" }])), []);
+  assert.throws(() => gs.jobsFromRows({ error: { code: 429 } }), /unexpected answer/);
 });

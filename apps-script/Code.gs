@@ -131,8 +131,51 @@ function loadProperties() {
   });
 }
 
+// Jobs dated from two weeks back on, never the whole collection. Every
+// document read counts against Firestore's free 50,000 a day; reading all
+// 300+ jobs on every 15-minute run, on top of the app and the laptop syncs,
+// ran the project out of reads on Oct 29 2026 and stopped the app loading for
+// everyone until midnight Pacific. Everything this script does is about today
+// onward, so two weeks back is margin. Jobs with no dateKey (unconfirmed
+// website requests) aren't returned; nothing here acts on those.
+var JOB_LOOKBACK_DAYS = 14;
+
+function jobsSinceKey() {
+  return Utilities.formatDate(new Date(Date.now() - JOB_LOOKBACK_DAYS * 86400000), "America/Phoenix", "yyyy-MM-dd");
+}
+
+function jobsQuery(since) {
+  return {
+    structuredQuery: {
+      from: [{ collectionId: "jobs" }],
+      where: { fieldFilter: { field: { fieldPath: "dateKey" }, op: "GREATER_THAN_OR_EQUAL", value: { stringValue: since } } }
+    }
+  };
+}
+
+// Throws on any failure, like fsGet: a job list that only looks empty makes
+// the iCal feeds create every cleaning again.
 function loadJobs() {
-  return fsList("jobs").map(function (d) {
+  var since = jobsSinceKey();
+  var res = UrlFetchApp.fetch(FS + ":runQuery", {
+    method: "post",
+    contentType: "application/json",
+    headers: authHeaders(),
+    payload: JSON.stringify(jobsQuery(since)),
+    muteHttpExceptions: true
+  });
+  var code = res.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error("Firestore jobs query since " + since + " failed: " + code + " " + String(res.getContentText()).slice(0, 200));
+  }
+  return jobsFromRows(JSON.parse(res.getContentText()));
+}
+
+// The query's answer -> jobs. An empty result is one row with only a readTime.
+function jobsFromRows(rows) {
+  if (!Array.isArray(rows)) throw new Error("Firestore jobs query: unexpected answer");
+  return rows.filter(function (r) { return r && r.document; }).map(function (r) {
+    var d = r.document;
     var f = d.fields || {};
     return {
       name: d.name,
