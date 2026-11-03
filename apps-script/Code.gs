@@ -1346,36 +1346,45 @@ function testPush() {
 // The sync stamps settings/airbnbSync on every run; silence here means the
 // Airbnb cleanings have quietly stopped arriving.
 
-var AIRBNB_STALE_HOURS = 30;   // sync runs every 3h; 30h is unambiguous
+var AIRBNB_STALE_HOURS = 4;    // sync runs every 3h, so this is one missed run
 var AIRBNB_REALERT_HOURS = 24; // do not nag daily forever
 
 function checkAirbnbSync() {
   var doc = fsGet("/settings/airbnbSync");
   var f = (doc && doc.fields) || {};
   var lastSuccess = f.lastSuccessAt ? Number(f.lastSuccessAt.integerValue) : 0;
+  var lastRun = f.lastRunAt ? Number(f.lastRunAt.integerValue) : 0;
   var ageHours = lastSuccess ? (Date.now() - lastSuccess) / 3600000 : null;
 
   if (ageHours !== null && ageHours < AIRBNB_STALE_HOURS) return;
+  // Still running on schedule but every run fails: the laptop is fine, the
+  // sync itself is broken (signed out of Airbnb, Airbnb changed something).
+  var failing = lastRun > lastSuccess && (Date.now() - lastRun) / 3600000 < AIRBNB_STALE_HOURS;
 
   var props = PropertiesService.getScriptProperties();
   var lastAlert = Number(props.getProperty("airbnbStaleAlertAt") || 0);
   if (Date.now() - lastAlert < AIRBNB_REALERT_HOURS * 3600000) return;
 
   // Written for someone reading it on a phone, not at a terminal. The sync runs
-  // on a laptop, and the realistic causes are all "the laptop was not able to
-  // run it" - so say that, and say what it costs: cancellations are missed too,
-  // which means a cleaner can drive to a house that no longer needs cleaning.
+  // on a laptop, and the usual cause is "the laptop was not able to run it" -
+  // so say that (or that it runs but fails), and say what it costs: missed
+  // cancellations mean a cleaner can drive to a house that no longer needs one.
+  var age = ageHours === null ? "" : Math.floor(ageHours / 24 >= 2 ? ageHours / 24 : ageHours) +
+    (ageHours / 24 >= 2 ? " days" : " hours");
   var msg = ageHours === null
     ? "The Airbnb calendar sync has never reported a successful run."
-    : "The Airbnb calendar sync has not run in " + Math.floor(ageHours / 24 >= 2 ? ageHours / 24 : ageHours) +
-      (ageHours / 24 >= 2 ? " days" : " hours") + ".";
+    : failing
+      ? "The Airbnb calendar sync has been failing for " + age + "."
+      : "The Airbnb calendar sync has not run in " + age + ".";
   msg += " New Airbnb bookings are not being added, and cancellations are not being removed.";
   if (f.lastError && f.lastError.stringValue) msg += "\n\nLast error: " + f.lastError.stringValue;
-  msg += "\n\nMost likely the laptop is asleep, shut, or was unplugged. Open it and plug it in - it catches up by itself within a few minutes.";
+  msg += failing
+    ? "\n\nThe laptop is on and trying every 3 hours, but each try fails - the error says why (details in logs\\sync.log on the laptop)."
+    : "\n\nMost likely the laptop is asleep, shut, or was unplugged. Open it and plug it in - it catches up by itself within a few minutes.";
 
   // Only start the 24h quiet period once the alert actually reached someone.
   // Stamping on a failed send would silence the retry for a full day.
-  if (alertOwnerTelegram("Airbnb sync has gone quiet", msg)) {
+  if (alertOwnerTelegram(failing ? "Airbnb sync is failing" : "Airbnb sync has gone quiet", msg)) {
     props.setProperty("airbnbStaleAlertAt", String(Date.now()));
   }
 }

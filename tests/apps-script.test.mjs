@@ -711,3 +711,46 @@ test("a change notice asks the owner to check, once, and only while it's fresh",
   assert.deepEqual(stale.pushes(), []);
   assert.deepEqual(stale.processed(), ["u2"]);
 });
+
+// The laptop sync's heartbeat, as settings/airbnbSync, `hours` ago.
+const HOUR = 3600000;
+function watchdog({ successHours, runHours = successHours, error = "", props } = {}) {
+  const fields = { lastError: S(error) };
+  if (successHours !== undefined) fields.lastSuccessAt = { integerValue: String(Date.now() - successHours * HOUR) };
+  if (runHours !== undefined) fields.lastRunAt = { integerValue: String(Date.now() - runHours * HOUR) };
+  const s = run({
+    answer: services({ override: (c) => (c.url.startsWith(`${FS_URL}/settings/airbnbSync`) ? [200, { fields }] : null) }),
+    props,
+  });
+  s.gs.checkAirbnbSync();
+  const sent = s.pushes().flat();
+  return { s, sent };
+}
+
+test("the watchdog stays quiet while the laptop sync is on its 3-hour schedule", () => {
+  assert.deepEqual(watchdog({ successHours: 3.5 }).sent, []);
+});
+
+test("one missed run (4 hours quiet) tells the owner, and only the owner", () => {
+  const { s, sent } = watchdog({ successHours: 4.2 });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "ExponentPushToken[owner]");
+  assert.equal(sent[0].title, "Airbnb sync has gone quiet");
+  assert.match(sent[0].body, /has not run in 4 hours/);
+  assert.match(sent[0].body, /laptop is asleep/);
+  assert.ok(s.store.airbnbStaleAlertAt);
+});
+
+test("a sync that runs but keeps failing says so, with its error", () => {
+  const { sent } = watchdog({ successHours: 7, runHours: 1, error: "Not signed in to dad's Airbnb account." });
+  assert.equal(sent[0].title, "Airbnb sync is failing");
+  assert.match(sent[0].body, /has been failing for 7 hours/);
+  assert.match(sent[0].body, /Last error: Not signed in/);
+  assert.doesNotMatch(sent[0].body, /asleep/);
+});
+
+test("a long silence reads in days, and the owner is told once a day at most", () => {
+  assert.match(watchdog({ successHours: 60 }).sent[0].body, /has not run in 2 days/);
+  assert.deepEqual(watchdog({ successHours: 60, props: { airbnbStaleAlertAt: String(Date.now() - 5 * HOUR) } }).sent, []);
+  assert.equal(watchdog({ successHours: 60, props: { airbnbStaleAlertAt: String(Date.now() - 25 * HOUR) } }).sent.length, 1);
+});
