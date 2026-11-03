@@ -5,6 +5,7 @@ import { parsePrice, type Client } from "../money";
 import { aliasesToLink, type Property, type RegistryChanges } from "../properties";
 import { colors, radius } from "../theme";
 import { formatShortDate, todayKey } from "../turnover";
+import { parseChecklistText } from "../types";
 import { tapSelect } from "./haptics";
 import { BrandButton, DatePickerField, FormInput, SheetModal } from "./ui";
 
@@ -19,6 +20,8 @@ type Form = {
   garageCode: string;
   supplyCode: string;
   billedFrom: string | null;
+  steps: string;
+  forwardsFrom: string;
 };
 
 function formOf(house: Property | null): Form {
@@ -33,6 +36,8 @@ function formOf(house: Property | null): Form {
     garageCode: house?.garageCode || "",
     supplyCode: house?.supplyCode || "",
     billedFrom: house?.billedFrom || null,
+    steps: (house?.checklist || []).join("\n"),
+    forwardsFrom: house?.forwardsFrom || "",
   };
 }
 
@@ -108,6 +113,12 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
       Alert.alert("Check the rooms", "Use numbers, like 3 and 2.5.");
       return;
     }
+    const steps = parseChecklistText(form.steps);
+    const forwardsFrom = form.forwardsFrom.trim();
+    if (forwardsFrom && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(forwardsFrom)) {
+      Alert.alert("Check the email", "Enter the one address the host forwards from, like host@example.com.");
+      return;
+    }
     const changes: RegistryChanges = {
       short: form.short.trim() || null,
       price,
@@ -117,6 +128,8 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
       garageCode: form.garageCode.trim() || null,
       supplyCode: form.supplyCode.trim() || null,
       billedFrom: form.billedFrom,
+      checklist: steps.length ? steps : null,
+      forwardsFrom: forwardsFrom || null,
     };
     if (adding) changes.address = form.address.trim();
     const base: Property = house || { name, address: form.address.trim(), aliases: [], bedrooms: 0, bathrooms: 0 };
@@ -165,6 +178,25 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
       <FormInput label="Front door" placeholder="Not set" value={form.doorCode} onChangeText={set("doorCode")} autoCapitalize="none" />
       <FormInput label="Garage" placeholder="Not set" value={form.garageCode} onChangeText={set("garageCode")} autoCapitalize="none" />
       <FormInput label="Supply closet" placeholder="Not set" value={form.supplyCode} onChangeText={set("supplyCode")} autoCapitalize="none" />
+      <Text style={styles.group}>Checklist</Text>
+      <Text style={styles.hint}>Only this house gets these, at the end of every cleaning here. One step per line.</Text>
+      <FormInput
+        label="Extra steps"
+        placeholder={"Open the blinds\nLeave a few lights on | Living room and kitchen"}
+        value={form.steps}
+        onChangeText={set("steps")}
+        multiline
+      />
+      <Text style={styles.group}>Airbnb emails</Text>
+      <Text style={styles.hint}>If the host forwards their Airbnb emails, their bookings and cancellations add and cancel cleanings here.</Text>
+      <FormInput
+        label="Host forwards from"
+        placeholder="host@example.com"
+        value={form.forwardsFrom}
+        onChangeText={set("forwardsFrom")}
+        keyboardType="email-address"
+        autoCapitalize="none"
+      />
 
       <TouchableOpacity
         style={[styles.toggleRow, billed && styles.toggleRowOn]}
@@ -217,6 +249,7 @@ const styles = StyleSheet.create({
   address: { fontSize: 13.5, color: colors.muted, marginBottom: 12 },
   pair: { flexDirection: "row", gap: 10 },
   group: { fontSize: 12.5, fontWeight: "700", color: colors.ink, marginTop: 4, marginBottom: 8 },
+  hint: { fontSize: 12, color: colors.muted, marginTop: -4, marginBottom: 8 },
   toggleRow: {
     flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderColor: colors.line,
     borderRadius: radius.md, padding: 12, marginBottom: 14, backgroundColor: colors.bg,

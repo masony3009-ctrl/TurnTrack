@@ -72,3 +72,32 @@ test("patchRegistry adds aliases without dropping or repeating the old ones", ()
   const added = patchRegistry([], "Oak Bend", { address: "4 Oak Rd" }, ["Pony"]);
   assert.deepEqual(added[0].aliases, ["Pony"]);
 });
+
+test("parseProperties reads a house's own checklist steps, dropping blanks", () => {
+  const [a, b, c] = parseProperties([
+    { name: "Palm", checklist: ["Open the blinds", "  ", 7, " Dust the hot tub cover "] },
+    { name: "Mesa", checklist: ["", " "] },
+    { name: "Oak", checklist: "Open the blinds" },
+  ]);
+  assert.deepEqual(a.checklist, ["Open the blinds", "Dust the hot tub cover"]);
+  assert.equal(b.checklist, undefined);
+  assert.equal(c.checklist, undefined);
+});
+
+test("patchRegistry stores a house's steps and removes them when cleared", () => {
+  const set = patchRegistry([{ name: "Palm", address: "1 Palm Rd" }], "Palm", { checklist: ["Open the blinds"] });
+  assert.deepEqual(set[0].checklist, ["Open the blinds"]);
+  const cleared = patchRegistry(set, "Palm", { checklist: null });
+  assert.equal("checklist" in cleared[0], false);
+});
+
+test("parseProperties reads the address a host forwards Airbnb emails from", () => {
+  const [a, b, c] = parseProperties([
+    { name: "Palm", forwardsFrom: " host@example.com " },
+    { name: "Mesa", forwardsFrom: "  " },
+    { name: "Oak", forwardsFrom: 7 },
+  ]);
+  assert.equal(a.forwardsFrom, "host@example.com");
+  assert.equal(b.forwardsFrom, undefined);
+  assert.equal(c.forwardsFrom, undefined);
+});

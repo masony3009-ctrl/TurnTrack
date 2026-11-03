@@ -20,6 +20,13 @@ export type Property = {
   // "YYYY-MM-DD": the host pays us directly (not through Turno) for cleanings
   // from this day on, so the app tracks what they still owe.
   billedFrom?: string;
+  // Steps only this house gets, after the shared checklist (one line each,
+  // written like checklist template lines). See buildChecklist.
+  checklist?: string[];
+  // The address a host forwards their Airbnb emails from, for a house whose
+  // host does that instead of sharing a calendar link. The Apps Script reads
+  // their booking and cancellation emails from it and nothing else.
+  forwardsFrom?: string;
 };
 
 export type AccessCode = { label: string; code: string };
@@ -92,7 +99,16 @@ export function parseProperties(raw: unknown): Property[] {
       supplyCode: v.supplyCode ? String(v.supplyCode) : undefined,
       price: Number(v.price) > 0 ? Number(v.price) : undefined,
       billedFrom: typeof v.billedFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.billedFrom) ? v.billedFrom : undefined,
+      checklist: houseSteps(v.checklist),
+      forwardsFrom: typeof v.forwardsFrom === "string" && v.forwardsFrom.trim() ? v.forwardsFrom.trim() : undefined,
     }));
+}
+
+// A house's own checklist lines: the non-blank strings, or undefined for none.
+function houseSteps(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const lines = raw.filter((s): s is string => typeof s === "string" && s.trim() !== "").map((s) => s.trim());
+  return lines.length ? lines : undefined;
 }
 
 // The street part of a job's address ("4 Oak Rd" out of "4 Oak Rd, Mesa, AZ"),

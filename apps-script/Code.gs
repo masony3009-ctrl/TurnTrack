@@ -12,7 +12,9 @@
  *
  * Airbnb scanning was removed 2026-09-10: the account no longer hosts, its
  * last host email was June, and the only recent Airbnb mail was personal
- * travel — which the old parser turned into phantom cleanings.
+ * travel — which the old parser turned into phantom cleanings. Since Nov 2026
+ * it reads Airbnb mail a host forwards, and only from the address their house
+ * names (see "Airbnb emails a host forwards").
  */
 
 var PROJECT_ID = "cleanerapp-3f196";
@@ -50,6 +52,7 @@ function scanAllEmails() {
   scanTurnoEmails(ctx);
   sendDigest(ctx);
   reportOffers(ctx);
+  scanForwardedAirbnb(ctx);    // hosts who forward us their Airbnb emails
   scanIcalFeeds(ctx);          // houses whose hosts gave us an Airbnb calendar link
   checkAirbnbSync(); // notices if the PC-side Airbnb sync has gone quiet
 }
@@ -126,7 +129,10 @@ function loadProperties() {
       bathrooms: numberField(f.bathrooms),
       short: f.short ? f.short.stringValue : "",
       // A host's Airbnb calendar export link, for houses we aren't co-hosts on.
-      icalUrl: f.icalUrl ? f.icalUrl.stringValue : ""
+      icalUrl: f.icalUrl ? f.icalUrl.stringValue : "",
+      // Where the host forwards their Airbnb emails from, for houses whose
+      // host does that instead of sharing a calendar link.
+      forwardsFrom: forwardAddresses(f.forwardsFrom ? f.forwardsFrom.stringValue : "")
     };
   });
 }
@@ -186,6 +192,8 @@ function jobsFromRows(rows) {
       turnoProjectId: f.turnoProjectId ? String(f.turnoProjectId.stringValue || f.turnoProjectId.integerValue || "") : "",
       source: f.source ? f.source.stringValue : "",
       icalUid: f.icalUid ? f.icalUid.stringValue : "",
+      airbnbCode: f.airbnbCode ? f.airbnbCode.stringValue : "",
+      checkIn: f.checkIn ? f.checkIn.stringValue : "",
       sameDayTurnover: !!(f.sameDayTurnover && f.sameDayTurnover.booleanValue),
       done: !!(f.done && f.done.booleanValue),
       cancelled: !!(f.cancelled && f.cancelled.booleanValue)
@@ -438,6 +446,10 @@ function createJob(ctx, opts) {
   if (opts.turnoTime) fields.turnoTime = str(opts.turnoTime);
   // The booking's iCal UID: how a date change or cancellation finds this job.
   if (opts.icalUid) fields.icalUid = str(opts.icalUid);
+  // A forwarded booking's Airbnb code and check-in day: how its cancellation
+  // finds it, and how the stay before it learns it turns over the same day.
+  if (opts.airbnbCode) fields.airbnbCode = str(opts.airbnbCode);
+  if (opts.checkIn) fields.checkIn = str(opts.checkIn);
   if (opts.bedrooms) fields.bedrooms = int(opts.bedrooms);
   if (opts.bathrooms) fields.bathrooms = { doubleValue: opts.bathrooms };
 
@@ -457,6 +469,7 @@ function createJob(ctx, opts) {
   ctx.jobs.push({
     name: created.name, dateKey: opts.dateKey, address: opts.address, property: opts.property || "",
     turnoProjectId: opts.turnoProjectId || "", source: opts.source, icalUid: opts.icalUid || "",
+    airbnbCode: opts.airbnbCode || "", checkIn: opts.checkIn || "",
     sameDayTurnover: !!opts.sameDay, done: false, cancelled: false
   });
   Logger.log("created " + opts.dateKey + " - " + opts.address);
@@ -792,6 +805,268 @@ function clearIcalProblem(house) {
   var props = PropertiesService.getScriptProperties();
   var key = "icalAlertAt:" + house.name;
   if (props.getProperty(key)) props.deleteProperty(key);
+}
+
+// ---- Airbnb emails a host forwards ----------------------------------------
+
+// A host who doesn't share an Airbnb calendar link can forward Airbnb's emails
+// here instead. Their house in the registry names the address they forward
+// from (`forwardsFrom`, set in the app's Houses tab - never in this file, which
+// is mirrored into a public repo). Only mail tied to that address counts: a
+// forward by hand comes from the host, and a Gmail auto-forward keeps Airbnb
+// as the sender but stays addressed to the host. Airbnb mail sent to this
+// inbox itself is the owner's own travel and is never read.
+//
+//   Reservation confirmed - Pat arrives Nov 5   a cleaning on the checkout day
+//   Canceled: Reservation HMABCDEF12 for ...     that cleaning cancelled
+//   Reservation updated / wants to change        the owner is asked to check:
+//                                                these emails carry no dates
+
+var FORWARD_SOURCE = "airbnb-email";
+var FORWARD_WINDOW = "newer_than:60d";
+// A change notice older than this is history by the time it's read.
+var FORWARD_NOTICE_DAYS = 3;
+
+// Airbnb writes "Check-in Sun, May 31 3:00 PM Checkout Thu, Jun 4 11:00 AM"
+// and "Confirmation code HMABCDEF12". The labels are capitalised; the
+// lowercase "check-in details" in the greeting must not match.
+var CHECK_IN = /Check[-\u2010\u2011 ]?in\s*:?\s*((?:[A-Za-z]{3,9},?\s+)?[A-Za-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?)/;
+var CHECK_OUT = /Check[-\u2010\u2011 ]?out\s*:?\s*((?:[A-Za-z]{3,9},?\s+)?[A-Za-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?)/;
+var CONFIRMATION_CODE = /Confirmation code\s*:?\s*(HM[A-Z0-9]{6,10})\b/;
+// "Reservation HMZYXWVU98 for May 24 – 31, 2026" or "... for May 30 – Jun 2, 2026"
+var CANCELLED_STAY = /[Rr]eservation\s+(HM[A-Z0-9]{6,10})\s+for\s+([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*[-\u2013\u2014]\s*(?:([A-Za-z]{3,9})\.?\s+)?(\d{1,2})(?:,?\s*(\d{4}))?/;
+
+function scanForwardedAirbnb(ctx) {
+  ctx.forwardChanges = { created: [], cancelled: [] };
+  var houses = ctx.properties.filter(function (h) { return h.forwardsFrom && h.forwardsFrom.length > 0; });
+  if (!houses.length) return;
+  var who = [];
+  houses.forEach(function (h) {
+    h.forwardsFrom.forEach(function (a) { if (who.indexOf(a) === -1) who.push(a); });
+  });
+  var list = who.join(" OR ");
+  var threads = GmailApp.search("(from:(" + list + ") OR to:(" + list + ")) -from:me in:anywhere -in:trash " + FORWARD_WINDOW, 0, MAX_THREADS);
+  for (var i = 0; i < threads.length; i++) {
+    var msgs = threads[i].getMessages();
+    for (var j = 0; j < msgs.length; j++) {
+      var id = msgs[j].getId();
+      if (isAlreadyProcessed(id)) continue;
+      try {
+        if (handleForwardedAirbnb(ctx, houses, msgs[j])) markAsProcessed(id);
+      } catch (e) {
+        Logger.log("forwarded Airbnb email left for the next run: " + e);
+      }
+    }
+  }
+  var d = buildDigest(ctx, "Airbnb", ctx.forwardChanges);
+  if (d) notifyPhones(d.title, d.body, d.data);
+}
+
+// True when the message is finished with; false to try it again next run (an
+// owner alert that didn't go out). Throws when a write fails, which also
+// leaves it for the next run.
+function handleForwardedAirbnb(ctx, houses, msg) {
+  var mine = forwardedFor(houses, msg.getFrom(), msg.getTo() + "," + (msg.getCc() || ""));
+  if (!mine.length) return true;
+  var plain = String(msg.getPlainBody() || "");
+  var text = cleanBody(msg.getBody()) + " " + plain.replace(/\s+/g, " ");
+  // Anything else the host emails us is none of this code's business.
+  if (!/airbnb/i.test(text)) return true;
+  var subject = stripForward(msg.getSubject());
+  var kind = airbnbKind(subject, text);
+  if (!kind) return true;
+  var house = pickHouse(mine, listingTitle(plain), text);
+  if (kind === "booking") return forwardedBooking(ctx, house, subject, text);
+  if (kind === "cancel") return forwardedCancel(ctx, house, subject, text);
+  return forwardedChange(house, msg, subject);
+}
+
+// "Pat <pat@example.com>, lee@example.com" -> ["pat@example.com", "lee@example.com"]
+function forwardAddresses(raw) {
+  return String(raw || "").toLowerCase().match(/[^\s,;<>"']+@[^\s,;<>"']+/g) || [];
+}
+
+// The houses whose host this message came through: sent by them (a forward by
+// hand), or sent by Airbnb to them (an auto-forward keeps both headers).
+function forwardedFor(houses, from, to) {
+  var sender = forwardAddresses(from), recipients = forwardAddresses(to);
+  var fromAirbnb = sender.some(function (a) { return /@airbnb\.com$/.test(a); });
+  return houses.filter(function (h) {
+    return h.forwardsFrom.some(function (a) {
+      return sender.indexOf(a) !== -1 || (fromAirbnb && recipients.indexOf(a) !== -1);
+    });
+  });
+}
+
+// "Fwd: FW: Reservation confirmed - ..." -> "Reservation confirmed - ..."
+function stripForward(subject) {
+  return String(subject || "").replace(/^(?:\s*fwd?\s*:\s*)+/i, "").trim();
+}
+
+// "booking", "cancel", "change", or "" for the rest (reminders, payouts,
+// reviews). Booking emails mention "canceling this reservation" in their
+// policy text, so a cancellation needs Airbnb's own wording with a code.
+function airbnbKind(subject, text) {
+  if (/^Cancell?ed\b/i.test(subject) || /(?:had to|has) cancel(?:l?ed)?\s+(?:the\s+)?reservation\s+HM[A-Z0-9]{6,10}/i.test(text)) return "cancel";
+  if (/^Reservation confirmed/i.test(subject) || /New booking confirmed/i.test(text)) return "booking";
+  if (/^Reservation (?:updated|altered|changed)|wants to change (?:their|the) reservation/i.test(subject) ||
+      /reservation with .{1,40}? has been updated|wants to change (?:their|the) reservation/i.test(text)) return "change";
+  return "";
+}
+
+// The dates and code of a "Reservation confirmed" email, or null when any of
+// them is missing. Airbnb leaves the year off ("Sun, May 31").
+function parseAirbnbBooking(text) {
+  var t = String(text || "");
+  var inM = t.match(CHECK_IN), outM = t.match(CHECK_OUT), codeM = t.match(CONFIRMATION_CODE);
+  if (!inM || !outM || !codeM) return null;
+  var checkIn = toDateKey(inM[1]), checkOut = toDateKey(outM[1]);
+  if (!checkIn || !checkOut) return null;
+  // A stay over New Year checks out in the year after it checks in.
+  if (checkOut <= checkIn && !/\d{4}/.test(outM[1])) checkOut = (Number(checkOut.slice(0, 4)) + 1) + checkOut.slice(4);
+  if (checkOut <= checkIn) return null;
+  return { code: codeM[1], checkIn: checkIn, checkOut: checkOut };
+}
+
+// The code and stay of a cancellation, from the subject or else the body
+// ("your guest had to cancel reservation HM... for May 24 – 31"). Dates are
+// "" when only the code could be read.
+function parseAirbnbCancel(subject, text) {
+  var m = String(subject || "").match(CANCELLED_STAY) || String(text || "").match(CANCELLED_STAY);
+  if (!m) {
+    var c = String(text || "").match(/[Rr]eservation\s+(HM[A-Z0-9]{6,10})\b/);
+    return c ? { code: c[1], checkIn: "", checkOut: "" } : null;
+  }
+  var year = m[6] ? ", " + m[6] : "";
+  var checkIn = toDateKey(m[2] + " " + m[3] + year);
+  var checkOut = toDateKey((m[4] || m[2]) + " " + m[5] + year);
+  // "Dec 30 – Jan 2, 2027": the year written is the checkout's.
+  if (checkIn && checkOut && checkIn > checkOut) checkIn = (Number(checkIn.slice(0, 4)) - 1) + checkIn.slice(4);
+  return { code: m[1], checkIn: checkIn, checkOut: checkOut };
+}
+
+// The listing's name: the line above the room type ("Entire home/apt") in the
+// plain-text email, or "" when that layout isn't there.
+function listingTitle(plain) {
+  var lines = String(plain || "").split(/\r?\n/)
+    .map(function (l) { return l.replace(/^>+\s*/, "").trim(); })
+    .filter(function (l) { return l; });
+  for (var i = 1; i < lines.length; i++) {
+    if (/^(?:Entire\b|Private room|Shared room|Room in\b|Hotel room)/i.test(lines[i])) return lines[i - 1];
+  }
+  return "";
+}
+
+// Which of the host's houses an email is about: by name or nickname, in the
+// listing's name first and then anywhere in it. A host with one house needs
+// no match - their listing title is often not what we call the house.
+function pickHouse(houses, title, text) {
+  return matchProperty(houses, title) || matchProperty(houses, text) || (houses.length === 1 ? houses[0] : null);
+}
+
+function jobWithCode(ctx, code) {
+  var found = null;
+  for (var i = 0; i < ctx.jobs.length; i++) {
+    var j = ctx.jobs[i];
+    if (j.airbnbCode !== code) continue;
+    if (!found || (found.cancelled && !j.cancelled)) found = j;
+  }
+  return found;
+}
+
+function forwardedBooking(ctx, house, subject, text) {
+  var b = parseAirbnbBooking(text);
+  if (!b) {
+    return alertOwnerTelegram("Couldn't read a forwarded Airbnb booking",
+      "\"" + subject + "\" came in, but its dates or confirmation code weren't there. Add the cleaning in the app yourself.");
+  }
+  if (b.checkOut < todayKey()) return true;
+  if (!house) {
+    return alertOwnerTelegram("Forwarded Airbnb booking for an unknown house",
+      "A booking checking out " + labelFromKey(b.checkOut) + " came in, but it isn't clear which of the host's houses it's for. " +
+      "Add the cleaning in the app, and give the house its Airbnb listing name as a nickname.");
+  }
+  // Already scheduled - or cancelled since, which an older email mustn't undo.
+  if (jobWithCode(ctx, b.code)) return true;
+
+  var key = dedupeKey(house.name, house.address);
+  var sameDay = ctx.jobs.some(function (j) {
+    return !j.cancelled && j.checkIn === b.checkOut && dedupeKey(j.property, j.address) === key;
+  });
+  // A cleaning someone already put in for that house and day is tagged with
+  // the booking instead of doubled.
+  var existing = liveJobAt(ctx, house, b.checkOut);
+  if (existing) {
+    if (!existing.airbnbCode && existing.name) {
+      if (!patchDoc(existing.name, { airbnbCode: str(b.code), checkIn: str(b.checkIn) })) throw new Error("couldn't tag job " + jobIdOf(existing));
+      existing.airbnbCode = b.code;
+      existing.checkIn = b.checkIn;
+    }
+  } else {
+    createJob(ctx, {
+      dateKey: b.checkOut, address: house.address, property: house.name, type: ICAL_JOB_TYPE, source: FORWARD_SOURCE,
+      airbnbCode: b.code, checkIn: b.checkIn, sameDay: sameDay,
+      bedrooms: house.bedrooms, bathrooms: house.bathrooms, changes: ctx.forwardChanges
+    });
+  }
+  // The guest before this one now leaves the day this one arrives.
+  var before = liveJobAt(ctx, house, b.checkIn);
+  if (before && before.name && !before.done && !before.sameDayTurnover && patchDoc(before.name, { sameDayTurnover: bool(true) })) {
+    before.sameDayTurnover = true;
+  }
+  return true;
+}
+
+function forwardedCancel(ctx, house, subject, text) {
+  var c = parseAirbnbCancel(subject, text);
+  if (!c) {
+    return alertOwnerTelegram("Airbnb cancellation forwarded",
+      "\"" + subject + "\" came in, but which booking it cancels couldn't be read. Take the cleaning off in the app yourself.");
+  }
+  if (c.checkOut && c.checkOut < todayKey()) return true;
+  var job = jobWithCode(ctx, c.code);
+  // A booking from before the host started forwarding has no code on its
+  // cleaning; then the house and checkout day find it.
+  if (!job && house && c.checkOut) {
+    var at = liveJobAt(ctx, house, c.checkOut);
+    if (at && !at.airbnbCode) job = at;
+  }
+  if (!job) {
+    return alertOwnerTelegram("Airbnb cancellation forwarded",
+      "Reservation " + c.code + (c.checkOut ? " (checkout " + labelFromKey(c.checkOut) + ")" : "") +
+      " was cancelled, but no matching cleaning was found, so nothing changed. Check the app.");
+  }
+  if (job.cancelled || job.done) return true;
+  var fields = { cancelled: bool(true), cancelledAt: int(Date.now()), cancelReason: str("Guest cancelled on Airbnb (forwarded email)"), startedAt: nul() };
+  if (!patchDoc(job.name, fields)) throw new Error("couldn't cancel job " + jobIdOf(job));
+  job.cancelled = true;
+  ctx.forwardChanges.cancelled.push({ dateKey: job.dateKey, property: job.property || job.address, jobId: jobIdOf(job) });
+
+  // The stay before this one no longer turns over the same day, unless
+  // another booking still arrives then. Only a flag this code set is undone.
+  var arrival = job.checkIn || c.checkIn;
+  if (!arrival) return true;
+  var where = { name: job.property, address: job.address };
+  var key = dedupeKey(where.name, where.address);
+  var stillArriving = ctx.jobs.some(function (j) {
+    return !j.cancelled && j.checkIn === arrival && dedupeKey(j.property, j.address) === key;
+  });
+  var before = liveJobAt(ctx, where, arrival);
+  if (before && !stillArriving && before.source === FORWARD_SOURCE && before.sameDayTurnover && !before.done &&
+      patchDoc(before.name, { sameDayTurnover: bool(false) })) {
+    before.sameDayTurnover = false;
+  }
+  return true;
+}
+
+// Airbnb's change emails ("Reservation updated", "Pat wants to change their
+// reservation") don't say the new dates, so a person has to look.
+function forwardedChange(house, msg, subject) {
+  if (Date.now() - msg.getDate().getTime() > FORWARD_NOTICE_DAYS * 86400000) return true;
+  var where = house ? house.short || house.name : "a forwarding host's house";
+  return alertOwnerTelegram("Airbnb booking changed at " + where,
+    "\"" + subject + "\" came in. Airbnb doesn't put the new dates in that email, so nothing was moved. " +
+    "Check the cleanings for " + where + " in the app.");
 }
 
 // ---- processed message ids ----------------------------------------------

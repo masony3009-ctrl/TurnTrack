@@ -240,6 +240,7 @@ function run({ answer = services(), mail = {}, props = {} } = {}) {
     GmailApp: {
       search(q) {
         searches.push(q);
+        if (q.startsWith("(from:(")) return mail.airbnb || [];
         return (q.includes("New Cleaning project") ? mail.turno : mail.cancel) || [];
       },
     },
@@ -515,4 +516,198 @@ test("query rows become jobs; an empty answer is no jobs, a strange one throws",
   ]);
   assert.deepEqual(plain(gs.jobsFromRows([{ readTime: "t" }])), []);
   assert.throws(() => gs.jobsFromRows({ error: { code: 429 } }), /unexpected answer/);
+});
+
+// ---- Airbnb emails a host forwards ------------------------------------------
+
+const HOST = "host@example.com";
+const REGISTRY_FWD = { fields: { items: { arrayValue: { values: [{ mapValue: { fields: {
+  ...REGISTRY.fields.items.arrayValue.values[0].mapValue.fields, forwardsFrom: S(`Host Person <${HOST}>`),
+} } }] } } } };
+// Laid out like Airbnb's real "Reservation confirmed" email; guest and house made up.
+const bookingPlain = ({ checkIn = "Sun, Nov 15", checkOut = "Thu, Nov 19", code = "HMABCDEF12", listing = "Client Getaway Retreat" } = {}) => [
+  "New booking confirmed! Pat arrives soon.", "", "Send a message to confirm check-in details or welcome Pat.", "",
+  "Pat Example", "Identity verified · 1 review", "Mesa, AZ", "", listing, "", "Entire home/apt", "",
+  "Check-in", "", checkIn, "", "3:00 PM", "", "Checkout", "", checkOut, "", "11:00 AM", "", "Guests", "", "1 adult", "",
+  "Confirmation code", "", code, "", "View itinerary", "", "Cancellations", "",
+  "The penalties for canceling this reservation include a public review.", "", "Airbnb, Inc.", "888 Brannan St.",
+].join("\n");
+const asHtml = (plain) => plain.split("\n").map((l) => `<p>${l}</p>`).join("");
+const forwardedHeader = (subject) => `---------- Forwarded message ---------\nFrom: Airbnb <automated@airbnb.com>\nSubject: ${subject}\nTo: <${HOST}>\n\n`;
+const mailMsg = (id, { subject, from, to = "Owner <owner@example.com>", plain, date = new Date() }) => ({
+  getId: () => id, getSubject: () => subject, getFrom: () => from, getTo: () => to, getCc: () => "",
+  getBody: () => asHtml(plain), getPlainBody: () => plain, getDate: () => date,
+});
+// Forwarded by hand: from the host, with Airbnb's email quoted inside.
+const byHand = (id, subject, plain, extra) =>
+  mailMsg(id, { subject: `Fwd: ${subject}`, from: `Host Person <${HOST}>`, plain: forwardedHeader(subject) + plain, ...extra });
+// Gmail's auto-forward: still from Airbnb, still addressed to the host.
+const autoForwarded = (id, subject, plain) => mailMsg(id, { subject, from: "Airbnb <automated@airbnb.com>", to: HOST, plain });
+const BOOKED = "Reservation confirmed - Pat Example arrives Nov 15";
+const IN = gs.toDateKey("Nov 15");
+const OUT = gs.toDateKey("Nov 19");
+const created = (s) => s.writes().filter((c) => c.method === "post" && c.url === `${FS_URL}/jobs`);
+const patches = (s) => s.writes().filter((c) => c.method === "patch");
+const fwdJob = (id, dateKey, extra) => jobDoc(id, dateKey, { source: S("airbnb-email"), airbnbCode: S("HMABCDEF12"), checkIn: S(IN), ...extra });
+
+test("a booking email reads as its check-in, checkout and code", () => {
+  assert.deepEqual(plain(gs.parseAirbnbBooking(asHtml(bookingPlain()).replace(/<[^>]+>/g, " "))), { code: "HMABCDEF12", checkIn: IN, checkOut: OUT });
+  // A stay over New Year checks out the year after it checks in.
+  const ny = plain(gs.parseAirbnbBooking(bookingPlain({ checkIn: "Wed, Dec 30", checkOut: "Sat, Jan 2" }).replace(/\s+/g, " ")));
+  assert.equal(Number(ny.checkOut.slice(0, 4)), Number(ny.checkIn.slice(0, 4)) + 1);
+  // Missing a code or a date is no booking at all.
+  assert.equal(gs.parseAirbnbBooking("Check-in Sun, Nov 15 Checkout Thu, Nov 19"), null);
+  assert.equal(gs.parseAirbnbBooking("Checkout Thu, Nov 19 Confirmation code HMABCDEF12"), null);
+});
+
+test("a cancellation reads its code and stay from the subject or the body", () => {
+  assert.deepEqual(plain(gs.parseAirbnbCancel("Canceled: Reservation HMZYXWVU98 for May 24 – 31, 2026", "")),
+    { code: "HMZYXWVU98", checkIn: "2026-05-24", checkOut: "2026-05-31" });
+  assert.deepEqual(plain(gs.parseAirbnbCancel("Canceled: Reservation HMZYXWVU98 for May 30 – Jun 2, 2026", "")),
+    { code: "HMZYXWVU98", checkIn: "2026-05-30", checkOut: "2026-06-02" });
+  assert.deepEqual(plain(gs.parseAirbnbCancel("Canceled: Reservation HMZYXWVU98 for Dec 30 – Jan 2, 2027", "")),
+    { code: "HMZYXWVU98", checkIn: "2026-12-30", checkOut: "2027-01-02" });
+  assert.equal(gs.parseAirbnbCancel("Fwd: cancelled", "your guest had to cancel reservation HMZYXWVU98 for Jun 10 – 15.").code, "HMZYXWVU98");
+  assert.equal(gs.parseAirbnbCancel("Canceled", "nothing useful"), null);
+});
+
+test("emails are sorted into bookings, cancellations and changes; the rest is ignored", () => {
+  const text = (p) => p.replace(/\s+/g, " ");
+  assert.equal(gs.airbnbKind(gs.stripForward(`Fwd: FW: ${BOOKED}`), text(bookingPlain())), "booking");
+  assert.equal(gs.airbnbKind("Canceled: Reservation HMZYXWVU98 for May 24 – 31, 2026", ""), "cancel");
+  assert.equal(gs.airbnbKind("Reservation updated", "Your reservation with Pat has been updated"), "change");
+  assert.equal(gs.airbnbKind("Pat wants to change their reservation", ""), "change");
+  for (const s of ["Reservation reminder: Pat is coming soon!", "Reservation HMZYXWVU98 payment successful", "Lunch Friday?"]) {
+    assert.equal(gs.airbnbKind(s, "The penalties for canceling this reservation include a fee."), "", s);
+  }
+});
+
+test("the listing name is the line above the room type", () => {
+  assert.equal(gs.listingTitle(bookingPlain()), "Client Getaway Retreat");
+  assert.equal(gs.listingTitle("no layout here"), "");
+});
+
+test("no house names a forwarding address: Gmail isn't searched for one", () => {
+  const s = run({ mail: { airbnb: [thread(byHand("f1", BOOKED, bookingPlain()))] } });
+  s.gs.scanAllEmails();
+  assert.equal(s.searches.some((q) => q.includes(HOST)), false);
+  assert.deepEqual(created(s), []);
+});
+
+test("a booking the host forwards by hand becomes a cleaning on the checkout day", () => {
+  const s = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(byHand("f1", BOOKED, bookingPlain()))] } });
+  s.gs.scanAllEmails();
+  const q = s.searches.find((x) => x.includes(HOST));
+  assert.ok(q.startsWith(`(from:(${HOST}) OR to:(${HOST})) -from:me`), q);
+  const made = created(s);
+  assert.equal(made.length, 1);
+  const f = made[0].body.fields;
+  assert.deepEqual(plain([f.dateKey, f.property, f.type, f.source, f.airbnbCode, f.checkIn, f.sameDayTurnover, f.time]),
+    [S(OUT), S("Client House"), S("Airbnb Turnover"), S("airbnb-email"), S("HMABCDEF12"), S(IN), B(false), { nullValue: null }]);
+  assert.equal(s.pushes().at(-1)[0].title, "Airbnb: new cleaning");
+  assert.deepEqual(s.processed(), ["f1"]);
+});
+
+test("an auto-forwarded booking counts; Airbnb mail to this inbox itself never does", () => {
+  const s = run({
+    answer: services({ registry: REGISTRY_FWD }),
+    mail: { airbnb: [thread(
+      autoForwarded("auto", BOOKED, bookingPlain()),
+      // The owner's own trip: from Airbnb, but not addressed to the host.
+      mailMsg("trip", { subject: BOOKED, from: "Airbnb <automated@airbnb.com>", plain: bookingPlain({ code: "HMTRIP0001", checkIn: "Fri, Nov 20", checkOut: "Sun, Nov 22" }) }),
+      // The host writing about something else.
+      mailMsg("chat", { subject: "Reservation confirmed - lunch?", from: HOST, plain: "See you Friday" }),
+    )] },
+  });
+  s.gs.scanAllEmails();
+  assert.deepEqual(created(s).map((c) => c.body.fields.airbnbCode.stringValue), ["HMABCDEF12"]);
+});
+
+test("the same booking forwarded twice, or one already cancelled, isn't scheduled again", () => {
+  for (const cancelled of [false, true]) {
+    const s = run({
+      answer: services({ registry: REGISTRY_FWD, jobs: [fwdJob("b1", OUT, { cancelled: B(cancelled) })] }),
+      mail: { airbnb: [thread(byHand("again", BOOKED, bookingPlain()))] },
+    });
+    s.gs.scanAllEmails();
+    assert.deepEqual(created(s), []);
+  }
+});
+
+test("a cleaning already in for that day is tagged with the booking, not doubled", () => {
+  const s = run({
+    answer: services({ registry: REGISTRY_FWD, jobs: [jobDoc("manual", OUT, { source: S("app") })] }),
+    mail: { airbnb: [thread(byHand("f1", BOOKED, bookingPlain()))] },
+  });
+  s.gs.scanAllEmails();
+  assert.deepEqual(created(s), []);
+  const tag = patches(s).find((c) => c.url.includes("/jobs/manual?"));
+  assert.deepEqual(plain(tag.body.fields), { airbnbCode: S("HMABCDEF12"), checkIn: S(IN) });
+});
+
+test("a booking arriving the day another guest leaves makes that cleaning same-day", () => {
+  const s = run({
+    answer: services({ registry: REGISTRY_FWD, jobs: [fwdJob("prev", IN, { airbnbCode: S("HMPREVIOUS"), checkIn: S("2026-11-10"), sameDayTurnover: B(false) })] }),
+    mail: { airbnb: [thread(byHand("f1", BOOKED, bookingPlain()))] },
+  });
+  s.gs.scanAllEmails();
+  const flag = patches(s).find((c) => c.url.includes("/jobs/prev?"));
+  assert.deepEqual(plain(flag.body.fields), { sameDayTurnover: B(true) });
+});
+
+test("a forwarded cancellation cancels that booking's cleaning and clears the same-day flag it set", () => {
+  const s = run({
+    answer: services({ registry: REGISTRY_FWD, jobs: [
+      fwdJob("b1", OUT),
+      fwdJob("prev", IN, { airbnbCode: S("HMPREVIOUS"), checkIn: S("2026-11-10"), sameDayTurnover: B(true) }),
+    ] }),
+    mail: { airbnb: [thread(byHand("c1", "Canceled: Reservation HMABCDEF12 for Nov 15 – 19, 2026",
+      "Unfortunately, your guest Pat had to cancel reservation HMABCDEF12 for Nov 15 – 19. Airbnb"))] },
+  });
+  s.gs.scanAllEmails();
+  const cancel = patches(s).find((c) => c.url.includes("/jobs/b1?"));
+  assert.deepEqual(plain([cancel.body.fields.cancelled, cancel.body.fields.cancelReason]), [B(true), S("Guest cancelled on Airbnb (forwarded email)")]);
+  assert.deepEqual(plain(patches(s).find((c) => c.url.includes("/jobs/prev?")).body.fields), { sameDayTurnover: B(false) });
+  assert.equal(s.pushes().at(-1)[0].title, "Airbnb: 1 cancelled");
+  assert.deepEqual(s.processed(), ["c1"]);
+});
+
+test("a cancellation for a cleaning booked before forwarding started finds it by house and day", () => {
+  const s = run({
+    answer: services({ registry: REGISTRY_FWD, jobs: [jobDoc("older", OUT, { source: S("app") })] }),
+    mail: { airbnb: [thread(autoForwarded("c1", "Canceled: Reservation HMABCDEF12 for Nov 15 – 19, 2026", "your guest had to cancel. Airbnb"))] },
+  });
+  s.gs.scanAllEmails();
+  assert.equal(patches(s).some((c) => c.url.includes("/jobs/older?")), true);
+});
+
+test("a cancellation that matches nothing tells the owner and changes nothing", () => {
+  const s = run({
+    answer: services({ registry: REGISTRY_FWD }),
+    mail: { airbnb: [thread(autoForwarded("c1", "Canceled: Reservation HMNOTHING1 for Nov 15 – 19, 2026", "Airbnb"))] },
+  });
+  s.gs.scanAllEmails();
+  assert.deepEqual(patches(s), []);
+  const alert = s.pushes().at(-1);
+  assert.deepEqual(alert.map((m) => m.to), ["ExponentPushToken[owner]"]);
+  assert.match(alert[0].body, /HMNOTHING1.*no matching cleaning/);
+  assert.deepEqual(s.processed(), ["c1"]);
+});
+
+test("a change notice asks the owner to check, once, and only while it's fresh", () => {
+  const fresh = run({
+    answer: services({ registry: REGISTRY_FWD }),
+    mail: { airbnb: [thread(autoForwarded("u1", "Reservation updated", "Your reservation with Pat has been updated. Airbnb"))] },
+  });
+  fresh.gs.scanAllEmails();
+  assert.equal(fresh.pushes().at(-1)[0].title, "Airbnb booking changed at Client");
+  assert.deepEqual(fresh.writes().filter((c) => c.url.includes("firestore")), []);
+
+  const stale = run({
+    answer: services({ registry: REGISTRY_FWD }),
+    mail: { airbnb: [thread(byHand("u2", "Reservation updated", "Your reservation with Pat has been updated. Airbnb", { date: new Date(Date.now() - 5 * 86400000) }))] },
+  });
+  stale.gs.scanAllEmails();
+  assert.deepEqual(stale.pushes(), []);
+  assert.deepEqual(stale.processed(), ["u2"]);
 });

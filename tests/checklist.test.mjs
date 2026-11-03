@@ -315,3 +315,33 @@ test("check all ticks every open step at once and leaves the rest alone", () => 
   assert.deepEqual(all.filter(i => i.heading), list.filter(i => i.heading));
   assert.equal(unfinishedByRoom(all).length, 0);
 });
+
+const HOUSE_STEPS = ["Open the blinds", "Leave a few lights on | Living room and kitchen"];
+
+test("a house's own steps come last, in a room of their own", () => {
+  const list = buildChecklist(TEMPLATE, { bathrooms: 1, houseSteps: HOUSE_STEPS });
+  assert.deepEqual(titles(list), ["First 10 minutes", "Bathroom", "Kitchen", "This house"]);
+  const house = roomSections(list).at(-1);
+  assert.deepEqual(house.steps.map(s => list[s.index].text), ["Open the blinds", "Leave a few lights on"]);
+  assert.equal(list.at(-1).note, "Living room and kitchen");
+});
+
+test("house steps that start with a room line keep that room's name", () => {
+  const list = buildChecklist(TEMPLATE, { bathrooms: 1, houseSteps: ["Before you leave:", "Open the blinds"] });
+  assert.deepEqual(titles(list).slice(-2), ["Kitchen", "Before you leave"]);
+});
+
+test("no house steps, or only blank ones, leave the list as it was", () => {
+  const plain = buildChecklist(TEMPLATE, { bathrooms: 2 });
+  assert.deepEqual(buildChecklist(TEMPLATE, { bathrooms: 2, houseSteps: [] }), plain);
+  assert.deepEqual(buildChecklist(TEMPLATE, { bathrooms: 2, houseSteps: ["  ", ""] }), plain);
+  assert.deepEqual(buildChecklist(TEMPLATE, { bathrooms: 2, houseSteps: null }), plain);
+});
+
+test("an untouched job picks up its house's steps; a started one keeps its list", () => {
+  const stale = buildChecklist(["General:", "Arrive on time"]);
+  const shown = checklistForJob({ stored: stale, done: false, template: TEMPLATE, bathrooms: 1, houseSteps: HOUSE_STEPS });
+  assert.equal(titles(shown).at(-1), "This house");
+  const ticked = toggleStep(stale, 1, "M", 1).items;
+  assert.equal(checklistForJob({ stored: ticked, done: false, template: TEMPLATE, houseSteps: HOUSE_STEPS }), ticked);
+});

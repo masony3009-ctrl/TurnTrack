@@ -138,8 +138,23 @@ function stepItem(line: string): ChecklistItem {
   return note ? { text, done: false, note } : { text, done: false };
 }
 
-export function buildChecklist(template?: string[] | null, opts?: { bathrooms?: number | null }): ChecklistItem[] {
-  const source = template && template.length > 0 ? template : DEFAULT_CHECKLIST;
+// A house's own steps (the registry's `checklist`) come after the shared
+// template, as their own room. They're written like template lines, so a
+// house can have more than one room, but steps typed before any room line go
+// under this one.
+export const HOUSE_ROOM = "This house:";
+
+function withHouseSteps(template: string[], houseSteps?: string[] | null): string[] {
+  const extra = (houseSteps || []).filter(line => typeof line === "string" && line.trim() !== "");
+  if (extra.length === 0) return template;
+  return isHeadingLine(extra[0].trim()) ? [...template, ...extra] : [...template, HOUSE_ROOM, ...extra];
+}
+
+export function buildChecklist(
+  template?: string[] | null,
+  opts?: { bathrooms?: number | null; houseSteps?: string[] | null }
+): ChecklistItem[] {
+  const source = withHouseSteps(template && template.length > 0 ? template : DEFAULT_CHECKLIST, opts?.houseSteps);
   const bathrooms = opts?.bathrooms;
   const out: ChecklistItem[] = [];
   for (const room of templateRooms(source)) {
@@ -332,10 +347,11 @@ export function checklistForJob(input: {
   done: boolean;
   template: string[] | null;
   bathrooms?: number | null;
+  houseSteps?: string[] | null;
 }): ChecklistItem[] {
   const stored = input.stored && input.stored.length > 0 ? input.stored : null;
   if (stored && (input.done || ownsList(stored) || input.template === null)) return stored;
-  return buildChecklist(input.template, { bathrooms: input.bathrooms });
+  return buildChecklist(input.template, { bathrooms: input.bathrooms, houseSteps: input.houseSteps });
 }
 
 export type AddableRoom = { base: string; note: string | null; steps: string[] };

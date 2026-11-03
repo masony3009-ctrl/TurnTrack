@@ -131,17 +131,19 @@ export default function JobDetail() {
   const billed = !!property?.billedFrom && !!jobKey && jobKey >= property.billedFrom;
 
   // Until someone ticks something, a job shows the current template for its
-  // house (one room per bathroom); the list is written to the job when
-  // someone starts or ticks it. See checklistForJob.
+  // house (one room per bathroom, plus the house's own steps); the list is
+  // written to the job when someone starts or ticks it. See checklistForJob.
   const checklist: ChecklistItem[] = checklistForJob({
     stored: job?.checklist,
     done: job?.done === true,
     template,
     bathrooms: property?.bathrooms,
+    houseSteps: property?.checklist,
   });
-  // Write the shown list to the job only once the template has loaded, so a
-  // fast tap can't save the fallback list.
-  const freshChecklist = !ownsList(job?.checklist) && template !== null;
+  // Write the shown list to the job only once the template and the houses
+  // have loaded, so a fast tap can't save the fallback list or one missing
+  // the house's own steps.
+  const freshChecklist = !ownsList(job?.checklist) && template !== null && properties.length > 0;
   const roomsToAdd = template ? addableRooms(template) : [];
   useEffect(() => {
     checklistRef.current = checklist;
