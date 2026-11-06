@@ -14,6 +14,9 @@ export type Property = {
   doorCode?: string;
   garageCode?: string;
   supplyCode?: string;
+  // A key lock box, and where it is ("gas meter", "front door").
+  lockboxCode?: string;
+  lockboxSpot?: string;
   // What a regular cleaning here pays us, in dollars. Deep cleans and one-offs
   // are priced on the job instead.
   price?: number;
@@ -79,6 +82,7 @@ export function accessCodes(p: Property | null): AccessCode[] {
   const out: AccessCode[] = [];
   if (p.doorCode) out.push({ label: "Front door", code: p.doorCode });
   if (p.garageCode) out.push({ label: "Garage", code: p.garageCode });
+  if (p.lockboxCode) out.push({ label: p.lockboxSpot ? `Lock box · ${p.lockboxSpot}` : "Lock box", code: p.lockboxCode });
   if (p.supplyCode) out.push({ label: "Supply closet", code: p.supplyCode });
   return out;
 }
@@ -97,6 +101,8 @@ export function parseProperties(raw: unknown): Property[] {
       doorCode: v.doorCode ? String(v.doorCode) : undefined,
       garageCode: v.garageCode ? String(v.garageCode) : undefined,
       supplyCode: v.supplyCode ? String(v.supplyCode) : undefined,
+      lockboxCode: v.lockboxCode ? String(v.lockboxCode) : undefined,
+      lockboxSpot: v.lockboxSpot ? String(v.lockboxSpot) : undefined,
       price: Number(v.price) > 0 ? Number(v.price) : undefined,
       billedFrom: typeof v.billedFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.billedFrom) ? v.billedFrom : undefined,
       checklist: houseSteps(v.checklist),

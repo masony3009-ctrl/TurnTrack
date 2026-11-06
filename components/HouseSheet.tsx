@@ -19,6 +19,8 @@ type Form = {
   doorCode: string;
   garageCode: string;
   supplyCode: string;
+  lockboxCode: string;
+  lockboxSpot: string;
   billedFrom: string | null;
   steps: string;
   forwardsFrom: string;
@@ -35,6 +37,8 @@ function formOf(house: Property | null): Form {
     doorCode: house?.doorCode || "",
     garageCode: house?.garageCode || "",
     supplyCode: house?.supplyCode || "",
+    lockboxCode: house?.lockboxCode || "",
+    lockboxSpot: house?.lockboxSpot || "",
     billedFrom: house?.billedFrom || null,
     steps: (house?.checklist || []).join("\n"),
     forwardsFrom: house?.forwardsFrom || "",
@@ -127,6 +131,9 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
       doorCode: form.doorCode.trim() || null,
       garageCode: form.garageCode.trim() || null,
       supplyCode: form.supplyCode.trim() || null,
+      lockboxCode: form.lockboxCode.trim() || null,
+      // Where the lock box is only means something while there is one.
+      lockboxSpot: (form.lockboxCode.trim() && form.lockboxSpot.trim()) || null,
       billedFrom: form.billedFrom,
       checklist: steps.length ? steps : null,
       forwardsFrom: forwardsFrom || null,
@@ -177,6 +184,14 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
       <Text style={styles.group}>Codes</Text>
       <FormInput label="Front door" placeholder="Not set" value={form.doorCode} onChangeText={set("doorCode")} autoCapitalize="none" />
       <FormInput label="Garage" placeholder="Not set" value={form.garageCode} onChangeText={set("garageCode")} autoCapitalize="none" />
+      <View style={styles.pair}>
+        <View style={{ flex: 1 }}>
+          <FormInput label="Lock box" placeholder="Not set" value={form.lockboxCode} onChangeText={set("lockboxCode")} autoCapitalize="none" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <FormInput label="Lock box location" placeholder="e.g. gas meter" value={form.lockboxSpot} onChangeText={set("lockboxSpot")} autoCapitalize="none" />
+        </View>
+      </View>
       <FormInput label="Supply closet" placeholder="Not set" value={form.supplyCode} onChangeText={set("supplyCode")} autoCapitalize="none" />
       <Text style={styles.group}>Checklist</Text>
       <Text style={styles.hint}>Only this house gets these, at the end of every cleaning here. One step per line.</Text>

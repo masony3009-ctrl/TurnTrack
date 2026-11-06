@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { aliasesToLink, findProperty, houseKey, parseProperties, patchRegistry, streetOf, tidyAddress } from "../properties.ts";
+import { accessCodes, aliasesToLink, findProperty, houseKey, parseProperties, patchRegistry, streetOf, tidyAddress } from "../properties.ts";
 
 test("parseProperties reads price and billing start, ignoring junk", () => {
   const [a, b] = parseProperties([
@@ -100,4 +100,15 @@ test("parseProperties reads the address a host forwards Airbnb emails from", () 
   assert.equal(a.forwardsFrom, "host@example.com");
   assert.equal(b.forwardsFrom, undefined);
   assert.equal(c.forwardsFrom, undefined);
+});
+
+test("a lock box shows with where it is, after the door and garage", () => {
+  const [house] = parseProperties([{ name: "Palm", address: "1 Palm Rd", garageCode: "2222", lockboxCode: "3333", lockboxSpot: "gas meter", supplyCode: "55" }]);
+  assert.deepEqual(accessCodes(house), [
+    { label: "Garage", code: "2222" },
+    { label: "Lock box · gas meter", code: "3333" },
+    { label: "Supply closet", code: "55" },
+  ]);
+  const [bare] = parseProperties([{ name: "Mesa", address: "2 Mesa Rd", lockboxCode: "4444" }]);
+  assert.deepEqual(accessCodes(bare), [{ label: "Lock box", code: "4444" }]);
 });

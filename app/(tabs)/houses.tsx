@@ -46,7 +46,7 @@ function flagsOf(r: Row): Flag[] {
   if (r.deep?.due) out.push({ text: "Deep clean due", tone: "warn" });
   else if (r.deep?.booked) out.push({ text: `Deep clean ${formatShortDate(r.deep.booked)}`, tone: "muted" });
   if (r.supplies) out.push({ text: `Low on ${r.supplies.items.length}`, tone: "warn" });
-  if (!r.house.doorCode) out.push({ text: "No door code", tone: "warn" });
+  if (!r.house.doorCode && !r.house.lockboxCode) out.push({ text: "No door code", tone: "warn" });
   if (!r.house.price) out.push({ text: "No price", tone: "warn" });
   return out;
 }
