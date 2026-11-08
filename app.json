@@ -51,7 +51,13 @@
           }
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "TurnTrack puts a cleaning in your calendar when you tap its date."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

@@ -6,8 +6,10 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { OWNER_PHONE, OWNER_PHONE_LABEL } from "../business";
 import { EndTimeSheet } from "../components/EndTimeSheet";
+import { addToCalendar } from "../components/calendar";
 import { tapImpact, tapSelect, tapSuccess, tapWarning } from "../components/haptics";
 import { openInMaps } from "../components/maps";
+import { cleaningEvent } from "../calendarEvent";
 import { useProfile } from "../components/ProfileProvider";
 import { FinishSheet } from "../components/FinishSheet";
 import { PriceSheet } from "../components/PriceSheet";
@@ -770,6 +772,11 @@ export default function JobDetail() {
   const assignedEmployee = employees.find(e => e.id === job.assignedTo);
   const assignedColor = job.assignedTo ? cleanerColor(assignedEmployee || { id: job.assignedTo }) : unassignedColor;
   const dateHeading = key ? formatDayHeading(key) : job.date;
+  // Cleaners tap the date to put the cleaning in their own calendar; the
+  // owner's date row changes the date instead.
+  const calendarEvent = !isOwner && !job.cancelled && !job.done
+    ? cleaningEvent({ dateKey: key, time: job.time, house, address: job.address, type: job.type, sameDay })
+    : null;
   const price = jobPrice(job, property);
   const priceHint = [
     job.price ? "This cleaning" : price !== null ? "House price" : isDeepClean(job) ? "Deep clean · set a price" : "Set a price",
@@ -1002,6 +1009,16 @@ export default function JobDetail() {
               label="Change date and time"
             />
           ) : null}
+          {calendarEvent && key ? (
+            <InfoRow
+              icon="calendar-outline"
+              value={formatDayHeading(key)}
+              sub={formatTime(job.time) || "No set time"}
+              trailing="add-circle-outline"
+              onPress={() => addToCalendar(calendarEvent)}
+              label="Add to your calendar"
+            />
+          ) : null}
           {isOwner && !job.cancelled && !isPending ? (
             <InfoRow
               icon="pricetag-outline"
@@ -1019,7 +1036,7 @@ export default function JobDetail() {
             trailing="navigate-circle-outline"
             onPress={() => openInMaps(job.address)}
             label="Open in Maps"
-            divider={isOwner && !job.cancelled}
+            divider={(isOwner && !job.cancelled) || !!calendarEvent}
           />
         </Card>
 

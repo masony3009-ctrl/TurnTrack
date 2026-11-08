@@ -9,7 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --test tests/checklist.test.mjs tests/apps-script.test.mjs tests/jobTime.test.mjs tests/schedule.test.mjs tests/session.test.mjs tests/turnover.test.mjs tests/money.test.mjs tests/assign.test.mjs tests/supplies.test.mjs tests/payroll.test.mjs tests/properties.test.mjs"
+    "test": "node --test tests/checklist.test.mjs tests/apps-script.test.mjs tests/jobTime.test.mjs tests/schedule.test.mjs tests/session.test.mjs tests/turnover.test.mjs tests/money.test.mjs tests/assign.test.mjs tests/supplies.test.mjs tests/payroll.test.mjs tests/properties.test.mjs tests/calendarEvent.test.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -19,6 +19,7 @@
     "expo": "~54.0.33",
     "expo-application": "~7.0.8",
     "expo-auth-session": "~7.0.10",
+    "expo-calendar": "~15.0.8",
     "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",
     "expo-device": "~8.0.10",
