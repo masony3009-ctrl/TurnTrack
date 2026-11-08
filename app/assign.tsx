@@ -14,6 +14,7 @@ import {
 } from "../notifications";
 import { countsAsCleaning, houseLabel } from "../schedule";
 import { cleanerColor, colors, radius, textOn } from "../theme";
+import { conflictFor, conflictText, shortHours, timeOffOf } from "../timeOff";
 import { formatDayHeading, hasSameDayTurnover, jobDateKey, sortByDate, todayKey } from "../turnover";
 import { Employee, Job } from "../types";
 
@@ -247,17 +248,32 @@ export default function AssignScreen() {
                       {crew.map(e => {
                         const on = job.assignedTo === e.id;
                         const color = cleanerColor(e);
+                        const first = e.name.split(" ")[0];
+                        const off = conflictFor(timeOffOf(e), day.key, job.time);
+                        const blocked = !on && !!off?.blocking;
+                        // Someone who said they can't work then is asked about first.
+                        const pick = () => {
+                          if (!blocked || !off) return assign(job, on ? null : e);
+                          Alert.alert(`${first} can't work then`, `${conflictText(off)}. Give them this cleaning anyway?`, [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "Give it to them", onPress: () => assign(job, e) },
+                          ]);
+                        };
                         return (
                           <TouchableOpacity
                             key={e.id}
-                            style={[styles.crewChip, { borderColor: color }, on && { backgroundColor: color }]}
-                            onPress={() => assign(job, on ? null : e)}
+                            style={[styles.crewChip, { borderColor: color }, on && { backgroundColor: color }, blocked && styles.crewChipOff]}
+                            onPress={pick}
                             disabled={saving.has(job.id)}
                             accessibilityRole="radio"
                             accessibilityState={{ selected: on }}
-                            accessibilityLabel={on ? `${e.name} has this. Tap to take it back off them` : `Give this to ${e.name}`}
+                            accessibilityLabel={on
+                              ? `${e.name} has this. Tap to take it back off them`
+                              : off ? `${conflictText(off)}. Give this to ${e.name}` : `Give this to ${e.name}`}
                           >
-                            <Text style={[styles.crewText, { color: on ? textOn(color) : colors.ink }]}>{e.name.split(" ")[0]}</Text>
+                            <Text style={[styles.crewText, { color: on ? textOn(color) : blocked ? colors.muted : colors.ink }]}>
+                              {first}{off ? ` · ${shortHours(off.block)}` : ""}
+                            </Text>
                           </TouchableOpacity>
                         );
                       })}
@@ -303,4 +319,5 @@ const styles = StyleSheet.create({
   crewRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
   crewChip: { minHeight: 40, minWidth: 64, paddingHorizontal: 14, borderRadius: radius.pill, borderWidth: 1.5, alignItems: "center", justifyContent: "center", backgroundColor: colors.card },
   crewText: { fontSize: 14, fontWeight: "700" },
+  crewChipOff: { borderStyle: "dashed", backgroundColor: colors.bg },
 });

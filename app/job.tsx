@@ -30,6 +30,7 @@ import { accessCodes, findProperty, houseKey, type AccessCode } from "../propert
 import { isLongSession, mergeSummary, otherRunningJob, sessionEntryId, startCheck, waitBriefly } from "../session";
 import { supplyList } from "../supplies";
 import { cleanerColor, colors, radius, type, unassignedColor } from "../theme";
+import { conflictFor, conflictText, timeOffOf } from "../timeOff";
 import { daysFromToday, formatDateLabel, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
 import { Employee, FinishNote, Job } from "../types";
 
@@ -840,21 +841,34 @@ export default function JobDetail() {
         {activeEmployees.length === 0 && (
           <Text style={styles.sheetHint}>No cleaners yet. Add one on the Team tab.</Text>
         )}
-        {activeEmployees.map(emp => (
-          <TouchableOpacity
-            key={emp.id}
-            style={[styles.assignOption, job.assignedTo === emp.id && styles.assignOptionActive]}
-            onPress={() => assign(emp)}
-            activeOpacity={0.7}
-          >
-            <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} size={36} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.assignName}>{emp.name}</Text>
-              <Text style={styles.assignRate}>{formatMoney(emp.hourlyRate)}/hr</Text>
-            </View>
-            {job.assignedTo === emp.id && <Ionicons name="checkmark-circle" size={22} color={colors.teal} />}
-          </TouchableOpacity>
-        ))}
+        {activeEmployees.map(emp => {
+          const off = conflictFor(timeOffOf(emp), key, job.time);
+          const blocked = job.assignedTo !== emp.id && !!off?.blocking;
+          // Someone who said they can't work then is asked about first.
+          const pick = () => {
+            if (!blocked || !off) return assign(emp);
+            Alert.alert(`${emp.name.split(" ")[0]} can't work then`, `${conflictText(off)}. Give them this cleaning anyway?`, [
+              { text: "Cancel", style: "cancel" },
+              { text: "Give it to them", onPress: () => assign(emp) },
+            ]);
+          };
+          return (
+            <TouchableOpacity
+              key={emp.id}
+              style={[styles.assignOption, job.assignedTo === emp.id && styles.assignOptionActive]}
+              onPress={pick}
+              activeOpacity={0.7}
+            >
+              <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} size={36} muted={blocked} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.assignName, blocked && { color: colors.muted }]}>{emp.name}</Text>
+                <Text style={styles.assignRate}>{formatMoney(emp.hourlyRate)}/hr</Text>
+                {off ? <Text style={[styles.assignOff, !off.blocking && { color: colors.goldDark }]}>{conflictText(off)}</Text> : null}
+              </View>
+              {job.assignedTo === emp.id && <Ionicons name="checkmark-circle" size={22} color={colors.teal} />}
+            </TouchableOpacity>
+          );
+        })}
         {job.assignedTo && (
           <TouchableOpacity style={styles.unassignRow} onPress={() => assign(null)}>
             <Ionicons name="person-remove-outline" size={16} color={colors.danger} />
@@ -1319,6 +1333,7 @@ const styles = StyleSheet.create({
   assignOptionActive: { borderColor: colors.teal, backgroundColor: colors.tealFaint },
   assignName: { fontSize: 15, fontWeight: "600", color: colors.ink },
   assignRate: { fontSize: 12.5, color: colors.muted, marginTop: 1 },
+  assignOff: { fontSize: 12.5, fontWeight: "600", color: colors.danger, marginTop: 3 },
   unassignRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44, marginTop: 4 },
   unassignText: { fontSize: 14, fontWeight: "600", color: colors.danger },
   cancelLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 48 },

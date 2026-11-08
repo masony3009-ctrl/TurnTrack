@@ -5,18 +5,21 @@ import { tapSelect } from "./haptics";
 
 // Start-time picker: half-hour chips, 7 AM to 7 PM, plus "No set time". Plain
 // buttons rather than a native clock, so it ships in an over-the-air update.
-export function TimeChips({ label, value, onChange }: {
+// choices narrows the times offered; noneLabel null drops the no-time chip.
+export function TimeChips({ label, value, onChange, choices = TIME_CHOICES, noneLabel = "No set time" }: {
   label: string;
   value: string | null;
   onChange: (time: string | null) => void;
+  choices?: string[];
+  noneLabel?: string | null;
 }) {
   const pick = (t: string | null) => { tapSelect(); onChange(t); };
   return (
     <View style={styles.wrap}>
       <Text style={styles.label}>{label}</Text>
       <View style={styles.grid}>
-        <Chip text="No set time" selected={value === null} onPress={() => pick(null)} wide />
-        {TIME_CHOICES.map((t) => (
+        {noneLabel !== null ? <Chip text={noneLabel} selected={value === null} onPress={() => pick(null)} wide /> : null}
+        {choices.map((t) => (
           <Chip key={t} text={formatTime(t) || t} selected={value === t} onPress={() => pick(t)} />
         ))}
       </View>

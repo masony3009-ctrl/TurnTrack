@@ -1,5 +1,6 @@
 import { buildChecklist, type ChecklistItem } from "./checklist";
 import { isTime } from "./jobTime";
+import type { TimeOff } from "./timeOff";
 import { formatDateLabel, parseJobDateToKey } from "./turnover";
 
 // The checklist lives in checklist.ts (pure, so it can be tested under Node);
@@ -79,6 +80,9 @@ export type Employee = {
   pin?: string | null;
   // Hex color used for this cleaner's calendar dots and job cards.
   color?: string | null;
+  // Days and hours they've said they can't work (timeOff.ts). Read it with
+  // timeOffOf(), which drops anything malformed.
+  timeOff?: TimeOff[] | null;
   active: boolean;
   createdAt: number;
 };

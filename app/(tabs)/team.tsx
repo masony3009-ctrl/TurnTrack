@@ -9,6 +9,8 @@ import { tapSuccess } from "../../components/haptics";
 import { db } from "../../firebase";
 import { formatMoney, parseRate } from "../../payroll";
 import { cleanerColor, colors, pickUnusedColor, radius } from "../../theme";
+import { datesLabel, hoursLabel, timeOffOf, upcomingTimeOff } from "../../timeOff";
+import { todayKey } from "../../turnover";
 import { Employee, Job } from "../../types";
 
 // A cleaner who is deactivated or deleted should stop receiving pushes and
@@ -356,6 +358,7 @@ export default function TeamScreen() {
                     ) : null}
                   </View>
                 ) : null}
+                {(isOwner || isSelf) && emp.active ? <TimeOffSummary employee={emp} /> : null}
                 {isSelf && (
                   <View style={styles.editHintRow}>
                     <Ionicons name="create-outline" size={13} color={colors.tealDark} />
@@ -387,7 +390,35 @@ export default function TeamScreen() {
   );
 }
 
+const TIME_OFF_SHOWN = 3;
+
+// The next few days and hours this cleaner can't work.
+function TimeOffSummary({ employee }: { employee: Employee }) {
+  const today = todayKey();
+  const upcoming = upcomingTimeOff(timeOffOf(employee), today);
+  if (upcoming.length === 0) return null;
+  const extra = upcoming.length - TIME_OFF_SHOWN;
+  return (
+    <View style={styles.offBlock}>
+      <Text style={styles.offLabel}>{"Can't work"}</Text>
+      {upcoming.slice(0, TIME_OFF_SHOWN).map(block => (
+        <View key={block.id} style={styles.contactRow}>
+          <Ionicons name={block.weekdays ? "repeat" : "calendar-clear-outline"} size={14} color={colors.faint} />
+          <Text style={styles.offText}>
+            {datesLabel(block, today)} · {hoursLabel(block)}{block.note ? ` · ${block.note}` : ""}
+          </Text>
+        </View>
+      ))}
+      {extra > 0 ? <Text style={styles.offMore}>and {extra} more on the Calendar tab</Text> : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  offBlock: { marginTop: 12, gap: 5 },
+  offLabel: { fontSize: 12, fontWeight: "700", color: colors.muted, letterSpacing: 0.3 },
+  offText: { flex: 1, fontSize: 13, color: colors.ink },
+  offMore: { fontSize: 12.5, color: colors.faint },
   ownerActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
   cardInactive: { opacity: 0.55 },

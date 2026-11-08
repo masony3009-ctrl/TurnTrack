@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, PanResponder, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
 import { tapSelect } from "../../components/haptics";
 import { useProfile } from "../../components/ProfileProvider";
-import { AssigneeRow, Card, ColorDot, ErrorState, IconButton, Pill, ScreenHeader, SheetModal } from "../../components/ui";
+import { confirmRemoveTimeOff, TimeOffRow, TimeOffSheet } from "../../components/TimeOff";
+import { AssigneeRow, BrandButton, Card, ColorDot, ErrorState, IconButton, Pill, ScreenHeader, SheetModal } from "../../components/ui";
 import { useProperties } from "../../components/useProperties";
 import { db } from "../../firebase";
 import { formatTime } from "../../jobTime";
@@ -27,24 +28,32 @@ import {
   type WeekCount,
 } from "../../schedule";
 import { cleanerColor, colors, radius, shadow, textOn, tint, unassignedColor } from "../../theme";
+import { blocksOn, conflictText, isAllDay, shortHours, timeOffOf, upcomingTimeOff, type TimeOff } from "../../timeOff";
 import { formatDayHeading, hasSameDayTurnover, jobDateKey, sortByDate, todayKey } from "../../turnover";
-import { Job } from "../../types";
+import { Employee, Job } from "../../types";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 const CHIPS_PER_DAY = 3;
+
+// Someone's time off on one day, as the grid shows it.
+type DayOff = { employee: Employee; blocks: TimeOff[] };
 
 export default function CalendarScreen() {
   const router = useRouter();
   const { employees, state } = useProfile();
   // The weekly counts are business tracking: owners only.
   const isOwner = state.status === "owner";
-  const selfId = state.status === "cleaner" ? state.employee.id : null;
+  const self = state.status === "cleaner" ? state.employee : null;
+  const selfId = self ? self.id : null;
+  const ownerViewing = state.status === "cleaner" && state.ownerViewing;
   const properties = useProperties();
   const [jobs, setJobs] = useState<Job[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const today = todayKey();
   const [month, setMonth] = useState<Month>(monthOfKey(today));
   const [openDay, setOpenDay] = useState<string | null>(null);
+  // The day the time-off form starts on; undefined = the form is closed.
+  const [timeOffDay, setTimeOffDay] = useState<string | null | undefined>(undefined);
   const chipsRef = useRef<ScrollView>(null);
   const chipX = useRef(new Map<string, number>());
 
@@ -87,6 +96,22 @@ export default function CalendarScreen() {
   }, [selectedKey, months.length]);
 
   const employeeById = useMemo(() => new Map(employees.map(e => [e.id, e])), [employees]);
+  // Whose time off this phone shows: everyone's for the owner, a cleaner only
+  // their own (the reasons are between them and the owner).
+  const timeOffPeople = useMemo(
+    () => (isOwner ? employees.filter(e => e.active) : self ? [self] : []).filter(e => timeOffOf(e).length > 0),
+    [isOwner, employees, self]
+  );
+  const offOn = (key: string): DayOff[] => timeOffPeople
+    .map(employee => ({ employee, blocks: blocksOn(timeOffOf(employee), key) }))
+    .filter(d => d.blocks.length > 0);
+  // "S off" / "S 8–12" on the owner's grid; "Off" / "8–12" on a cleaner's.
+  const offChip = (d: DayOff) => {
+    const allDay = d.blocks.some(isAllDay);
+    const hours = allDay ? "off" : shortHours(d.blocks[0]);
+    if (isOwner) return `${d.employee.name.slice(0, 1)} ${hours}`;
+    return allDay ? "Off" : hours;
+  };
   const colorFor = (job: Job) => (job.assignedTo ? cleanerColor(employeeById.get(job.assignedTo) || { id: job.assignedTo }) : unassignedColor);
 
   const pickMonth = (m: Month) => {
@@ -134,7 +159,19 @@ export default function CalendarScreen() {
   }
 
   const dayJobs = openDay ? byDay.get(openDay) || [] : [];
+  const dayOff = openDay ? offOn(openDay) : [];
   const monthTotal = totals.done + totals.left;
+  // Opens the time-off form on this day (today when null).
+  const blockDay = (key: string | null) => {
+    tapSelect();
+    if (!openDay) {
+      setTimeOffDay(key);
+      return;
+    }
+    // From the day sheet: it has to finish closing before the form opens.
+    setOpenDay(null);
+    setTimeout(() => setTimeOffDay(key), 450);
+  };
 
   return (
     <View style={styles.container}>
@@ -184,6 +221,9 @@ export default function CalendarScreen() {
                       inMonth={key.startsWith(selectedKey)}
                       isToday={key === today}
                       jobs={byDay.get(key) || []}
+                      offs={offOn(key).map(d => ({ id: d.employee.id, color: cleanerColor(d.employee), text: offChip(d) }))}
+                      // A cleaner can open any day to block it out.
+                      tappable={!isOwner}
                       label={job => houseLabel(job, properties)}
                       colorFor={colorFor}
                       onPress={() => { tapSelect(); setOpenDay(key); }}
@@ -208,7 +248,31 @@ export default function CalendarScreen() {
                 <ColorDot color={colors.gold} />
                 <Text style={styles.legendText}>Same-day</Text>
               </View>
+              {timeOffPeople.length > 0 ? (
+                <View style={styles.legendItem}>
+                  <View style={styles.legendOff} />
+                  <Text style={styles.legendText}>{"Can't work"}</Text>
+                </View>
+              ) : null}
             </View>
+
+            {self ? (
+              <>
+                <Text style={styles.sectionTitle}>{ownerViewing ? `${self.name.split(" ")[0]}'s time off` : "Your time off"}</Text>
+                <Text style={styles.sectionHint}>
+                  {ownerViewing ? "Days and hours they can't work." : "Days and hours you can't work. The owner sees them before handing out cleanings."}
+                </Text>
+                <View style={styles.offCard}>
+                  {upcomingTimeOff(timeOffOf(self), today).map(block => (
+                    <TimeOffRow key={block.id} block={block} today={today} onRemove={() => confirmRemoveTimeOff(self, block, ownerViewing)} />
+                  ))}
+                  <BrandButton label="Block out time" icon="add" variant="outline" compact onPress={() => blockDay(null)} style={{ marginTop: 12 }} />
+                  <Text style={styles.offTip}>Or tap a day on the calendar.</Text>
+                </View>
+              </>
+            ) : null}
+
+            {isOwner ? <TeamTimeOff people={employees.filter(e => e.active)} today={today} /> : null}
 
             {isOwner ? <WeekCounts weekStarts={grid.map(row => row[0])} counts={weekCounts} maxWeek={maxWeek} today={today} /> : null}
           </>
@@ -216,6 +280,30 @@ export default function CalendarScreen() {
       </ScrollView>
 
       <SheetModal visible={!!openDay} title={openDay ? formatDayHeading(openDay) : ""} onClose={() => setOpenDay(null)}>
+        {dayOff.length > 0 ? (
+          <View style={styles.dayOff}>
+            <Text style={styles.dayOffTitle}>{isOwner ? "Can't work" : ownerViewing ? "Off" : "You're off"}</Text>
+            {dayOff.map(d => d.blocks.map(block => (
+              <View key={`${d.employee.id}-${block.id}`} style={styles.dayOffRow}>
+                <ColorDot color={cleanerColor(d.employee)} />
+                <Text style={styles.dayOffText}>
+                  {isOwner ? <Text style={styles.dayOffName}>{d.employee.name.split(" ")[0]}  </Text> : null}
+                  {conflictText({ block, blocking: true })}
+                </Text>
+              </View>
+            )))}
+          </View>
+        ) : null}
+        {self && openDay && openDay >= today && !dayOff.some(d => d.blocks.some(isAllDay)) ? (
+          <BrandButton
+            label={dayOff.length > 0 ? "Block out more time this day" : "I can't work this day"}
+            icon="remove-circle-outline"
+            variant="outline"
+            compact
+            onPress={() => blockDay(openDay)}
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
         {dayJobs.length === 0 ? (
           <Text style={styles.emptyDay}>No cleanings this day.</Text>
         ) : (
@@ -247,22 +335,69 @@ export default function CalendarScreen() {
           })
         )}
       </SheetModal>
+
+      {self ? (
+        <TimeOffSheet
+          visible={timeOffDay !== undefined}
+          employee={self}
+          ownerViewing={ownerViewing}
+          jobs={all}
+          houseOf={job => houseLabel(job, properties)}
+          startDay={timeOffDay ?? null}
+          onClose={() => setTimeOffDay(undefined)}
+        />
+      ) : null}
     </View>
   );
 }
 
-function DayCell({ dayKey, inMonth, isToday, jobs, label, colorFor, onPress }: {
+// The owner's look at who has time off coming up, cleaner by cleaner.
+function TeamTimeOff({ people, today }: { people: Employee[]; today: string }) {
+  const withTime = people.map(e => ({ e, blocks: upcomingTimeOff(timeOffOf(e), today) })).filter(p => p.blocks.length > 0);
+  return (
+    <>
+      <Text style={styles.sectionTitle}>Time off</Text>
+      <Text style={styles.sectionHint}>
+        {withTime.length ? "Days and hours your cleaners can't work." : "Nobody has blocked out time. Cleaners add it from their Calendar tab."}
+      </Text>
+      {withTime.length ? (
+        <View style={styles.offCard}>
+          {withTime.map(({ e, blocks }) => (
+            <View key={e.id} style={styles.offPerson}>
+              <View style={styles.offPersonName}>
+                <ColorDot color={cleanerColor(e)} />
+                <Text style={styles.dayOffName}>{e.name}</Text>
+              </View>
+              {blocks.map(block => <TimeOffRow key={block.id} block={block} today={today} />)}
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </>
+  );
+}
+
+function DayCell({ dayKey, inMonth, isToday, jobs, offs, tappable, label, colorFor, onPress }: {
   dayKey: string;
   inMonth: boolean;
   isToday: boolean;
   jobs: Job[];
+  // Who can't work this day, as dashed chips under the cleanings.
+  offs: { id: string; color: string; text: string }[];
+  // Open even with nothing on it.
+  tappable: boolean;
   label: (job: Job) => string;
   colorFor: (job: Job) => string;
   onPress: () => void;
 }) {
   const extra = jobs.length - CHIPS_PER_DAY;
   return (
-    <TouchableOpacity style={[styles.cell, !inMonth && styles.cellOut]} onPress={onPress} activeOpacity={0.6} disabled={jobs.length === 0}>
+    <TouchableOpacity
+      style={[styles.cell, !inMonth && styles.cellOut]}
+      onPress={onPress}
+      activeOpacity={0.6}
+      disabled={!tappable && jobs.length === 0 && offs.length === 0}
+    >
       <View style={[styles.dayNum, isToday && styles.dayNumToday]}>
         <Text style={[styles.dayNumText, !inMonth && styles.dayNumOut, isToday && styles.dayNumTodayText]}>{Number(dayKey.slice(8))}</Text>
       </View>
@@ -290,6 +425,11 @@ function DayCell({ dayKey, inMonth, isToday, jobs, label, colorFor, onPress }: {
         );
       })}
       {extra > 0 ? <Text style={styles.more}>+{extra} more</Text> : null}
+      {offs.map(off => (
+        <View key={off.id} style={[styles.chip, styles.chipOff, { borderColor: off.color, backgroundColor: tint(off.color, 0.1) }]}>
+          <Text style={[styles.chipText, { color: colors.ink }]} numberOfLines={1}>{off.text}</Text>
+        </View>
+      ))}
     </TouchableOpacity>
   );
 }
@@ -372,6 +512,17 @@ const styles = StyleSheet.create({
   legend: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 12, paddingHorizontal: 2 },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
   legendText: { fontSize: 12, fontWeight: "600", color: colors.muted },
+  legendOff: { width: 14, height: 10, borderRadius: 3, borderWidth: 1.5, borderStyle: "dashed", borderColor: colors.muted },
+  chipOff: { borderWidth: 1, borderStyle: "dashed" },
+  offCard: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, paddingBottom: 12, ...shadow.card },
+  offTip: { fontSize: 12, color: colors.faint, textAlign: "center", marginTop: 8 },
+  offPerson: { paddingTop: 12 },
+  offPersonName: { flexDirection: "row", alignItems: "center", gap: 7 },
+  dayOff: { backgroundColor: colors.bg, borderRadius: radius.md, padding: 12, marginBottom: 12, gap: 6 },
+  dayOffTitle: { fontSize: 12, fontWeight: "700", color: colors.muted, letterSpacing: 0.3 },
+  dayOffRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  dayOffText: { flex: 1, fontSize: 14, color: colors.ink },
+  dayOffName: { fontSize: 14, fontWeight: "700", color: colors.ink },
   sectionTitle: { fontSize: 17, fontWeight: "700", color: colors.ink, marginTop: 24 },
   sectionHint: { fontSize: 12.5, color: colors.muted, marginTop: 3, marginBottom: 10 },
   weekCard: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingVertical: 4, ...shadow.card },
