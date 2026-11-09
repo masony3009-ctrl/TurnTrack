@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { arrayRemove, arrayUnion, doc, updateDoc } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { isOnCrew } from "../crew";
 import { db } from "../firebase";
 import { TIME_CHOICES } from "../jobTime";
 import { sendPushToOwners } from "../notifications";
@@ -151,7 +152,7 @@ export function TimeOffSheet({ visible, employee, ownerViewing, jobs, houseOf, s
     }
     setSaving(false);
     tapSuccess();
-    const mine = jobs.filter(j => j.assignedTo === employee.id).map(j => ({ ...j, dateKey: jobDateKey(j) }));
+    const mine = jobs.filter(j => isOnCrew(j, employee.id)).map(j => ({ ...j, dateKey: jobDateKey(j) }));
     const clashes = clashingJobs(result.block, mine, now).map(j => ({ id: j.id, house: houseOf(j), dateKey: j.dateKey as string }));
     if (clashes.length > 0 && !ownerViewing) sendPushToOwners(clashMessage(employee.name, result.block, clashes, now));
     const list = clashes.slice(0, 3).map(c => `${c.house} (${formatShortDate(c.dateKey)})`).join(", ");

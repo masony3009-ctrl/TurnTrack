@@ -5,12 +5,13 @@
 // Pure (no React, no Firebase) so it runs under node --test.
 
 import { CLEANING_HOURS } from "./calendarEvent.ts";
+import { crewOf } from "./crew.ts";
 import { formatTime, isTime } from "./jobTime.ts";
 import { countsAsCleaning, type ScheduleJob } from "./schedule.ts";
 import { conflictFor, conflictText, isAllDay, minutesOf, shortHours, timeOffOf, type Conflict } from "./timeOff.ts";
 import { jobDateKey } from "./turnover.ts";
 
-export type BookedJob = ScheduleJob & { id: string; assignedTo?: string | null; done?: boolean; time?: string | null };
+export type BookedJob = ScheduleJob & { id: string; assignedTo?: string | null; crew?: string[] | null; done?: boolean; time?: string | null };
 
 export type Availability<J extends BookedJob = BookedJob> =
   // They said they can't work then.
@@ -38,9 +39,12 @@ export function bookingsOf<J extends BookedJob>(jobs: J[]): Map<string, J[]> {
   for (const job of jobs) {
     const key = jobDateKey(job);
     if (!job.assignedTo || job.done || !key || !countsAsCleaning(job)) continue;
-    const k = bookingKey(job.assignedTo, key);
-    if (!out.has(k)) out.set(k, []);
-    out.get(k)!.push(job);
+    // Everyone on it is booked, not only the main cleaner.
+    for (const id of crewOf(job)) {
+      const k = bookingKey(id, key);
+      if (!out.has(k)) out.set(k, []);
+      out.get(k)!.push(job);
+    }
   }
   return out;
 }

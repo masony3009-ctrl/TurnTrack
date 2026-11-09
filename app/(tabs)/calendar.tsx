@@ -8,6 +8,7 @@ import { confirmRemoveTimeOff, TimeOffRow, TimeOffSheet } from "../../components
 import { AssigneeRow, BrandButton, Card, ColorDot, ErrorState, IconButton, Pill, ScreenHeader, SheetModal } from "../../components/ui";
 import { useProperties } from "../../components/useProperties";
 import { db } from "../../firebase";
+import { crewLabel, crewOf, isOnCrew } from "../../crew";
 import { formatTime } from "../../jobTime";
 import {
   countsAsCleaning,
@@ -85,7 +86,7 @@ export default function CalendarScreen() {
   // left still gets a legend entry for their color.
   const shownCleaners = useMemo(() => {
     const ids = new Set<string>();
-    grid.flat().forEach(key => (byDay.get(key) || []).forEach(j => { if (j.assignedTo) ids.add(j.assignedTo); }));
+    grid.flat().forEach(key => (byDay.get(key) || []).forEach(j => crewOf(j).forEach(id => ids.add(id))));
     return ids;
   }, [grid, byDay]);
   const selectedKey = monthKey(month);
@@ -334,13 +335,13 @@ export default function CalendarScreen() {
                   {job.startedAt ? <Pill label="In progress" tone="solid" icon="time" /> : null}
                   {hasSameDayTurnover(job) ? <Pill label="Same-day" tone="gold" icon="alert-circle" /> : null}
                   {time ? <Pill label={time} tone="neutral" icon="time-outline" /> : null}
-                  {selfId && job.assignedTo === selfId ? <Pill label="Yours" tone="teal" /> : null}
+                  {isOnCrew(job, selfId) ? <Pill label="Yours" tone="teal" /> : null}
                   <Pill label={job.type} tone="neutral" />
                 </View>
                 <Text style={styles.sheetHouse}>{houseLabel(job, properties)}</Text>
                 <Text style={styles.sheetAddress} numberOfLines={1}>{job.address}</Text>
                 <View style={{ marginTop: 8 }}>
-                  <AssigneeRow name={job.assignedToName} color={colorFor(job)} photo={assignee?.photo} />
+                  <AssigneeRow name={crewLabel(job, id => employeeById.get(id)?.name)} color={colorFor(job)} photo={assignee?.photo} />
                 </View>
               </Card>
             );

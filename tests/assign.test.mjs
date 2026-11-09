@@ -73,3 +73,12 @@ test("groupOutbox notifies whoever ended up with each job", () => {
   assert.deepEqual(grouped.get("e1"), ["J2"]);
   assert.deepEqual(grouped.get("e2"), ["J1"]);
 });
+
+test("loadByCleaner counts a shared cleaning for everyone on it", () => {
+  const load = loadByCleaner([
+    job("a", "2026-10-28", { assignedTo: "e1", crew: ["e2"] }),
+    job("b", "2026-10-29", { assignedTo: "e2" }),
+  ], "week", TODAY);
+  assert.equal(load.get("e1"), 1);
+  assert.equal(load.get("e2"), 2);
+});

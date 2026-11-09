@@ -18,6 +18,7 @@ import { availabilityColors, cleanerColor, colors, radius, unassignedColor } fro
 import { daysFromToday, daysLeftInWeek, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate, todayKey } from "../../turnover";
 import { checklistProgress, currentRoom, DEFAULT_CHECKLIST, legacyItems, templateFromDoc, templateStats } from "../../checklist";
 import { isOpenJob } from "../../assign";
+import { crewLabel, isOnCrew } from "../../crew";
 import { availabilityFor, availabilityShort, availabilityTone, availabilityWarning, bookingsOf, type Availability } from "../../availability";
 import { houseLabel } from "../../schedule";
 import { Employee, Job, newJobDoc, parseChecklistText } from "../../types";
@@ -44,7 +45,8 @@ export default function JobsScreen() {
   const [newHouse, setNewHouse] = useState<Property | null>(null);
   const [newAddress, setNewAddress] = useState("");
   const [newType, setNewType] = useState(JOB_TYPES[0]);
-  const [newAssignee, setNewAssignee] = useState<Employee | null>(null);
+  // Everyone going on the new cleaning, the main cleaner first.
+  const [newCrew, setNewCrew] = useState<Employee[]>([]);
   const [newSameDayTurnover, setNewSameDayTurnover] = useState(false);
   const [newTime, setNewTime] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -108,7 +110,7 @@ export default function JobsScreen() {
   useEffect(() => {
     if (!allJobs) return;
     const scheduled = jobs.filter(j => !j.pending);
-    const relevant = selfId && !ownerViewing ? scheduled.filter(j => j.assignedTo === selfId) : scheduled;
+    const relevant = selfId && !ownerViewing ? scheduled.filter(j => isOnCrew(j, selfId)) : scheduled;
     scheduleTodaysJobNotifications(relevant);
   }, [allJobs, jobs, selfId, ownerViewing]);
 
@@ -229,7 +231,7 @@ export default function JobsScreen() {
     setNewHouse(null);
     setNewAddress("");
     setNewType(JOB_TYPES[0]);
-    setNewAssignee(null);
+    setNewCrew([]);
     setNewSameDayTurnover(false);
   };
 
@@ -247,12 +249,17 @@ export default function JobsScreen() {
       return;
     }
     if (saving) return;
-    // Someone who can't work then, or is on another cleaning, is asked about first.
-    const warning = newAssignee ? availabilityWarning(availabilityFor(newAssignee, newSlot, bookings), newAssignee.name, houseOf) : null;
-    if (!warning) {
+    // Anyone who can't work then, or is on another cleaning, is asked about first.
+    const warnings = newCrew
+      .map(emp => availabilityWarning(availabilityFor(emp, newSlot, bookings), emp.name, houseOf))
+      .filter((w): w is { title: string; body: string } => w !== null);
+    if (warnings.length === 0) {
       saveJob(newDateKey, address);
       return;
     }
+    const warning = warnings.length === 1
+      ? warnings[0]
+      : { title: "Check who's free", body: `${warnings.map(w => `${w.title}.`).join("\n")}\n\nGive it to them anyway?` };
     Alert.alert(warning.title, warning.body, [
       { text: "Cancel", style: "cancel" },
       { text: "Give it to them", onPress: () => saveJob(newDateKey, address) },
@@ -267,12 +274,13 @@ export default function JobsScreen() {
         // The registry name is what every other writer files a house under.
         property: newHouse ? newHouse.name : null,
         source: "app",
-        assignedTo: newAssignee ? newAssignee.id : null,
-        assignedToName: newAssignee ? newAssignee.name : null,
+        assignedTo: newCrew[0]?.id || null,
+        assignedToName: newCrew[0]?.name || null,
+        crew: newCrew.length > 1 ? newCrew.slice(1).map(e => e.id) : null,
       };
       const ref = await addDoc(collection(db, "jobs"), fields);
       tapSuccess();
-      if (newAssignee) sendPushToEmployee(newAssignee.id, assignmentMessage({ id: ref.id, ...fields } as Job));
+      newCrew.forEach(emp => sendPushToEmployee(emp.id, assignmentMessage({ id: ref.id, ...fields } as Job)));
       resetForm();
       setShowForm(false);
     } catch (e) {
@@ -304,14 +312,14 @@ export default function JobsScreen() {
   const weekLeft = daysLeftInWeek();
   const weekCount = upcoming.filter(j => (daysFromToday(j) as number) <= weekLeft).length;
   const unassignedCount = upcoming.filter(j => !j.assignedTo).length;
-  const mineCount = selfId ? upcoming.filter(j => j.assignedTo === selfId).length : 0;
+  const mineCount = selfId ? upcoming.filter(j => isOnCrew(j, selfId)).length : 0;
   const today = todayKey();
   const openJobs = useMemo(() => roleJobs.filter(j => isOpenJob(j, today)), [roleJobs, today]);
 
   const viewingCancelled = isOwner && showCancelled;
   const visibleJobs = viewingCancelled
     ? cancelledJobs
-    : selfId && scope === "mine" ? roleJobs.filter(j => j.assignedTo === selfId)
+    : selfId && scope === "mine" ? roleJobs.filter(j => isOnCrew(j, selfId))
     : selfId && scope === "open" ? openJobs
     : roleJobs;
 
@@ -338,6 +346,7 @@ export default function JobsScreen() {
       <JobCard
         key={job.id}
         job={job}
+        assigneeName={crewLabel(job, id => employeeById.get(id)?.name)}
         color={color}
         photo={assignee?.photo}
         canToggle={isOwner && !job.pending && !job.cancelled}
@@ -436,16 +445,20 @@ export default function JobsScreen() {
             <Choice key={t} text={t} selected={newType === t} onPress={() => { tapSelect(); setNewType(t); }} />
           ))}
         </View>
-        <Text style={styles.fieldLabel}>Cleaner</Text>
+        <Text style={styles.fieldLabel}>Cleaners</Text>
         <View style={styles.choiceGrid}>
-          <Choice text="Unassigned" selected={!newAssignee} onPress={() => { tapSelect(); setNewAssignee(null); }} />
+          <Choice text="Unassigned" selected={newCrew.length === 0} onPress={() => { tapSelect(); setNewCrew([]); }} />
           {activeCleaners.map(emp => (
             <Choice
               key={emp.id}
               text={emp.name.split(" ")[0]}
-              selected={newAssignee?.id === emp.id}
-              onPress={() => { tapSelect(); setNewAssignee(emp); }}
+              selected={newCrew.some(e => e.id === emp.id)}
+              onPress={() => {
+                tapSelect();
+                setNewCrew(prev => (prev.some(e => e.id === emp.id) ? prev.filter(e => e.id !== emp.id) : [...prev, emp]));
+              }}
               status={availabilityFor(emp, newSlot, bookings)}
+              multi
             />
           ))}
         </View>
@@ -567,7 +580,14 @@ function FilterChip({ label, active, onPress }: { label: string; active: boolean
 }
 
 // status: a cleaner's availability on the day picked, shown under their name.
-function Choice({ text, selected, onPress, status }: { text: string; selected: boolean; onPress: () => void; status?: Availability | null }) {
+// multi: one of several that can be picked together (the cleaners).
+function Choice({ text, selected, onPress, status, multi }: {
+  text: string;
+  selected: boolean;
+  onPress: () => void;
+  status?: Availability | null;
+  multi?: boolean;
+}) {
   const label = status ? availabilityShort(status) : null;
   const off = status?.kind === "off" && !selected;
   return (
@@ -575,8 +595,8 @@ function Choice({ text, selected, onPress, status }: { text: string; selected: b
       style={[styles.choice, selected && styles.choiceOn, off && styles.choiceOff]}
       onPress={onPress}
       activeOpacity={0.7}
-      accessibilityRole="radio"
-      accessibilityState={{ selected }}
+      accessibilityRole={multi ? "checkbox" : "radio"}
+      accessibilityState={multi ? { checked: selected } : { selected }}
       accessibilityLabel={label ? `${text}, ${label}` : undefined}
     >
       <Text style={[styles.choiceText, selected && styles.choiceTextOn, off && { color: colors.muted }]} numberOfLines={1}>{text}</Text>
@@ -587,8 +607,10 @@ function Choice({ text, selected, onPress, status }: { text: string; selected: b
   );
 }
 
-function JobCard({ job, color, photo, canToggle, canDelete, onPress, onToggle, onDelete }: {
+function JobCard({ job, assigneeName, color, photo, canToggle, canDelete, onPress, onToggle, onDelete }: {
   job: Job;
+  // "Jewel Smith", or "Jewel & Shane" when more than one is on it.
+  assigneeName: string | null;
   color: string;
   photo?: string | null;
   canToggle: boolean;
@@ -645,7 +667,7 @@ function JobCard({ job, color, photo, canToggle, canDelete, onPress, onToggle, o
             <Text style={styles.contactText}>{job.contact?.name || "Website customer"}</Text>
           </View>
         ) : (
-          <AssigneeRow name={job.assignedToName} color={color} photo={photo} />
+          <AssigneeRow name={assigneeName} color={color} photo={photo} />
         )}
         {pending ? <Ionicons name="chevron-forward" size={20} color={colors.faint} /> : null}
         {canToggle && (

@@ -132,3 +132,11 @@ test("a blank name still reads as a sentence", () => {
   const a = availabilityFor(pat([block()]), { id: null, key: DAY, time: null }, new Map());
   assert.equal(availabilityWarning(a, "", house).title, "This cleaner can't work then");
 });
+
+test("a second cleaner on a cleaning is booked for it too", () => {
+  const bookings = bookingsOf([job({ assignedTo: "sam", crew: ["pat"] })]);
+  assert.deepEqual(bookings.get(`pat|${DAY}`).map(j => j.id), ["j1"]);
+  assert.deepEqual(bookings.get(`sam|${DAY}`).map(j => j.id), ["j1"]);
+  const a = availabilityFor(pat(), { id: "new", key: DAY, time: "12:00" }, bookings);
+  assert.equal(a.kind, "booked");
+});

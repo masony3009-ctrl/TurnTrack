@@ -6,6 +6,7 @@ import { pickProfilePhoto } from "../../components/photo";
 import { useProfile } from "../../components/ProfileProvider";
 import { alertSoon, Avatar, BrandButton, Card, ColorPicker, EmptyState, Fab, FormInput, Pill, ScreenHeader, SheetModal } from "../../components/ui";
 import { tapSuccess } from "../../components/haptics";
+import { removeFromCrew } from "../../crew";
 import { db } from "../../firebase";
 import { cleanerColor, colors, pickUnusedColor, radius, timeOffColor } from "../../theme";
 import { datesLabel, hoursLabel, isAllDay, timeOffOf, upcomingTimeOff } from "../../timeOff";
@@ -22,20 +23,26 @@ async function removeDevicesFor(employeeId: string) {
   await batch.commit();
 }
 
-// A cleaner's unfinished jobs. Ones with a timer running can't just be handed
-// back: somebody has to finish or discard that time first.
+// A cleaner's unfinished jobs, as the main cleaner or on the crew. Ones with a
+// timer running can't just be handed back: somebody has to finish or discard
+// that time first.
 async function openJobsOf(employeeId: string): Promise<{ waiting: Job[]; running: Job[] }> {
-  const snap = await getDocs(query(collection(db, "jobs"), where("assignedTo", "==", employeeId)));
-  const open = snap.docs.map(d => ({ id: d.id, ...d.data() }) as Job).filter(j => !j.done && !j.cancelled);
+  const [lead, crew] = await Promise.all([
+    getDocs(query(collection(db, "jobs"), where("assignedTo", "==", employeeId))),
+    getDocs(query(collection(db, "jobs"), where("crew", "array-contains", employeeId))),
+  ]);
+  const byId = new Map<string, Job>();
+  [...lead.docs, ...crew.docs].forEach(d => byId.set(d.id, { id: d.id, ...d.data() } as Job));
+  const open = [...byId.values()].filter(j => !j.done && !j.cancelled);
   return { waiting: open.filter(j => !j.startedAt), running: open.filter(j => !!j.startedAt) };
 }
 
-// Puts a leaving cleaner's jobs back in the unassigned pool, so they show as
-// needing someone and another cleaner can take them.
-async function releaseJobs(jobs: Job[]) {
+// Takes a leaving cleaner off their jobs. Ones nobody else is on go back in
+// the unassigned pool, so they show as needing someone.
+async function releaseJobs(jobs: Job[], employeeId: string, nameOf: (id: string) => string | undefined) {
   for (let i = 0; i < jobs.length; i += 400) {
     const batch = writeBatch(db);
-    jobs.slice(i, i + 400).forEach(j => batch.update(doc(db, "jobs", j.id), { assignedTo: null, assignedToName: null }));
+    jobs.slice(i, i + 400).forEach(j => batch.update(doc(db, "jobs", j.id), removeFromCrew(j, employeeId, nameOf)));
     await batch.commit();
   }
 }
@@ -154,7 +161,7 @@ export default function TeamScreen() {
       return;
     }
     const jobsLine = open.waiting.length
-      ? ` Their ${plural(open.waiting.length, "unfinished job")} go back to unassigned.`
+      ? ` They come off ${plural(open.waiting.length, "unfinished job")}; any with nobody else on go back to unassigned.`
       : "";
     const body = mode === "delete"
       ? `Delete ${emp.name}? Their phone is signed out and their past time entries stay in payroll history.${jobsLine} If they might come back, deactivate instead.`
@@ -166,7 +173,7 @@ export default function TeamScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            await releaseJobs(open.waiting);
+            await releaseJobs(open.waiting, emp.id, id => allEmployees.find(e => e.id === id)?.name);
             if (mode === "delete") await deleteDoc(doc(db, "employees", emp.id));
             else await updateDoc(doc(db, "employees", emp.id), { active: false });
             setShowForm(false);

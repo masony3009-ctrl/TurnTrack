@@ -3,6 +3,7 @@ import { collection, doc, onSnapshot, runTransaction } from "firebase/firestore"
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { groupOutbox, isOpenJob, loadByCleaner, openCounts, openRange, RANGE_LABELS, type OpenRange } from "../assign";
+import { addToCrew, isOnCrew, removeFromCrew, type CrewChanges } from "../crew";
 import { tapSelect, tapSuccess } from "../components/haptics";
 import { useProfile } from "../components/ProfileProvider";
 import { BottomBar, BrandButton, Card, ColorDot, EmptyState, ErrorState, Pill, ScreenHeader } from "../components/ui";
@@ -43,9 +44,10 @@ export default function AssignScreen() {
   const [asking, setAsking] = useState(false);
   const today = todayKey();
 
-  // job id -> who it went to, waiting to be announced; and who has already been told.
+  // "job|cleaner" -> a cleaner put on a job, waiting to be announced; and the
+  // "job|cleaner" pairs already told. A job can go to more than one cleaner.
   const outbox = useRef(new Map<string, { employeeId: string; job: Job }>());
-  const told = useRef(new Map<string, string>());
+  const told = useRef(new Set<string>());
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const labelOf = useRef((job: Job) => houseLabel(job, properties));
   labelOf.current = (job: Job) => houseLabel(job, properties);
@@ -65,7 +67,7 @@ export default function AssignScreen() {
     const grouped = groupOutbox(outbox.current);
     outbox.current.clear();
     grouped.forEach((list, employeeId) => {
-      list.forEach(j => told.current.set(j.id, employeeId));
+      list.forEach(j => told.current.add(`${j.id}|${employeeId}`));
       sendPushToEmployee(employeeId, list.length === 1 ? assignmentMessage(list[0]) : assignmentDigestMessage(list, labelOf.current));
     });
   };
@@ -81,6 +83,7 @@ export default function AssignScreen() {
   const load = useMemo(() => loadByCleaner(all, range, today), [all, range, today]);
   const crew = employees.filter(e => e.active);
   const employeeById = useMemo(() => new Map(employees.map(e => [e.id, e])), [employees]);
+  const nameOf = (id: string) => employeeById.get(id)?.name;
   const bookings = useMemo(() => bookingsOf(all), [all]);
   const days = useMemo(() => {
     const out: { key: string; jobs: Job[] }[] = [];
@@ -95,33 +98,40 @@ export default function AssignScreen() {
   }, [all, today, range, touched]);
   const openTotal = counts.week + counts.next + counts.later;
 
-  const assign = async (job: Job, emp: Employee | null) => {
+  // Puts a cleaner on the job, or takes them off if they're already on it.
+  const toggle = async (job: Job, emp: Employee) => {
     if (saving.has(job.id)) return;
     tapSelect();
     setSaving(prev => new Set(prev).add(job.id));
     const wasTouched = touchedRef.current.has(job.id);
     setTouched(prev => new Set(prev).add(job.id));
     try {
-      await runTransaction(db, async tx => {
+      const result = await runTransaction(db, async tx => {
         const ref = doc(db, "jobs", job.id);
         const snap = await tx.get(ref);
         const current = snap.data();
         if (!snap.exists() || current?.cancelled) throw new Changed("This cleaning was cancelled or removed.");
         if (current?.startedAt) throw new Changed(`${current.assignedToName || "Someone"} already started this cleaning.`);
+        const on = isOnCrew(current || {}, emp.id);
         // A cleaner may have taken it from their phone a moment ago.
-        if (current?.assignedTo && !wasTouched && current.assignedTo !== emp?.id) {
+        if (!on && current?.assignedTo && !wasTouched) {
           throw new Changed(`${current.assignedToName || "Another cleaner"} took this cleaning first.`);
         }
-        tx.update(ref, { assignedTo: emp ? emp.id : null, assignedToName: emp ? emp.name : null });
+        const changes: CrewChanges = on ? removeFromCrew(current || {}, emp.id, nameOf) : addToCrew(current || {}, emp, nameOf);
+        tx.update(ref, changes);
+        return { on: !on, changes };
       });
       tapSuccess();
-      if (emp) outbox.current.set(job.id, { employeeId: emp.id, job: { ...job, assignedTo: emp.id, assignedToName: emp.name } });
-      else outbox.current.delete(job.id);
-      // Someone already told about this one is losing it.
-      const before = told.current.get(job.id);
-      if (before && before !== emp?.id) {
-        told.current.delete(job.id);
-        sendPushToEmployee(before, unassignedMessage(job));
+      const pair = `${job.id}|${emp.id}`;
+      if (result.on) {
+        outbox.current.set(pair, { employeeId: emp.id, job: { ...job, ...result.changes } });
+      } else {
+        outbox.current.delete(pair);
+        // Someone already told about this one is losing it.
+        if (told.current.has(pair)) {
+          told.current.delete(pair);
+          sendPushToEmployee(emp.id, unassignedMessage(job));
+        }
       }
       if (flushTimer.current) clearTimeout(flushTimer.current);
       flushTimer.current = setTimeout(flush, NOTIFY_AFTER_MS);
@@ -247,7 +257,7 @@ export default function AssignScreen() {
                     </TouchableOpacity>
                     <View style={styles.crewRow}>
                       {crew.map(e => {
-                        const on = job.assignedTo === e.id;
+                        const on = isOnCrew(job, e.id);
                         const color = cleanerColor(e);
                         const first = e.name.split(" ")[0];
                         const avail = availabilityFor(e, { id: job.id, key: day.key, time: job.time }, bookings);
@@ -257,10 +267,10 @@ export default function AssignScreen() {
                         // Someone who can't work then, or is on another cleaning, is asked about first.
                         const warning = on ? null : availabilityWarning(avail, e.name, j => houseLabel(j, properties));
                         const pick = () => {
-                          if (!warning) return assign(job, on ? null : e);
+                          if (!warning) return toggle(job, e);
                           Alert.alert(warning.title, warning.body, [
                             { text: "Cancel", style: "cancel" },
-                            { text: "Give it to them", onPress: () => assign(job, e) },
+                            { text: "Give it to them", onPress: () => toggle(job, e) },
                           ]);
                         };
                         return (
@@ -269,8 +279,8 @@ export default function AssignScreen() {
                             style={[styles.crewChip, { borderColor: color }, on && { backgroundColor: color }, blocked && styles.crewChipOff]}
                             onPress={pick}
                             disabled={saving.has(job.id)}
-                            accessibilityRole="radio"
-                            accessibilityState={{ selected: on }}
+                            accessibilityRole="checkbox"
+                            accessibilityState={{ checked: on }}
                             accessibilityLabel={on
                               ? `${e.name} has this. Tap to take it back off them`
                               : `${e.name}, ${status || "free"}. Give this to them`}

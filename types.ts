@@ -34,8 +34,10 @@ export type Job = {
   done: boolean;
   completedAt: number | null;
   sameDayTurnover?: boolean;
+  // The main cleaner. Anyone else on the cleaning is in crew (crew.ts).
   assignedTo?: string | null;
   assignedToName?: string | null;
+  crew?: string[] | null;
   startedAt?: number | null;
   checklist?: ChecklistItem[];
   // Cancelled jobs stay in Firestore for the record but are hidden in the app.

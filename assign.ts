@@ -4,10 +4,11 @@
 //
 // Pure (no React, no Firebase) so it runs under node --test.
 
+import { crewOf } from "./crew.ts";
 import { addDaysToKey, countsAsCleaning, weekStartKey, type ScheduleJob } from "./schedule.ts";
 import { jobDateKey } from "./turnover.ts";
 
-export type AssignJob = ScheduleJob & { id: string; assignedTo?: string | null; done?: boolean };
+export type AssignJob = ScheduleJob & { id: string; assignedTo?: string | null; crew?: string[] | null; done?: boolean };
 
 export type OpenRange = "week" | "next" | "later";
 
@@ -49,7 +50,7 @@ export function loadByCleaner(jobs: AssignJob[], range: OpenRange, today: string
   for (const job of jobs) {
     if (!countsAsCleaning(job) || job.done || !job.assignedTo) continue;
     if (openRange(jobDateKey(job) as string, today) !== range) continue;
-    out.set(job.assignedTo, (out.get(job.assignedTo) || 0) + 1);
+    for (const id of crewOf(job)) out.set(id, (out.get(id) || 0) + 1);
   }
   return out;
 }
@@ -62,8 +63,8 @@ export function digestBody(lines: { house: string; date: string }[], max = 3): s
 }
 
 // One message per cleaner for everything assigned to them in one sitting:
-// the outbox holds job id -> cleaner, so a job moved twice only notifies the
-// cleaner who ended up with it.
+// the outbox holds one entry per job and cleaner, so a job moved twice only
+// notifies the cleaner who ended up with it.
 export function groupOutbox<J>(outbox: Map<string, { employeeId: string; job: J }>): Map<string, J[]> {
   const out = new Map<string, J[]>();
   for (const { employeeId, job } of outbox.values()) {
