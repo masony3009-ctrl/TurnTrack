@@ -8,8 +8,8 @@ import { alertSoon, Avatar, BrandButton, Card, ColorPicker, EmptyState, Fab, For
 import { tapSuccess } from "../../components/haptics";
 import { db } from "../../firebase";
 import { formatMoney, parseRate } from "../../payroll";
-import { cleanerColor, colors, pickUnusedColor, radius } from "../../theme";
-import { datesLabel, hoursLabel, timeOffOf, upcomingTimeOff } from "../../timeOff";
+import { cleanerColor, colors, pickUnusedColor, radius, timeOffColor } from "../../theme";
+import { datesLabel, hoursLabel, isAllDay, timeOffOf, upcomingTimeOff } from "../../timeOff";
 import { todayKey } from "../../turnover";
 import { Employee, Job } from "../../types";
 
@@ -405,7 +405,8 @@ function TimeOffSummary({ employee }: { employee: Employee }) {
         <View key={block.id} style={styles.contactRow}>
           <Ionicons name={block.weekdays ? "repeat" : "calendar-clear-outline"} size={14} color={colors.faint} />
           <Text style={styles.offText}>
-            {datesLabel(block, today)} · {hoursLabel(block)}{block.note ? ` · ${block.note}` : ""}
+            {datesLabel(block, today)} · <Text style={{ color: timeOffColor(isAllDay(block)), fontWeight: "600" }}>{hoursLabel(block)}</Text>
+            {block.note ? ` · ${block.note}` : ""}
           </Text>
         </View>
       ))}

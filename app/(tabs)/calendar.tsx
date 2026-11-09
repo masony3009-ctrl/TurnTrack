@@ -27,7 +27,7 @@ import {
   type Month,
   type WeekCount,
 } from "../../schedule";
-import { cleanerColor, colors, radius, shadow, textOn, tint, unassignedColor } from "../../theme";
+import { cleanerColor, colors, radius, shadow, textOn, timeOffColor, tint, unassignedColor } from "../../theme";
 import { blocksOn, conflictText, isAllDay, shortHours, timeOffOf, upcomingTimeOff, type TimeOff } from "../../timeOff";
 import { formatDayHeading, hasSameDayTurnover, jobDateKey, sortByDate, todayKey } from "../../turnover";
 import { Employee, Job } from "../../types";
@@ -105,12 +105,17 @@ export default function CalendarScreen() {
   const offOn = (key: string): DayOff[] => timeOffPeople
     .map(employee => ({ employee, blocks: blocksOn(timeOffOf(employee), key) }))
     .filter(d => d.blocks.length > 0);
-  // "S off" / "S 8–12" on the owner's grid; "Off" / "8–12" on a cleaner's.
-  const offChip = (d: DayOff) => {
+  // "S off" / "S 8–12" on the owner's grid, the initial in the cleaner's
+  // color; "Off" / "8–12" on a cleaner's. Red all day, orange part of it.
+  const offChip = (d: DayOff): DayCellOff => {
     const allDay = d.blocks.some(isAllDay);
     const hours = allDay ? "off" : shortHours(d.blocks[0]);
-    if (isOwner) return `${d.employee.name.slice(0, 1)} ${hours}`;
-    return allDay ? "Off" : hours;
+    return {
+      id: d.employee.id,
+      allDay,
+      who: isOwner ? { initial: d.employee.name.slice(0, 1), color: cleanerColor(d.employee) } : null,
+      text: isOwner ? hours : allDay ? "Off" : hours,
+    };
   };
   const colorFor = (job: Job) => (job.assignedTo ? cleanerColor(employeeById.get(job.assignedTo) || { id: job.assignedTo }) : unassignedColor);
 
@@ -196,7 +201,8 @@ export default function CalendarScreen() {
         })}
       </ScrollView>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+      {/* Widened by the card's bleed, so the scroll view doesn't clip the outer columns. */}
+      <ScrollView showsVerticalScrollIndicator={false} style={styles.scroll} contentContainerStyle={styles.scrollContent}>
         {!jobs ? (
           <View style={styles.loading}>
             <ActivityIndicator color={colors.teal} />
@@ -221,7 +227,7 @@ export default function CalendarScreen() {
                       inMonth={key.startsWith(selectedKey)}
                       isToday={key === today}
                       jobs={byDay.get(key) || []}
-                      offs={offOn(key).map(d => ({ id: d.employee.id, color: cleanerColor(d.employee), text: offChip(d) }))}
+                      offs={offOn(key).map(offChip)}
                       // A cleaner can open any day to block it out.
                       tappable={!isOwner}
                       label={job => houseLabel(job, properties)}
@@ -249,10 +255,16 @@ export default function CalendarScreen() {
                 <Text style={styles.legendText}>Same-day</Text>
               </View>
               {timeOffPeople.length > 0 ? (
-                <View style={styles.legendItem}>
-                  <View style={styles.legendOff} />
-                  <Text style={styles.legendText}>{"Can't work"}</Text>
-                </View>
+                <>
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendOff, { borderColor: timeOffColor(true), backgroundColor: tint(timeOffColor(true), 0.18) }]} />
+                    <Text style={styles.legendText}>Off all day</Text>
+                  </View>
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendOff, { borderColor: timeOffColor(false), backgroundColor: tint(timeOffColor(false), 0.18) }]} />
+                    <Text style={styles.legendText}>Off part of day</Text>
+                  </View>
+                </>
               ) : null}
             </View>
 
@@ -288,7 +300,7 @@ export default function CalendarScreen() {
                 <ColorDot color={cleanerColor(d.employee)} />
                 <Text style={styles.dayOffText}>
                   {isOwner ? <Text style={styles.dayOffName}>{d.employee.name.split(" ")[0]}  </Text> : null}
-                  {conflictText({ block, blocking: true })}
+                  <Text style={{ color: timeOffColor(isAllDay(block)), fontWeight: "600" }}>{conflictText({ block, blocking: true })}</Text>
                 </Text>
               </View>
             )))}
@@ -377,13 +389,15 @@ function TeamTimeOff({ people, today }: { people: Employee[]; today: string }) {
   );
 }
 
+type DayCellOff = { id: string; allDay: boolean; who: { initial: string; color: string } | null; text: string };
+
 function DayCell({ dayKey, inMonth, isToday, jobs, offs, tappable, label, colorFor, onPress }: {
   dayKey: string;
   inMonth: boolean;
   isToday: boolean;
   jobs: Job[];
   // Who can't work this day, as dashed chips under the cleanings.
-  offs: { id: string; color: string; text: string }[];
+  offs: DayCellOff[];
   // Open even with nothing on it.
   tappable: boolean;
   label: (job: Job) => string;
@@ -425,11 +439,17 @@ function DayCell({ dayKey, inMonth, isToday, jobs, offs, tappable, label, colorF
         );
       })}
       {extra > 0 ? <Text style={styles.more}>+{extra} more</Text> : null}
-      {offs.map(off => (
-        <View key={off.id} style={[styles.chip, styles.chipOff, { borderColor: off.color, backgroundColor: tint(off.color, 0.1) }]}>
-          <Text style={[styles.chipText, { color: colors.ink }]} numberOfLines={1}>{off.text}</Text>
-        </View>
-      ))}
+      {offs.map(off => {
+        const color = timeOffColor(off.allDay);
+        return (
+          <View key={off.id} style={[styles.chip, styles.chipOff, { borderColor: color, backgroundColor: tint(color, 0.18) }]}>
+            <Text style={[styles.chipText, { color: colors.ink }]} numberOfLines={1}>
+              {off.who ? <Text style={{ color: off.who.color }}>{off.who.initial} </Text> : null}
+              {off.text}
+            </Text>
+          </View>
+        );
+      })}
     </TouchableOpacity>
   );
 }
@@ -479,6 +499,8 @@ function WeekCounts({ weekStarts, counts, maxWeek, today }: {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
+  scroll: { marginHorizontal: -12 },
+  scrollContent: { paddingBottom: 40, paddingHorizontal: 12 },
   // A ScrollView may shrink by default, and the tall page under this one
   // squeezed it until the chips were cut off. It keeps its full height.
   monthBar: { flexGrow: 0, flexShrink: 0, marginBottom: 12, marginHorizontal: -20 },
@@ -513,7 +535,7 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
   legendText: { fontSize: 12, fontWeight: "600", color: colors.muted },
   legendOff: { width: 14, height: 10, borderRadius: 3, borderWidth: 1.5, borderStyle: "dashed", borderColor: colors.muted },
-  chipOff: { borderWidth: 1, borderStyle: "dashed" },
+  chipOff: { borderWidth: 1.5, borderStyle: "dashed" },
   offCard: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, paddingBottom: 12, ...shadow.card },
   offTip: { fontSize: 12, color: colors.faint, textAlign: "center", marginTop: 8 },
   offPerson: { paddingTop: 12 },

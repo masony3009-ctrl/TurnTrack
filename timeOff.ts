@@ -69,7 +69,7 @@ export function blocksOn(list: TimeOff[], key: string): TimeOff[] {
   return list.filter(t => coversDay(t, key)).sort(byStart);
 }
 
-function minutesOf(time: string): number {
+export function minutesOf(time: string): number {
   const [h, m] = time.split(":").map(Number);
   return h * 60 + m;
 }

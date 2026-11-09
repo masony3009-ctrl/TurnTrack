@@ -13,8 +13,8 @@ import {
   assignmentDigestMessage, assignmentMessage, openJobsMessage, sendPushToCrew, sendPushToEmployee, unassignedMessage,
 } from "../notifications";
 import { countsAsCleaning, houseLabel } from "../schedule";
-import { cleanerColor, colors, radius, textOn } from "../theme";
-import { conflictFor, conflictText, shortHours, timeOffOf } from "../timeOff";
+import { availabilityColors, cleanerColor, colors, radius, textOn } from "../theme";
+import { availabilityFor, availabilityShort, availabilityTone, availabilityWarning, bookingsOf } from "../availability";
 import { formatDayHeading, hasSameDayTurnover, jobDateKey, sortByDate, todayKey } from "../turnover";
 import { Employee, Job } from "../types";
 
@@ -81,6 +81,7 @@ export default function AssignScreen() {
   const load = useMemo(() => loadByCleaner(all, range, today), [all, range, today]);
   const crew = employees.filter(e => e.active);
   const employeeById = useMemo(() => new Map(employees.map(e => [e.id, e])), [employees]);
+  const bookings = useMemo(() => bookingsOf(all), [all]);
   const days = useMemo(() => {
     const out: { key: string; jobs: Job[] }[] = [];
     for (const job of all) {
@@ -249,12 +250,15 @@ export default function AssignScreen() {
                         const on = job.assignedTo === e.id;
                         const color = cleanerColor(e);
                         const first = e.name.split(" ")[0];
-                        const off = conflictFor(timeOffOf(e), day.key, job.time);
-                        const blocked = !on && !!off?.blocking;
-                        // Someone who said they can't work then is asked about first.
+                        const avail = availabilityFor(e, { id: job.id, key: day.key, time: job.time }, bookings);
+                        const status = !avail ? null : on && avail.kind === "free" ? "Has it" : availabilityShort(avail);
+                        const tone = avail ? availabilityTone(avail) : "free";
+                        const blocked = !on && avail?.kind === "off";
+                        // Someone who can't work then, or is on another cleaning, is asked about first.
+                        const warning = on ? null : availabilityWarning(avail, e.name, j => houseLabel(j, properties));
                         const pick = () => {
-                          if (!blocked || !off) return assign(job, on ? null : e);
-                          Alert.alert(`${first} can't work then`, `${conflictText(off)}. Give them this cleaning anyway?`, [
+                          if (!warning) return assign(job, on ? null : e);
+                          Alert.alert(warning.title, warning.body, [
                             { text: "Cancel", style: "cancel" },
                             { text: "Give it to them", onPress: () => assign(job, e) },
                           ]);
@@ -269,11 +273,14 @@ export default function AssignScreen() {
                             accessibilityState={{ selected: on }}
                             accessibilityLabel={on
                               ? `${e.name} has this. Tap to take it back off them`
-                              : off ? `${conflictText(off)}. Give this to ${e.name}` : `Give this to ${e.name}`}
+                              : `${e.name}, ${status || "free"}. Give this to them`}
                           >
-                            <Text style={[styles.crewText, { color: on ? textOn(color) : blocked ? colors.muted : colors.ink }]}>
-                              {first}{off ? ` · ${shortHours(off.block)}` : ""}
-                            </Text>
+                            <Text style={[styles.crewText, { color: on ? textOn(color) : blocked ? colors.muted : colors.ink }]}>{first}</Text>
+                            {status ? (
+                              <Text style={[styles.crewStatus, { color: on ? textOn(color) : availabilityColors[tone] }]} numberOfLines={1}>
+                                {status}
+                              </Text>
+                            ) : null}
                           </TouchableOpacity>
                         );
                       })}
@@ -317,7 +324,8 @@ const styles = StyleSheet.create({
   house: { flex: 1, fontSize: 16.5, fontWeight: "700", color: colors.ink },
   pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 },
   crewRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
-  crewChip: { minHeight: 40, minWidth: 64, paddingHorizontal: 14, borderRadius: radius.pill, borderWidth: 1.5, alignItems: "center", justifyContent: "center", backgroundColor: colors.card },
+  crewChip: { minHeight: 46, minWidth: 72, paddingHorizontal: 14, paddingVertical: 4, borderRadius: radius.pill, borderWidth: 1.5, alignItems: "center", justifyContent: "center", backgroundColor: colors.card },
   crewText: { fontSize: 14, fontWeight: "700" },
+  crewStatus: { fontSize: 11.5, fontWeight: "600", marginTop: 1 },
   crewChipOff: { borderStyle: "dashed", backgroundColor: colors.bg },
 });

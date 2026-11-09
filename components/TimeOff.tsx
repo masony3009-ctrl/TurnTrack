@@ -5,9 +5,9 @@ import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { db } from "../firebase";
 import { TIME_CHOICES } from "../jobTime";
 import { sendPushToOwners } from "../notifications";
-import { colors, radius } from "../theme";
+import { colors, radius, timeOffColor } from "../theme";
 import {
-  buildTimeOff, clashingJobs, clashMessage, datesLabel, hoursLabel, pastTimeOff, timeOffOf,
+  buildTimeOff, clashingJobs, clashMessage, datesLabel, hoursLabel, isAllDay, pastTimeOff, timeOffOf,
   type TimeOff, type TimeOffKind,
 } from "../timeOff";
 import { dateFromKey, formatShortDate, jobDateKey, todayKey } from "../turnover";
@@ -36,7 +36,10 @@ export function TimeOffRow({ block, today, onRemove }: { block: TimeOff; today: 
       <Ionicons name={block.weekdays ? "repeat" : "calendar-clear-outline"} size={18} color={colors.tealDark} />
       <View style={{ flex: 1 }}>
         <Text style={styles.rowTitle}>{when}</Text>
-        <Text style={styles.rowSub}>{hoursLabel(block)}{block.note ? ` · ${block.note}` : ""}</Text>
+        <Text style={styles.rowSub}>
+          <Text style={{ color: timeOffColor(isAllDay(block)), fontWeight: "600" }}>{hoursLabel(block)}</Text>
+          {block.note ? ` · ${block.note}` : ""}
+        </Text>
       </View>
       {onRemove ? (
         <TouchableOpacity onPress={onRemove} hitSlop={10} style={styles.rowRemove} accessibilityRole="button" accessibilityLabel={`Remove time off, ${when}`}>

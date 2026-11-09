@@ -2,13 +2,14 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { arrayUnion, collection, deleteDoc, doc, getDocs, onSnapshot, query, runTransaction, updateDoc, where, writeBatch } from "firebase/firestore";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { OWNER_PHONE, OWNER_PHONE_LABEL } from "../business";
 import { EndTimeSheet } from "../components/EndTimeSheet";
 import { addToCalendar } from "../components/calendar";
 import { tapImpact, tapSelect, tapSuccess, tapWarning } from "../components/haptics";
 import { openInMaps } from "../components/maps";
+import { availabilityDetail, availabilityFor, availabilityTone, availabilityWarning, bookingsOf } from "../availability";
 import { cleaningEvent } from "../calendarEvent";
 import { useProfile } from "../components/ProfileProvider";
 import { FinishSheet } from "../components/FinishSheet";
@@ -22,15 +23,15 @@ import {
   sendPushToEmployee, sendPushToOwners, unassignedMessage,
 } from "../notifications";
 import { WhenSheet } from "../components/WhenSheet";
-import { canEditDate, formatTime, withTime } from "../jobTime";
+import { canEditDate, formatTime, isTime, withTime } from "../jobTime";
 import { computeEarned, formatClockTime, formatDollars, formatDuration, formatMoney, minutesBetween } from "../payroll";
 import { useProperties } from "../components/useProperties";
 import { isDeepClean, jobPrice } from "../money";
 import { accessCodes, findProperty, houseKey, type AccessCode } from "../properties";
+import { houseLabel } from "../schedule";
 import { isLongSession, mergeSummary, otherRunningJob, sessionEntryId, startCheck, waitBriefly } from "../session";
 import { supplyList } from "../supplies";
-import { cleanerColor, colors, radius, type, unassignedColor } from "../theme";
-import { conflictFor, conflictText, timeOffOf } from "../timeOff";
+import { availabilityColors, cleanerColor, colors, radius, type, unassignedColor } from "../theme";
 import { daysFromToday, formatDateLabel, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
 import { Employee, FinishNote, Job } from "../types";
 
@@ -108,6 +109,23 @@ export default function JobDetail() {
     });
     return unsub;
   }, [id, reloadKey]);
+
+  // Every cleaning, only while the owner has the Assign to list open, so it
+  // can say who's already booked that day. The Jobs tab listens to the same
+  // query, so Firestore answers from what it already has. Null until loaded.
+  const [allJobs, setAllJobs] = useState<Job[] | null>(null);
+  const [allJobsFailed, setAllJobsFailed] = useState(false);
+  useEffect(() => {
+    if (!showAssign || !isOwner) return;
+    return onSnapshot(collection(db, "jobs"), (snapshot) => {
+      setAllJobsFailed(false);
+      setAllJobs(snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Job[]);
+    }, (error) => {
+      console.warn("jobs listener error:", error);
+      setAllJobsFailed(true);
+    });
+  }, [showAssign, isOwner]);
+  const bookings = useMemo(() => bookingsOf(allJobs || []), [allJobs]);
 
   const goBack = () => {
     if (router.canGoBack()) router.back();
@@ -770,6 +788,7 @@ export default function JobDetail() {
   const contact = job.contact || null;
   const hasContact = !!(contact && (contact.name || contact.phone));
   const activeEmployees = employees.filter(e => e.active);
+  const houseOf = (j: Job) => houseLabel(j, properties);
   const assignedEmployee = employees.find(e => e.id === job.assignedTo);
   const assignedColor = job.assignedTo ? cleanerColor(assignedEmployee || { id: job.assignedTo }) : unassignedColor;
   const dateHeading = key ? formatDayHeading(key) : job.date;
@@ -842,12 +861,20 @@ export default function JobDetail() {
           <Text style={styles.sheetHint}>No cleaners yet. Add one on the Team tab.</Text>
         )}
         {activeEmployees.map(emp => {
-          const off = conflictFor(timeOffOf(emp), key, job.time);
-          const blocked = job.assignedTo !== emp.id && !!off?.blocking;
-          // Someone who said they can't work then is asked about first.
+          const on = job.assignedTo === emp.id;
+          const avail = availabilityFor(emp, { id: job.id, key, time: job.time }, bookings);
+          const blocked = !on && avail?.kind === "off";
+          // Free can only be said once their other cleanings have loaded.
+          const status = !avail ? null
+            : avail.kind !== "free" ? availabilityDetail(avail, houseOf, isTime(job.time))
+            : allJobsFailed ? "No time off then · couldn't check their other cleanings"
+            : allJobs === null ? "Checking their day…"
+            : availabilityDetail(avail, houseOf, isTime(job.time));
+          // Someone who can't work then, or is on another cleaning, is asked about first.
+          const warning = on ? null : availabilityWarning(avail, emp.name, houseOf);
           const pick = () => {
-            if (!blocked || !off) return assign(emp);
-            Alert.alert(`${emp.name.split(" ")[0]} can't work then`, `${conflictText(off)}. Give them this cleaning anyway?`, [
+            if (!warning) return assign(emp);
+            Alert.alert(warning.title, warning.body, [
               { text: "Cancel", style: "cancel" },
               { text: "Give it to them", onPress: () => assign(emp) },
             ]);
@@ -863,7 +890,11 @@ export default function JobDetail() {
               <View style={{ flex: 1 }}>
                 <Text style={[styles.assignName, blocked && { color: colors.muted }]}>{emp.name}</Text>
                 <Text style={styles.assignRate}>{formatMoney(emp.hourlyRate)}/hr</Text>
-                {off ? <Text style={[styles.assignOff, !off.blocking && { color: colors.goldDark }]}>{conflictText(off)}</Text> : null}
+                {avail && status ? (
+                  <Text style={[styles.assignStatus, { color: allJobs === null && avail.kind === "free" ? colors.muted : availabilityColors[availabilityTone(avail)] }]}>
+                    {status}
+                  </Text>
+                ) : null}
               </View>
               {job.assignedTo === emp.id && <Ionicons name="checkmark-circle" size={22} color={colors.teal} />}
             </TouchableOpacity>
@@ -1333,7 +1364,7 @@ const styles = StyleSheet.create({
   assignOptionActive: { borderColor: colors.teal, backgroundColor: colors.tealFaint },
   assignName: { fontSize: 15, fontWeight: "600", color: colors.ink },
   assignRate: { fontSize: 12.5, color: colors.muted, marginTop: 1 },
-  assignOff: { fontSize: 12.5, fontWeight: "600", color: colors.danger, marginTop: 3 },
+  assignStatus: { fontSize: 12.5, fontWeight: "600", marginTop: 3 },
   unassignRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44, marginTop: 4 },
   unassignText: { fontSize: 14, fontWeight: "600", color: colors.danger },
   cancelLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 48 },

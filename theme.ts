@@ -15,8 +15,25 @@ export const colors = {
   goldDark: "#8A5B10",
   danger: "#D64545",
   dangerSoft: "#FBEBEB",
+  // Time off for part of a day; red (danger) is a whole day off.
+  partial: "#B5550B",
+  partialSoft: "#FCEBDD",
   white: "#FFFFFF",
 };
+
+// Text color for a cleaner's availability line (availability.ts tones).
+export const availabilityColors = {
+  off: colors.danger,
+  partial: colors.partial,
+  warn: colors.goldDark,
+  free: colors.tealDark,
+  neutral: colors.muted,
+};
+
+// Red for a whole day off, orange for part of one.
+export function timeOffColor(allDay: boolean): string {
+  return allDay ? colors.danger : colors.partial;
+}
 
 export const radius = {
   sm: 8,

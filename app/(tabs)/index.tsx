@@ -14,10 +14,12 @@ import { TimeChips } from "../../components/TimeChips";
 import { withTime } from "../../jobTime";
 import { formatClockTime } from "../../payroll";
 import { type Property } from "../../properties";
-import { cleanerColor, colors, radius, unassignedColor } from "../../theme";
+import { availabilityColors, cleanerColor, colors, radius, unassignedColor } from "../../theme";
 import { daysFromToday, daysLeftInWeek, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate, todayKey } from "../../turnover";
 import { checklistProgress, currentRoom, DEFAULT_CHECKLIST, legacyItems, templateFromDoc, templateStats } from "../../checklist";
 import { isOpenJob } from "../../assign";
+import { availabilityFor, availabilityShort, availabilityTone, availabilityWarning, bookingsOf, type Availability } from "../../availability";
+import { houseLabel } from "../../schedule";
 import { Employee, Job, newJobDoc, parseChecklistText } from "../../types";
 
 type Section = { group: JobGroup; jobs: Job[] };
@@ -97,6 +99,8 @@ export default function JobsScreen() {
     const days = daysFromToday(j);
     return days === null || days >= -CANCELLED_WINDOW_DAYS;
   }), [allJobs]);
+  // Who's already on what each day, so the new-cleaning form can say who's free.
+  const bookings = useMemo(() => bookingsOf(allJobs || []), [allJobs]);
 
   // Owners get reminded about every job; cleaners only about theirs. While
   // the owner is just viewing as a cleaner, their phone keeps the full set.
@@ -229,7 +233,10 @@ export default function JobsScreen() {
     setNewSameDayTurnover(false);
   };
 
-  const addJob = async () => {
+  const newSlot = { id: null, key: newDateKey, time: newTime };
+  const houseOf = (j: Job) => houseLabel(j, properties);
+
+  const addJob = () => {
     if (!newDateKey) {
       Alert.alert("Pick a date", "Choose the cleaning date first.");
       return;
@@ -240,10 +247,23 @@ export default function JobsScreen() {
       return;
     }
     if (saving) return;
+    // Someone who can't work then, or is on another cleaning, is asked about first.
+    const warning = newAssignee ? availabilityWarning(availabilityFor(newAssignee, newSlot, bookings), newAssignee.name, houseOf) : null;
+    if (!warning) {
+      saveJob(newDateKey, address);
+      return;
+    }
+    Alert.alert(warning.title, warning.body, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Give it to them", onPress: () => saveJob(newDateKey, address) },
+    ]);
+  };
+
+  const saveJob = async (dateKey: string, address: string) => {
     setSaving(true);
     try {
       const fields = {
-        ...newJobDoc({ dateKey: newDateKey, time: newTime, address, type: newType, sameDayTurnover: newSameDayTurnover }, checklistTemplate),
+        ...newJobDoc({ dateKey, time: newTime, address, type: newType, sameDayTurnover: newSameDayTurnover }, checklistTemplate),
         // The registry name is what every other writer files a house under.
         property: newHouse ? newHouse.name : null,
         source: "app",
@@ -420,7 +440,13 @@ export default function JobsScreen() {
         <View style={styles.choiceGrid}>
           <Choice text="Unassigned" selected={!newAssignee} onPress={() => { tapSelect(); setNewAssignee(null); }} />
           {activeCleaners.map(emp => (
-            <Choice key={emp.id} text={emp.name.split(" ")[0]} selected={newAssignee?.id === emp.id} onPress={() => { tapSelect(); setNewAssignee(emp); }} />
+            <Choice
+              key={emp.id}
+              text={emp.name.split(" ")[0]}
+              selected={newAssignee?.id === emp.id}
+              onPress={() => { tapSelect(); setNewAssignee(emp); }}
+              status={availabilityFor(emp, newSlot, bookings)}
+            />
           ))}
         </View>
         <TouchableOpacity
@@ -540,16 +566,23 @@ function FilterChip({ label, active, onPress }: { label: string; active: boolean
   );
 }
 
-function Choice({ text, selected, onPress }: { text: string; selected: boolean; onPress: () => void }) {
+// status: a cleaner's availability on the day picked, shown under their name.
+function Choice({ text, selected, onPress, status }: { text: string; selected: boolean; onPress: () => void; status?: Availability | null }) {
+  const label = status ? availabilityShort(status) : null;
+  const off = status?.kind === "off" && !selected;
   return (
     <TouchableOpacity
-      style={[styles.choice, selected && styles.choiceOn]}
+      style={[styles.choice, selected && styles.choiceOn, off && styles.choiceOff]}
       onPress={onPress}
       activeOpacity={0.7}
       accessibilityRole="radio"
       accessibilityState={{ selected }}
+      accessibilityLabel={label ? `${text}, ${label}` : undefined}
     >
-      <Text style={[styles.choiceText, selected && styles.choiceTextOn]} numberOfLines={1}>{text}</Text>
+      <Text style={[styles.choiceText, selected && styles.choiceTextOn, off && { color: colors.muted }]} numberOfLines={1}>{text}</Text>
+      {status && label ? (
+        <Text style={[styles.choiceStatus, { color: selected ? colors.white : availabilityColors[availabilityTone(status)] }]} numberOfLines={1}>{label}</Text>
+      ) : null}
     </TouchableOpacity>
   );
 }
@@ -662,6 +695,8 @@ const styles = StyleSheet.create({
   choiceOn: { backgroundColor: colors.teal, borderColor: colors.teal },
   choiceText: { fontSize: 13.5, fontWeight: "600", color: colors.ink },
   choiceTextOn: { color: colors.white },
+  choiceOff: { borderStyle: "dashed" },
+  choiceStatus: { fontSize: 11.5, fontWeight: "600", marginTop: 1 },
   houseHint: { fontSize: 13, color: colors.muted, marginTop: -4, marginBottom: 12 },
   toggleRow: {
     flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderColor: colors.line,
