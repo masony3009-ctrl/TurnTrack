@@ -16,8 +16,8 @@ export const colors = {
   danger: "#D64545",
   dangerSoft: "#FBEBEB",
   // Time off for part of a day; red (danger) is a whole day off.
-  partial: "#B5550B",
-  partialSoft: "#FCEBDD",
+  partial: "#7E22CE",
+  partialSoft: "#F3E8FF",
   white: "#FFFFFF",
 };
 
@@ -30,7 +30,7 @@ export const availabilityColors = {
   neutral: colors.muted,
 };
 
-// Red for a whole day off, orange for part of one.
+// Red for a whole day off, purple for part of one (orange read too close to red).
 export function timeOffColor(allDay: boolean): string {
   return allDay ? colors.danger : colors.partial;
 }

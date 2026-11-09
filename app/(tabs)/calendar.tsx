@@ -106,7 +106,7 @@ export default function CalendarScreen() {
     .map(employee => ({ employee, blocks: blocksOn(timeOffOf(employee), key) }))
     .filter(d => d.blocks.length > 0);
   // "S off" / "S 8–12" on the owner's grid, the initial in the cleaner's
-  // color; "Off" / "8–12" on a cleaner's. Red all day, orange part of it.
+  // color; "Off" / "8–12" on a cleaner's. Red all day, purple part of it.
   const offChip = (d: DayOff): DayCellOff => {
     const allDay = d.blocks.some(isAllDay);
     const hours = allDay ? "off" : shortHours(d.blocks[0]);
