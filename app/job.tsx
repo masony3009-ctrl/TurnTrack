@@ -24,7 +24,7 @@ import {
 } from "../notifications";
 import { WhenSheet } from "../components/WhenSheet";
 import { canEditDate, formatTime, isTime, withTime } from "../jobTime";
-import { computeEarned, formatClockTime, formatDollars, formatDuration, formatMoney, minutesBetween } from "../payroll";
+import { cleanerPayFor, flatPayDue, formatClockTime, formatDollars, formatDuration, formatMoney, minutesBetween } from "../payroll";
 import { useProperties } from "../components/useProperties";
 import { isDeepClean, jobPrice } from "../money";
 import { accessCodes, findProperty, houseKey, type AccessCode } from "../properties";
@@ -459,7 +459,9 @@ export default function JobDetail() {
     }
     const endedAt = opts.endedAt ?? Date.now();
     const minutes = minutesBetween(job.startedAt, endedAt);
-    const earned = computeEarned(minutes, emp.hourlyRate);
+    // The house's flat pay, however long it took.
+    const pay = cleanerPayFor(property);
+    const earned = flatPayDue(job, emp, pay);
     const employeeName = job.assignedToName || emp.name;
     const batch = writeBatch(db);
     batch.set(doc(db, "timeEntries", sessionEntryId(job.id, job.startedAt)), {
@@ -472,6 +474,7 @@ export default function JobDetail() {
       endedAt,
       minutes,
       hourlyRate: emp.hourlyRate,
+      flatPay: pay,
       earned,
       paid: false,
       paidAt: null,
@@ -484,6 +487,7 @@ export default function JobDetail() {
       completedAt: opts.cancel ? null : endedAt,
       // Earlier sessions on this job stay counted; this one adds to them.
       timeSummary: mergeSummary(job.timeSummary, session),
+      paidTo: arrayUnion(emp.id),
       ...(opts.cancel
         ? { cancelled: true, cancelledAt: endedAt, cancelReason: "Cancelled by owner" }
         : {
@@ -546,7 +550,8 @@ export default function JobDetail() {
         }
         alertSoon(
           "Cleaning finished",
-          `${result.employeeName} worked ${formatDuration(result.minutes)} and earned ${formatMoney(result.earned)}. ` +
+          `${result.employeeName} worked ${formatDuration(result.minutes)}` +
+            (result.earned > 0 ? ` and earned ${formatMoney(result.earned)}. ` : ". They were already paid for this cleaning. ") +
             (result.queued
               ? "It's saved on this phone and goes to payroll when the signal comes back. Keep TurnTrack open until the yellow bar is gone."
               : "It's been added to payroll.")
@@ -606,13 +611,18 @@ export default function JobDetail() {
     };
     if (job.startedAt) {
       const minutes = minutesBetween(job.startedAt, Date.now());
+      const who = job.assignedToName || "The cleaner";
+      const emp = employees.find(e => e.id === job.assignedTo);
+      const due = emp ? flatPayDue(job, emp, cleanerPayFor(property)) : 0;
       Alert.alert(
         "Timer is running",
-        `${job.assignedToName || "The cleaner"} has ${formatDuration(minutes)} on the clock. Log that time to payroll before cancelling?`,
+        due > 0
+          ? `${who} has ${formatDuration(minutes)} on the clock. Pay them ${formatMoney(due)} for this cleaning before cancelling?`
+          : `${who} has ${formatDuration(minutes)} on the clock. Log that time to payroll before cancelling?`,
         [
           { text: "Keep the job", style: "cancel" },
-          { text: "Discard time & cancel", style: "destructive", onPress: () => finish("discard") },
-          { text: "Log time & cancel", onPress: () => finish("log") },
+          { text: due > 0 ? "Don't pay & cancel" : "Discard time & cancel", style: "destructive", onPress: () => finish("discard") },
+          { text: due > 0 ? `Pay ${formatMoney(due)} & cancel` : "Log time & cancel", onPress: () => finish("log") },
         ]
       );
       return;
@@ -889,7 +899,6 @@ export default function JobDetail() {
               <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} size={36} muted={blocked} />
               <View style={{ flex: 1 }}>
                 <Text style={[styles.assignName, blocked && { color: colors.muted }]}>{emp.name}</Text>
-                <Text style={styles.assignRate}>{formatMoney(emp.hourlyRate)}/hr</Text>
                 {avail && status ? (
                   <Text style={[styles.assignStatus, { color: allJobs === null && avail.kind === "free" ? colors.muted : availabilityColors[availabilityTone(avail)] }]}>
                     {status}
@@ -1363,7 +1372,6 @@ const styles = StyleSheet.create({
   },
   assignOptionActive: { borderColor: colors.teal, backgroundColor: colors.tealFaint },
   assignName: { fontSize: 15, fontWeight: "600", color: colors.ink },
-  assignRate: { fontSize: 12.5, color: colors.muted, marginTop: 1 },
   assignStatus: { fontSize: 12.5, fontWeight: "600", marginTop: 3 },
   unassignRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44, marginTop: 4 },
   unassignText: { fontSize: 14, fontWeight: "600", color: colors.danger },

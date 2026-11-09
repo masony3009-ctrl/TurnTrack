@@ -2,6 +2,25 @@ export function computeEarned(minutes: number, hourlyRate: number): number {
   return Math.round((minutes / 60) * hourlyRate * 100) / 100;
 }
 
+// What a cleaner earns for one cleaning, however long it takes, unless the
+// house sets its own amount. Every cleaner on the job earns it.
+export const DEFAULT_CLEANER_PAY = 80;
+
+export function cleanerPayFor(house: { cleanerPay?: number } | null | undefined): number {
+  return house?.cleanerPay && house.cleanerPay > 0 ? house.cleanerPay : DEFAULT_CLEANER_PAY;
+}
+
+type PaidJob = { paidTo?: string[] | null; timeSummary?: { employeeName: string } | null };
+
+// A cleaning pays each cleaner once. Coming back to fix something (a second
+// timer session on the same job) adds nothing. Jobs finished before paidTo
+// existed only have the names in their time summary.
+export function flatPayDue(job: PaidJob, employee: { id: string; name: string }, pay: number): number {
+  if (job.paidTo) return job.paidTo.includes(employee.id) ? 0 : pay;
+  const names = job.timeSummary ? job.timeSummary.employeeName.split(" & ") : [];
+  return names.includes(employee.name) ? 0 : pay;
+}
+
 export function minutesBetween(startMs: number, endMs: number): number {
   return Math.max(1, Math.round((endMs - startMs) / 60000));
 }

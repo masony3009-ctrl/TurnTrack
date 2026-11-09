@@ -2,14 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { accessCodes, aliasesToLink, findProperty, houseKey, parseProperties, patchRegistry, streetOf, tidyAddress } from "../properties.ts";
 
-test("parseProperties reads price and billing start, ignoring junk", () => {
+test("parseProperties reads price, cleaner pay and billing start, ignoring junk", () => {
   const [a, b] = parseProperties([
-    { name: "Palm", address: "1 Palm Rd", price: 150, billedFrom: "2026-10-01" },
-    { name: "Mesa", price: "abc", billedFrom: "Oct 1" },
+    { name: "Palm", address: "1 Palm Rd", price: 150, cleanerPay: 95, billedFrom: "2026-10-01" },
+    { name: "Mesa", price: "abc", cleanerPay: "lots", billedFrom: "Oct 1" },
   ]);
   assert.equal(a.price, 150);
+  assert.equal(a.cleanerPay, 95);
   assert.equal(a.billedFrom, "2026-10-01");
   assert.equal(b.price, undefined);
+  assert.equal(b.cleanerPay, undefined);
   assert.equal(b.billedFrom, undefined);
 });
 

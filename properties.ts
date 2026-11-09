@@ -20,6 +20,9 @@ export type Property = {
   // What a regular cleaning here pays us, in dollars. Deep cleans and one-offs
   // are priced on the job instead.
   price?: number;
+  // What each cleaner earns for a cleaning here, flat, however long it takes.
+  // Unset = DEFAULT_CLEANER_PAY (payroll.ts).
+  cleanerPay?: number;
   // "YYYY-MM-DD": the host pays us directly (not through Turno) for cleanings
   // from this day on, so the app tracks what they still owe.
   billedFrom?: string;
@@ -104,6 +107,7 @@ export function parseProperties(raw: unknown): Property[] {
       lockboxCode: v.lockboxCode ? String(v.lockboxCode) : undefined,
       lockboxSpot: v.lockboxSpot ? String(v.lockboxSpot) : undefined,
       price: Number(v.price) > 0 ? Number(v.price) : undefined,
+      cleanerPay: Number(v.cleanerPay) > 0 ? Number(v.cleanerPay) : undefined,
       billedFrom: typeof v.billedFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.billedFrom) ? v.billedFrom : undefined,
       checklist: houseSteps(v.checklist),
       forwardsFrom: typeof v.forwardsFrom === "string" && v.forwardsFrom.trim() ? v.forwardsFrom.trim() : undefined,

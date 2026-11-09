@@ -10,9 +10,9 @@ A cross-platform mobile app (iOS & Android) built to automate job scheduling for
 - Jobs drop off the phones 2 days after their cleaning date (they stay in Firestore)
 
 ## Crew management (Team, assignments, time tracking, payroll)
-- **Team screen** — add cleaners with an hourly rate, phone, and Zelle contact; deactivate or delete them
+- **Team screen** — add cleaners with a phone and Zelle contact; deactivate or delete them
 - **Assignments** — assign any job to a cleaner from the job detail screen; the assignee shows on job cards, the calendar, and day-of notifications
-- **Time tracking** — Start cleaning / Finish cleaning timer on each job; finishing logs a time entry (minutes × the cleaner's hourly rate) and marks the job done
+- **Time tracking** — Start cleaning / Finish cleaning timer on each job; finishing logs a time entry and marks the job done. Pay is flat per house, however long it takes: the house's cleaner pay, or $80 when it has none (`cleanerPayFor` in `payroll.ts`), once per cleaner per cleaning
 - **Checklist by room** — the checklist is a list of rooms (First 10 minutes, Laundry, Bathroom 1, Bathroom 2, Kitchen…). Each room opens to its steps, with a tip under each step and a note for the room. Ticks record the time and who made them; a finished room shows when, by whom and how long it took, and pushes the owner. Bathrooms repeat per the house's bathroom count. Logic lives in `checklist.ts` (`npm test`)
 - **Add a room** — a cleaner or the owner can add a bathroom, half bath or bedroom to one cleaning when a house has more rooms than its count, and remove it again until something in it is ticked
 - **Finishing early** — finishing with steps unchecked asks for a reason, which the owner sees on the job next to the steps marked "Not done"

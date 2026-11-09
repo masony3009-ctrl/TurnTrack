@@ -7,7 +7,8 @@ import { MyPay } from "../../components/MyPay";
 import { useProfile } from "../../components/ProfileProvider";
 import { alertSoon, Avatar, BrandButton, Card, DatePickerField, EmptyState, ErrorState, FormInput, ScreenHeader, SheetModal } from "../../components/ui";
 import { db } from "../../firebase";
-import { computeEarned, formatDuration, formatEntryDate, formatMoney } from "../../payroll";
+import { parsePrice } from "../../money";
+import { computeEarned, DEFAULT_CLEANER_PAY, formatDuration, formatEntryDate, formatMoney } from "../../payroll";
 import { LONG_SESSION_MINUTES } from "../../session";
 import { cleanerColor, colors, radius, shadow } from "../../theme";
 import { dateFromKey, keyFromDate, todayKey } from "../../turnover";
@@ -32,10 +33,12 @@ export default function PayrollScreen() {
   const [manualFor, setManualFor] = useState<Employee | null>(null);
   const [manualMinutes, setManualMinutes] = useState("");
   const [manualNote, setManualNote] = useState("");
+  const [manualPay, setManualPay] = useState(String(DEFAULT_CLEANER_PAY));
   const [manualDateKey, setManualDateKey] = useState<string | null>(todayKey());
   const [editing, setEditing] = useState<TimeEntry | null>(null);
   const [editMinutes, setEditMinutes] = useState("");
   const [editDateKey, setEditDateKey] = useState<string | null>(null);
+  const [editPay, setEditPay] = useState("");
   const { state, employees } = useProfile();
   const isOwner = state.status === "owner";
 
@@ -134,14 +137,17 @@ export default function PayrollScreen() {
     setManualFor(emp);
     setManualMinutes("");
     setManualNote("");
+    setManualPay(String(DEFAULT_CLEANER_PAY));
     setManualDateKey(todayKey());
   };
 
-  // Fixing an entry: a timer left on overnight, or the wrong day. Pay is
-  // recomputed at the rate the entry was logged at.
+  // Fixing an entry: a timer left on overnight, the wrong day, or a different
+  // amount. Flat-pay entries keep their pay whatever the time; older hourly
+  // ones are recomputed at the rate they were logged at.
   const openEdit = (entry: TimeEntry) => {
     setEditing(entry);
     setEditMinutes(String(entry.minutes));
+    setEditPay(String(entry.earned));
     setEditDateKey(keyFromDate(new Date(entry.endedAt)));
   };
 
@@ -152,12 +158,18 @@ export default function PayrollScreen() {
       Alert.alert("Invalid minutes", "Enter the number of minutes worked, like 150.");
       return;
     }
+    const flat = isFlat(editing);
+    const pay = flat ? payOf(editPay) : null;
+    if (flat && pay === null) {
+      Alert.alert("Check the pay", `Enter dollars, like ${DEFAULT_CLEANER_PAY}. Use 0 for nothing.`);
+      return;
+    }
     const sameDay = editDateKey === keyFromDate(new Date(editing.endedAt));
     const endedAt = sameDay || !editDateKey ? editing.endedAt : noonOf(editDateKey);
     try {
       await updateDoc(doc(db, "timeEntries", editing.id), {
         minutes,
-        earned: computeEarned(minutes, editing.hourlyRate),
+        earned: pay ?? computeEarned(minutes, editing.hourlyRate),
         endedAt,
         startedAt: endedAt - minutes * 60000,
         ...(sameDay ? {} : { jobDate: formatEntryDate(endedAt) }),
@@ -177,6 +189,11 @@ export default function PayrollScreen() {
       Alert.alert("Invalid minutes", "Enter the number of minutes worked, like 90.");
       return;
     }
+    const pay = payOf(manualPay);
+    if (pay === null) {
+      Alert.alert("Check the pay", `Enter dollars, like ${DEFAULT_CLEANER_PAY}.`);
+      return;
+    }
     const endedAt = manualDateKey && manualDateKey !== todayKey() ? noonOf(manualDateKey) : Date.now();
     try {
       await addDoc(collection(db, "timeEntries"), {
@@ -189,7 +206,8 @@ export default function PayrollScreen() {
         endedAt,
         minutes,
         hourlyRate: manualFor.hourlyRate,
-        earned: computeEarned(minutes, manualFor.hourlyRate),
+        flatPay: pay,
+        earned: pay,
         paid: false,
         paidAt: null,
         method: null,
@@ -197,15 +215,12 @@ export default function PayrollScreen() {
         note: manualNote.trim(),
       });
       setManualFor(null);
-      alertSoon("Time added", `${formatDuration(minutes)} logged for ${manualFor.name}.`);
+      alertSoon("Pay added", `${formatMoney(pay)} for ${formatDuration(minutes)} logged for ${manualFor.name}.`);
     } catch (e) {
       console.warn("manual entry failed:", e);
       Alert.alert("Couldn't add time", "The entry didn't save. Check your connection and try again.");
     }
   };
-
-  const manualPreviewMinutes = parseInt(manualMinutes, 10);
-  const showManualPreview = manualFor && !isNaN(manualPreviewMinutes) && manualPreviewMinutes > 0;
 
   const editPreview = parseInt(editMinutes, 10);
 
@@ -228,11 +243,18 @@ export default function PayrollScreen() {
     <View style={styles.container}>
       <ScreenHeader title="Payroll" />
 
-      <SheetModal visible={editing !== null} title={`Fix ${editing?.employeeName.split(" ")[0] || ""}'s time`} onClose={() => setEditing(null)}>
-        {editing ? <Text style={styles.editLead}>{editing.jobAddress} · logged at {formatMoney(editing.hourlyRate)}/hr</Text> : null}
+      <SheetModal visible={editing !== null} title={`Fix ${editing?.employeeName.split(" ")[0] || ""}'s entry`} onClose={() => setEditing(null)}>
+        {editing ? (
+          <Text style={styles.editLead}>
+            {editing.jobAddress} · {isFlat(editing) ? "paid by the house" : `logged at ${formatMoney(editing.hourlyRate)}/hr`}
+          </Text>
+        ) : null}
         <DatePickerField label="Day" value={editDateKey} onChange={setEditDateKey} />
         <FormInput label="Minutes worked" placeholder="e.g. 150" value={editMinutes} onChangeText={setEditMinutes} keyboardType="number-pad" />
-        {editing && !isNaN(editPreview) && editPreview > 0 ? (
+        {editing && isFlat(editing) ? (
+          <FormInput label="Pay ($)" placeholder={String(DEFAULT_CLEANER_PAY)} value={editPay} onChangeText={setEditPay} keyboardType="decimal-pad" />
+        ) : null}
+        {editing && !isFlat(editing) && !isNaN(editPreview) && editPreview > 0 ? (
           <View style={styles.previewStrip}>
             <Ionicons name="calculator-outline" size={15} color={colors.tealDark} />
             <Text style={styles.previewText}>
@@ -249,18 +271,17 @@ export default function PayrollScreen() {
         ) : null}
       </SheetModal>
 
-      <SheetModal visible={manualFor !== null} title={`Add time for ${manualFor?.name || ""}`} onClose={() => setManualFor(null)}>
+      <SheetModal visible={manualFor !== null} title={`Add pay for ${manualFor?.name || ""}`} onClose={() => setManualFor(null)}>
         <DatePickerField label="Day" value={manualDateKey} onChange={setManualDateKey} />
-        <FormInput label="Minutes worked" placeholder="e.g. 90" value={manualMinutes} onChangeText={setManualMinutes} keyboardType="number-pad" />
-        <FormInput label="What was it for? (optional)" placeholder="e.g. Deep clean at Desert Oasis" value={manualNote} onChangeText={setManualNote} />
-        {showManualPreview && (
-          <View style={styles.previewStrip}>
-            <Ionicons name="calculator-outline" size={15} color={colors.tealDark} />
-            <Text style={styles.previewText}>
-              {formatDuration(manualPreviewMinutes)} × {formatMoney(manualFor.hourlyRate)}/hr = {formatMoney(computeEarned(manualPreviewMinutes, manualFor.hourlyRate))}
-            </Text>
+        <FormInput label="What was it for? (optional)" placeholder="e.g. Turnover at Desert Oasis" value={manualNote} onChangeText={setManualNote} />
+        <View style={styles.pair}>
+          <View style={{ flex: 1 }}>
+            <FormInput label="Pay ($)" placeholder={String(DEFAULT_CLEANER_PAY)} value={manualPay} onChangeText={setManualPay} keyboardType="decimal-pad" />
           </View>
-        )}
+          <View style={{ flex: 1 }}>
+            <FormInput label="Minutes worked" placeholder="e.g. 150" value={manualMinutes} onChangeText={setManualMinutes} keyboardType="number-pad" />
+          </View>
+        </View>
         <BrandButton label="Add entry" icon="add" onPress={saveManual} />
       </SheetModal>
 
@@ -310,8 +331,8 @@ export default function PayrollScreen() {
                   <Text style={styles.empName}>{emp.name}</Text>
                   <Text style={styles.empSub}>
                     {empUnpaid.length === 0
-                      ? `No unpaid time · ${formatMoney(emp.hourlyRate)}/hr`
-                      : `${formatDuration(empMinutes)} unpaid, at the rate each was logged`}
+                      ? "Nothing unpaid"
+                      : `${empUnpaid.length} unpaid · ${formatDuration(empMinutes)}`}
                   </Text>
                 </View>
                 <Text style={[styles.empOwed, total === 0 && { color: colors.faint }]}>{formatMoney(total)}</Text>
@@ -334,7 +355,7 @@ export default function PayrollScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.smallAction} onPress={() => openManual(emp)}>
                   <Ionicons name="add" size={16} color={colors.tealDark} />
-                  <Text style={styles.smallActionText}>Time</Text>
+                  <Text style={styles.smallActionText}>Add pay</Text>
                 </TouchableOpacity>
               </View>
             </Card>
@@ -384,6 +405,13 @@ export default function PayrollScreen() {
       </ScrollView>
     </View>
   );
+}
+
+const isFlat = (entry: TimeEntry) => typeof entry.flatPay === "number";
+
+// Dollars typed for an entry; "0" is allowed (nothing owed for it).
+function payOf(text: string): number | null {
+  return text.trim() === "0" ? 0 : parsePrice(text);
 }
 
 // One unpaid entry; tap to fix its time or delete it. Very long ones are
@@ -447,4 +475,5 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 14,
   },
   previewText: { fontSize: 13.5, fontWeight: "600", color: colors.tealDark },
+  pair: { flexDirection: "row", gap: 10 },
 });

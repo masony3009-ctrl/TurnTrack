@@ -48,6 +48,8 @@ export type Job = {
     minutes: number;
     earned: number;
   } | null;
+  // Cleaners already paid for this cleaning (flatPayDue in payroll.ts).
+  paidTo?: string[] | null;
   finishNote?: FinishNote | null;
   // How many steps "check all" ticked in one tap at the finish, so the owner can
   // tell a list worked through from one ticked off at the end.
@@ -73,6 +75,8 @@ export type Job = {
 export type Employee = {
   id: string;
   name: string;
+  // From when cleanings paid by the hour. Cleanings now pay a flat amount per
+  // house (cleanerPayFor in payroll.ts); 0 for cleaners added since.
   hourlyRate: number;
   phone?: string;
   zelle?: string;
@@ -107,6 +111,9 @@ export type TimeEntry = {
   minutes: number;
   hourlyRate: number;
   earned: number;
+  // Set on entries paid by the house (a flat amount, however long it took).
+  // Absent on older entries paid by the hour at hourlyRate.
+  flatPay?: number | null;
   paid: boolean;
   paidAt: number | null;
   method: string | null;

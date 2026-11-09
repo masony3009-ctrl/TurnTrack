@@ -46,7 +46,7 @@ export function MyPay({ employee }: { employee: Employee }) {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title="My pay" subtitle={`${firstName} · ${formatMoney(employee.hourlyRate)}/hr`} />
+      <ScreenHeader title="My pay" subtitle={`${firstName} · paid per house`} />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={[styles.hero, shadow.card]}>
           <Text style={styles.heroLabel}>OWED TO YOU</Text>

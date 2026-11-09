@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatDollars, formatMoney, paymentsOf, weekStartMs, workedBetween } from "../payroll.ts";
+import { cleanerPayFor, DEFAULT_CLEANER_PAY, flatPayDue, formatDollars, formatMoney, paymentsOf, weekStartMs, workedBetween } from "../payroll.ts";
 
 test("formatDollars drops empty cents and groups thousands", () => {
   assert.equal(formatDollars(42840), "$42,840");
@@ -46,4 +46,31 @@ test("paymentsOf groups paid entries by the moment they were settled", () => {
     { paidAt: 900, amount: 25, count: 1, method: "Cash" },
     { paidAt: 500, amount: 55.1, count: 2, method: "Zelle" },
   ]);
+});
+
+test("a cleaning pays the house's cleaner pay, or $80 when it has none", () => {
+  assert.equal(DEFAULT_CLEANER_PAY, 80);
+  assert.equal(cleanerPayFor(null), 80);
+  assert.equal(cleanerPayFor({}), 80);
+  assert.equal(cleanerPayFor({ cleanerPay: 0 }), 80);
+  assert.equal(cleanerPayFor({ cleanerPay: 95 }), 95);
+});
+
+test("flatPayDue pays each cleaner once per cleaning", () => {
+  const pat = { id: "pat", name: "Pat Doe" };
+  const sam = { id: "sam", name: "Sam Lee" };
+  assert.equal(flatPayDue({}, pat, 80), 80);
+  assert.equal(flatPayDue({ paidTo: ["pat"] }, pat, 80), 0);
+  // Someone else being paid doesn't stop this cleaner earning it too.
+  assert.equal(flatPayDue({ paidTo: ["sam"] }, pat, 80), 80);
+  assert.equal(flatPayDue({ paidTo: ["pat"] }, sam, 80), 80);
+});
+
+test("flatPayDue reads the names on cleanings finished before paidTo existed", () => {
+  const pat = { id: "pat", name: "Pat Doe" };
+  const old = { timeSummary: { employeeName: "Pat Doe & Sam Lee" } };
+  assert.equal(flatPayDue(old, pat, 80), 0);
+  assert.equal(flatPayDue({ timeSummary: { employeeName: "Sam Lee" } }, pat, 80), 80);
+  // Once paidTo is there, it decides.
+  assert.equal(flatPayDue({ ...old, paidTo: ["sam"] }, pat, 80), 80);
 });

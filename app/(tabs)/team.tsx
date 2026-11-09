@@ -7,7 +7,6 @@ import { useProfile } from "../../components/ProfileProvider";
 import { alertSoon, Avatar, BrandButton, Card, ColorPicker, EmptyState, Fab, FormInput, Pill, ScreenHeader, SheetModal } from "../../components/ui";
 import { tapSuccess } from "../../components/haptics";
 import { db } from "../../firebase";
-import { formatMoney, parseRate } from "../../payroll";
 import { cleanerColor, colors, pickUnusedColor, radius, timeOffColor } from "../../theme";
 import { datesLabel, hoursLabel, isAllDay, timeOffOf, upcomingTimeOff } from "../../timeOff";
 import { todayKey } from "../../turnover";
@@ -47,7 +46,6 @@ export default function TeamScreen() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [rate, setRate] = useState("");
   const [phone, setPhone] = useState("");
   const [zelle, setZelle] = useState("");
   const [photo, setPhoto] = useState<string | null>(null);
@@ -70,7 +68,6 @@ export default function TeamScreen() {
   const openAdd = () => {
     setEditingId(null);
     setName("");
-    setRate("");
     setPhone("");
     setZelle("");
     setPhoto(null);
@@ -81,7 +78,6 @@ export default function TeamScreen() {
   const openEdit = (emp: Employee) => {
     setEditingId(emp.id);
     setName(emp.name);
-    setRate(emp.hourlyRate.toString());
     setPhone(emp.phone || "");
     setZelle(emp.zelle || "");
     setPhoto(emp.photo || null);
@@ -115,14 +111,8 @@ export default function TeamScreen() {
       Alert.alert("Missing name", "Enter the cleaner's name.");
       return;
     }
-    const hourlyRate = parseRate(rate);
-    if (hourlyRate === null) {
-      Alert.alert("Invalid rate", "Enter an hourly rate like 20 or 22.50.");
-      return;
-    }
     const data = {
       name: name.trim(),
-      hourlyRate,
       phone: phone.trim(),
       zelle: zelle.trim(),
       photo,
@@ -132,7 +122,8 @@ export default function TeamScreen() {
       if (editingId) {
         await updateDoc(doc(db, "employees", editingId), data);
       } else {
-        await addDoc(collection(db, "employees"), { ...data, active: true, createdAt: Date.now() });
+        // Cleanings pay a flat amount per house now, not by the hour.
+        await addDoc(collection(db, "employees"), { ...data, hourlyRate: 0, active: true, createdAt: Date.now() });
       }
       tapSuccess();
       setShowForm(false);
@@ -248,9 +239,6 @@ export default function TeamScreen() {
           <FormInput label="Name" placeholder="Full name" value={name} onChangeText={setName} />
         )}
         {isOwner && (
-          <FormInput label="Hourly rate" placeholder="e.g. 20" value={rate} onChangeText={setRate} keyboardType="decimal-pad" />
-        )}
-        {isOwner && (
           <ColorPicker label="Calendar color" value={color} onChange={setColor} />
         )}
         <FormInput label="Phone (optional)" placeholder="(480) 555-1234" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
@@ -318,7 +306,6 @@ export default function TeamScreen() {
                   <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} muted={!emp.active} size={44} />
                   <View style={styles.nameBlock}>
                     <Text style={styles.name}>{emp.name}</Text>
-                    {canSeePay(emp) && <Text style={styles.rate}>{formatMoney(emp.hourlyRate)}/hr</Text>}
                   </View>
                   {isSelf ? (
                     <Pill label="You" tone="solid" />
@@ -426,7 +413,6 @@ const styles = StyleSheet.create({
   cardTop: { flexDirection: "row", alignItems: "center", gap: 12 },
   nameBlock: { flex: 1 },
   name: { fontSize: 16, fontWeight: "700", color: colors.ink },
-  rate: { fontSize: 13.5, fontWeight: "600", color: colors.tealDark, marginTop: 1 },
   contactBlock: { marginTop: 12, gap: 5 },
   contactRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   contactLink: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 40, paddingRight: 10 },

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { parsePrice, type Client } from "../money";
 import { aliasesToLink, type Property, type RegistryChanges } from "../properties";
+import { DEFAULT_CLEANER_PAY, formatDollars } from "../payroll";
 import { colors, radius } from "../theme";
 import { formatShortDate, todayKey } from "../turnover";
 import { parseChecklistText } from "../types";
@@ -14,6 +15,7 @@ type Form = {
   address: string;
   short: string;
   price: string;
+  cleanerPay: string;
   bedrooms: string;
   bathrooms: string;
   doorCode: string;
@@ -32,6 +34,7 @@ function formOf(house: Property | null): Form {
     address: house?.address || "",
     short: house?.short || "",
     price: house?.price ? String(house.price) : "",
+    cleanerPay: house?.cleanerPay ? String(house.cleanerPay) : "",
     bedrooms: house?.bedrooms ? String(house.bedrooms) : "",
     bathrooms: house?.bathrooms ? String(house.bathrooms) : "",
     doorCode: house?.doorCode || "",
@@ -111,6 +114,11 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
       Alert.alert("Check the price", "Enter dollars, like 150.");
       return;
     }
+    const cleanerPay = form.cleanerPay.trim() ? parsePrice(form.cleanerPay) : null;
+    if (form.cleanerPay.trim() && cleanerPay === null) {
+      Alert.alert("Check the cleaner pay", `Enter dollars, like ${DEFAULT_CLEANER_PAY}.`);
+      return;
+    }
     const bedrooms = roomCount(form.bedrooms);
     const bathrooms = roomCount(form.bathrooms);
     if (bedrooms === null || bathrooms === null) {
@@ -126,6 +134,7 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
     const changes: RegistryChanges = {
       short: form.short.trim() || null,
       price,
+      cleanerPay,
       bedrooms,
       bathrooms,
       doorCode: form.doorCode.trim() || null,
@@ -172,7 +181,15 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
         <Text style={styles.address}>{house.address}</Text>
       )}
       <FormInput label="Short name" placeholder="e.g. Desert Oasis" value={form.short} onChangeText={set("short")} autoCapitalize="words" />
-      <FormInput label="Price per cleaning ($)" placeholder="e.g. 150" value={form.price} onChangeText={set("price")} keyboardType="decimal-pad" />
+      <View style={styles.pair}>
+        <View style={{ flex: 1 }}>
+          <FormInput label="Price per cleaning ($)" placeholder="e.g. 150" value={form.price} onChangeText={set("price")} keyboardType="decimal-pad" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <FormInput label="Cleaner pay ($)" placeholder={String(DEFAULT_CLEANER_PAY)} value={form.cleanerPay} onChangeText={set("cleanerPay")} keyboardType="decimal-pad" />
+        </View>
+      </View>
+      <Text style={styles.hint}>Each cleaner on a cleaning here earns the cleaner pay, however long it takes. Empty = {formatDollars(DEFAULT_CLEANER_PAY)}.</Text>
       <View style={styles.pair}>
         <View style={{ flex: 1 }}>
           <FormInput label="Bedrooms" placeholder="3" value={form.bedrooms} onChangeText={set("bedrooms")} keyboardType="number-pad" />
