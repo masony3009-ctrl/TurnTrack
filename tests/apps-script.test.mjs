@@ -233,6 +233,7 @@ function run({ answer = services(), mail = {}, props = {} } = {}) {
   const calls = [];
   const store = { ...props };
   const searches = [];
+  const sent = [];
   const box = vm.createContext({
     Logger: { log() {} },
     // TODAY, moved by however many days the date asked about is from now.
@@ -243,6 +244,7 @@ function run({ answer = services(), mail = {}, props = {} } = {}) {
         if (q.startsWith("(from:(")) return mail.airbnb || [];
         return (q.includes("New Cleaning project") ? mail.turno : mail.cancel) || [];
       },
+      sendEmail(to, subject, body) { sent.push({ to, subject, body }); },
     },
     PropertiesService: {
       getScriptProperties: () => ({
@@ -262,11 +264,14 @@ function run({ answer = services(), mail = {}, props = {} } = {}) {
     },
   });
   vm.runInContext(code, box);
-  const processed = () => (store.processedIds ? store.processedIds.split(",") : []);
+  const ids = () => (store.processedIds ? store.processedIds.split(",") : []);
+  const processed = () => ids().filter((id) => !id.startsWith("receipt:"));
+  // Messages that got their "Got it" email, by id.
+  const receipted = () => ids().filter((id) => id.startsWith("receipt:")).map((id) => id.slice(8));
   // The jobs query is a POST, but only reads.
   const writes = () => calls.filter((c) => c.method !== "get" && !c.url.includes("identitytoolkit") && !c.url.endsWith(":runQuery"));
   const pushes = () => calls.filter((c) => c.url.startsWith("https://exp.host/")).map((c) => c.body);
-  return { gs: box, calls, store, searches, processed, writes, pushes };
+  return { gs: box, calls, store, searches, processed, receipted, sent, writes, pushes };
 }
 
 const message = (id, subject, body) => ({ getId: () => id, getSubject: () => subject, getBody: () => body });
@@ -534,10 +539,18 @@ const bookingPlain = ({ checkIn = "Sun, Nov 15", checkOut = "Thu, Nov 19", code 
 ].join("\n");
 const asHtml = (plain) => plain.split("\n").map((l) => `<p>${l}</p>`).join("");
 const forwardedHeader = (subject) => `---------- Forwarded message ---------\nFrom: Airbnb <automated@airbnb.com>\nSubject: ${subject}\nTo: <${HOST}>\n\n`;
-const mailMsg = (id, { subject, from, to = "Owner <owner@example.com>", plain, date = new Date() }) => ({
-  getId: () => id, getSubject: () => subject, getFrom: () => from, getTo: () => to, getCc: () => "",
-  getBody: () => asHtml(plain), getPlainBody: () => plain, getDate: () => date,
-});
+// `replies` collects what the script answers this message with.
+const mailMsg = (id, { subject, from, to = "Owner <owner@example.com>", plain, date = new Date(), replyFails = false }) => {
+  const replies = [];
+  return {
+    getId: () => id, getSubject: () => subject, getFrom: () => from, getTo: () => to, getCc: () => "",
+    getBody: () => asHtml(plain), getPlainBody: () => plain, getDate: () => date, replies,
+    reply(body) {
+      if (replyFails) throw new Error("Gmail said no");
+      replies.push(body);
+    },
+  };
+};
 // Forwarded by hand: from the host, with Airbnb's email quoted inside.
 const byHand = (id, subject, plain, extra) =>
   mailMsg(id, { subject: `Fwd: ${subject}`, from: `Host Person <${HOST}>`, plain: forwardedHeader(subject) + plain, ...extra });
@@ -710,6 +723,162 @@ test("a change notice asks the owner to check, once, and only while it's fresh",
   stale.gs.scanAllEmails();
   assert.deepEqual(stale.pushes(), []);
   assert.deepEqual(stale.processed(), ["u2"]);
+});
+
+// ---- receipts back to the host ---------------------------------------------
+
+test("a booking forwarded by hand is answered in its thread, once", () => {
+  const msg = byHand("f1", BOOKED, bookingPlain());
+  const s = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(msg)] } });
+  s.gs.scanAllEmails();
+  assert.deepEqual(msg.replies, ["Got it, thanks!"]);
+  assert.deepEqual(s.receipted(), ["f1"]);
+  assert.deepEqual(s.sent, []);
+  // Read again (as the one-time recheck does), it isn't answered twice.
+  delete s.store.forwardRecheckAt;
+  s.gs.scanAllEmails();
+  assert.deepEqual(msg.replies, ["Got it, thanks!"]);
+});
+
+test("an auto-forwarded booking is answered by writing to the host", () => {
+  const s = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(autoForwarded("auto", BOOKED, bookingPlain()))] } });
+  s.gs.scanAllEmails();
+  assert.deepEqual(plain(s.sent), [{ to: HOST, subject: `Re: ${BOOKED}`, body: "Got it, thanks!" }]);
+});
+
+test("a booking already in, or a cancellation, still gets its receipt; mail that isn't one doesn't", () => {
+  const again = byHand("again", BOOKED, bookingPlain());
+  const cancel = byHand("c1", "Canceled: Reservation HMABCDEF12 for Nov 15 – 19, 2026", "your guest had to cancel reservation HMABCDEF12. Airbnb");
+  const chat = mailMsg("chat", { subject: "Lunch?", from: HOST, plain: "See you Friday" });
+  const s = run({ answer: services({ registry: REGISTRY_FWD, jobs: [fwdJob("b1", OUT)] }), mail: { airbnb: [thread(again), thread(cancel), thread(chat)] } });
+  s.gs.scanAllEmails();
+  assert.deepEqual([again.replies, cancel.replies, chat.replies], [["Got it, thanks!"], ["Got it, thanks!"], []]);
+});
+
+test("a booking that can't be read or placed gets no receipt: the owner is told instead", () => {
+  const msg = byHand("f1", BOOKED, "Reservation confirmed but nothing else. Airbnb");
+  const s = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(msg)] } });
+  s.gs.scanAllEmails();
+  assert.deepEqual(msg.replies, []);
+  assert.equal(s.pushes().at(-1)[0].title, "Couldn't read a forwarded Airbnb booking");
+});
+
+test("a receipt that won't send leaves the cleaning in and tells the owner", () => {
+  const msg = mailMsg("f1", { subject: `Fwd: ${BOOKED}`, from: `Host Person <${HOST}>`, plain: forwardedHeader(BOOKED) + bookingPlain(), replyFails: true });
+  const s = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(msg)] } });
+  s.gs.scanAllEmails();
+  assert.equal(created(s).length, 1);
+  assert.ok(s.pushes().some((p) => p[0].title === "Couldn't email the host back"));
+  assert.deepEqual([s.processed(), s.receipted()], [["f1"], []]);
+});
+
+test("forwarded mail already marked done is read once more, the first run after this change", () => {
+  const msg = byHand("old", BOOKED, bookingPlain());
+  const first = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(msg)] }, props: { processedIds: "old" } });
+  first.gs.scanAllEmails();
+  assert.equal(created(first).length, 1);
+  assert.ok(first.store.forwardRecheckAt);
+  assert.deepEqual(first.processed(), ["old"]);
+
+  const later = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(byHand("old", BOOKED, bookingPlain()))] },
+    props: { processedIds: "old", forwardRecheckAt: "1" } });
+  later.gs.scanAllEmails();
+  assert.deepEqual(created(later), []);
+});
+
+// ---- Vrbo -------------------------------------------------------------------
+
+// Laid out like Vrbo's real "Instant Booking" email; guest, numbers and house made up.
+const VRBO_BOOKED = "Instant Booking from Pat Example: Feb 22 - Mar 5, 2027 - Vrbo #1234567";
+const vrboPlain = ({ dates = "Feb 22 - Mar 5, 2027, 11 nights", code = "HA-ABC123", property = "#1234567" } = {}) => [
+  "Your booking is confirmed", "", "Property", "", property, "", "Unit", "", "unit_1111111", "", "Reservation ID", "", code, "",
+  "Dates", "", dates, "", "Guests", "", "4 adults, 0 children", "", "Traveler Name", "", "Pat Example", "",
+  "2nd Payment", "", "Due Jan 8, 2027", "", "Owner's Cancellation Policy:", "",
+  "100% refund for cancellations more than 60 days before check-in date", "", "© 2026 Vrbo",
+].join("\n");
+const vrboText = (p) => p.replace(/\s+/g, " ");
+// The host types the house above the forward.
+const vrboByHand = (id, { note = "Client House", subject = VRBO_BOOKED, body = vrboPlain() } = {}) => mailMsg(id, {
+  subject: `Fw: ${subject}`, from: `Host Person <${HOST}>`,
+  plain: `${note}\n\n----- Forwarded Message -----\nFrom: Pat Example <sender@messages.homeaway.com>\nTo: Host <${HOST}>\nSubject: ${subject}\n\n${body}`,
+});
+
+test("a Vrbo booking reads as its check-in, checkout and reservation ID", () => {
+  assert.deepEqual(plain(gs.parseVrboBooking(VRBO_BOOKED, vrboText(vrboPlain()))), { code: "HA-ABC123", checkIn: "2027-02-22", checkOut: "2027-03-05" });
+  assert.deepEqual(plain(gs.parseVrboBooking("", vrboText(vrboPlain({ dates: "Feb 4 - 8, 2027, 4 nights" })))),
+    { code: "HA-ABC123", checkIn: "2027-02-04", checkOut: "2027-02-08" });
+  // Over New Year, with or without the first year written.
+  for (const dates of ["Dec 28, 2026 - Jan 3, 2027, 6 nights", "Dec 28 - Jan 3, 2027, 6 nights"]) {
+    assert.deepEqual(plain(gs.parseVrboBooking("", vrboText(vrboPlain({ dates })))), { code: "HA-ABC123", checkIn: "2026-12-28", checkOut: "2027-01-03" }, dates);
+  }
+  // The subject's dates do when the body's don't read.
+  assert.equal(gs.parseVrboBooking(VRBO_BOOKED, "Reservation ID HA-ABC123").checkOut, "2027-03-05");
+  // A night count that disagrees, or no reservation ID, is no booking.
+  assert.equal(gs.parseVrboBooking("", vrboText(vrboPlain({ dates: "Feb 22 - Mar 5, 2027, 9 nights" }))), null);
+  assert.equal(gs.parseVrboBooking(VRBO_BOOKED, "Your booking is confirmed Dates Feb 22 - Mar 5, 2027"), null);
+});
+
+test("Vrbo mail is told apart from Airbnb's, and sorted like it", () => {
+  assert.equal(gs.isVrboMail(VRBO_BOOKED, vrboText(vrboPlain())), true);
+  assert.equal(gs.isVrboMail(BOOKED, vrboText(bookingPlain())), false);
+  assert.equal(gs.isVrboMail(BOOKED, `${vrboText(bookingPlain())} (it's on Vrbo too)`), false);
+  assert.equal(gs.vrboKind(VRBO_BOOKED, vrboText(vrboPlain())), "booking");
+  assert.equal(gs.vrboKind("Cancelled: Reservation HA-ABC123", ""), "cancel");
+  assert.equal(gs.vrboKind("Booking request from Pat Example", "Respond within 24 hours"), "");
+  assert.equal(gs.vrboKind("Pat Example has replied to your message", vrboText(vrboPlain()).replace("Your booking is confirmed", "")), "");
+});
+
+test("a Vrbo booking the host forwards becomes a cleaning on the checkout day, and gets a receipt", () => {
+  const msg = vrboByHand("v1");
+  const s = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(msg)] } });
+  s.gs.scanAllEmails();
+  const made = created(s);
+  assert.equal(made.length, 1);
+  const f = made[0].body.fields;
+  assert.deepEqual(plain([f.dateKey, f.property, f.type, f.source, f.vrboCode, f.checkIn]),
+    [S("2027-03-05"), S("Client House"), S("Vrbo Turnover"), S("vrbo-email"), S("HA-ABC123"), S("2027-02-22")]);
+  assert.equal(f.airbnbCode, undefined);
+  assert.equal(s.pushes().at(-1)[0].title, "Vrbo: new cleaning");
+  assert.deepEqual(msg.replies, ["Got it, thanks!"]);
+  assert.deepEqual(s.processed(), ["v1"]);
+});
+
+test("which house a Vrbo booking is for comes from the host's note or the property number", () => {
+  const two = { fields: { items: { arrayValue: { values: [
+    REGISTRY_FWD.fields.items.arrayValue.values[0],
+    { mapValue: { fields: { name: S("Second House"), address: S("2 Second St"), aliases: { arrayValue: { values: [S("second"), S("#7654321")] } }, forwardsFrom: S(HOST) } } },
+  ] } } } };
+  const s = run({ answer: services({ registry: two }), mail: { airbnb: [
+    thread(vrboByHand("v1", { note: "Second" })),
+    thread(vrboByHand("v2", { note: "", body: vrboPlain({ property: "#7654321", code: "HA-SECOND1", dates: "Mar 6 - Mar 9, 2027, 3 nights" }) })),
+    thread(vrboByHand("v3", { note: "", body: vrboPlain({ property: "#9999999", code: "HA-NOWHERE" }) })),
+  ] } });
+  s.gs.scanAllEmails();
+  assert.deepEqual(created(s).map((c) => [c.body.fields.property.stringValue, c.body.fields.vrboCode.stringValue]),
+    [["Second House", "HA-ABC123"], ["Second House", "HA-SECOND1"]]);
+  assert.ok(s.pushes().some((p) => p[0].title === "Forwarded Vrbo booking for an unknown house" && /Vrbo property number/.test(p[0].body)));
+});
+
+test("a forwarded Vrbo cancellation cancels that booking's cleaning by its reservation ID", () => {
+  const msg = vrboByHand("vc", { subject: "Cancelled: Reservation HA-ABC123", body: "Pat Example cancelled reservation HA-ABC123. © 2026 Vrbo" });
+  const s = run({
+    answer: services({ registry: REGISTRY_FWD, jobs: [jobDoc("v", "2027-03-05", { source: S("vrbo-email"), vrboCode: S("HA-ABC123"), checkIn: S("2027-02-22") })] }),
+    mail: { airbnb: [thread(msg)] },
+  });
+  s.gs.scanAllEmails();
+  const cancel = patches(s).find((c) => c.url.includes("/jobs/v?"));
+  assert.deepEqual(plain([cancel.body.fields.cancelled, cancel.body.fields.cancelReason]), [B(true), S("Guest cancelled on Vrbo (forwarded email)")]);
+  assert.equal(s.pushes().at(-1)[0].title, "Vrbo: 1 cancelled");
+  assert.deepEqual(msg.replies, ["Got it, thanks!"]);
+});
+
+test("a Vrbo booking forwarded twice isn't scheduled twice", () => {
+  const s = run({
+    answer: services({ registry: REGISTRY_FWD, jobs: [jobDoc("v", "2027-03-05", { source: S("vrbo-email"), vrboCode: S("HA-ABC123") })] }),
+    mail: { airbnb: [thread(vrboByHand("again"))] },
+  });
+  s.gs.scanAllEmails();
+  assert.deepEqual(created(s), []);
 });
 
 // The laptop sync's heartbeat, as settings/airbnbSync, `hours` ago.
