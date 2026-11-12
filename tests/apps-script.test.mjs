@@ -727,23 +727,41 @@ test("a change notice asks the owner to check, once, and only while it's fresh",
 
 // ---- receipts back to the host ---------------------------------------------
 
+// The reply names the house and day, written out with the year: "Thu, Nov 19, 2026".
+const day = (key) => gs.labelFromKey(key).replace(/ (\d{4})$/, ", $1");
+const GOT_IT = `Got it, thanks! The Client House cleaning is on the schedule for ${day(OUT)}.`;
+
+test("a receipt says which house and day it's about, and whether it's on or cancelled", () => {
+  assert.equal(gs.receiptText({ property: "Client House", dateKey: "2027-03-05" }),
+    "Got it, thanks! The Client House cleaning is on the schedule for Fri, Mar 5, 2027.");
+  assert.equal(gs.receiptText({ property: "Client House", dateKey: "2027-03-05", cancelled: true }),
+    "Got it, thanks! The Client House cleaning on Fri, Mar 5, 2027 is cancelled.");
+  // An old job with only the label still reads; one with no house falls back to its address.
+  assert.equal(gs.receiptText({ property: "", address: "1 Client St", date: "Fri, Mar 5 2027" }),
+    "Got it, thanks! The 1 Client St cleaning is on the schedule for Fri, Mar 5, 2027.");
+  // Nothing to name, or a cleaning already done: just the thanks.
+  for (const job of [undefined, { property: "Client House" }, { dateKey: "2027-03-05" }, { property: "Client House", dateKey: "2027-03-05", done: true }]) {
+    assert.equal(gs.receiptText(job), "Got it, thanks!", JSON.stringify(job));
+  }
+});
+
 test("a booking forwarded by hand is answered in its thread, once", () => {
   const msg = byHand("f1", BOOKED, bookingPlain());
   const s = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(msg)] } });
   s.gs.scanAllEmails();
-  assert.deepEqual(msg.replies, ["Got it, thanks!"]);
+  assert.deepEqual(msg.replies, [GOT_IT]);
   assert.deepEqual(s.receipted(), ["f1"]);
   assert.deepEqual(s.sent, []);
   // Read again (as the one-time recheck does), it isn't answered twice.
   delete s.store.forwardRecheckAt;
   s.gs.scanAllEmails();
-  assert.deepEqual(msg.replies, ["Got it, thanks!"]);
+  assert.deepEqual(msg.replies, [GOT_IT]);
 });
 
 test("an auto-forwarded booking is answered by writing to the host", () => {
   const s = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(autoForwarded("auto", BOOKED, bookingPlain()))] } });
   s.gs.scanAllEmails();
-  assert.deepEqual(plain(s.sent), [{ to: HOST, subject: `Re: ${BOOKED}`, body: "Got it, thanks!" }]);
+  assert.deepEqual(plain(s.sent), [{ to: HOST, subject: `Re: ${BOOKED}`, body: GOT_IT }]);
 });
 
 test("a booking already in, or a cancellation, still gets its receipt; mail that isn't one doesn't", () => {
@@ -752,7 +770,8 @@ test("a booking already in, or a cancellation, still gets its receipt; mail that
   const chat = mailMsg("chat", { subject: "Lunch?", from: HOST, plain: "See you Friday" });
   const s = run({ answer: services({ registry: REGISTRY_FWD, jobs: [fwdJob("b1", OUT)] }), mail: { airbnb: [thread(again), thread(cancel), thread(chat)] } });
   s.gs.scanAllEmails();
-  assert.deepEqual([again.replies, cancel.replies, chat.replies], [["Got it, thanks!"], ["Got it, thanks!"], []]);
+  assert.deepEqual([again.replies, cancel.replies, chat.replies],
+    [[GOT_IT], [`Got it, thanks! The Client House cleaning on ${day(OUT)} is cancelled.`], []]);
 });
 
 test("a booking that can't be read or placed gets no receipt: the owner is told instead", () => {
@@ -839,7 +858,7 @@ test("a Vrbo booking the host forwards becomes a cleaning on the checkout day, a
     [S("2027-03-05"), S("Client House"), S("Vrbo Turnover"), S("vrbo-email"), S("HA-ABC123"), S("2027-02-22")]);
   assert.equal(f.airbnbCode, undefined);
   assert.equal(s.pushes().at(-1)[0].title, "Vrbo: new cleaning");
-  assert.deepEqual(msg.replies, ["Got it, thanks!"]);
+  assert.deepEqual(msg.replies, ["Got it, thanks! The Client House cleaning is on the schedule for Fri, Mar 5, 2027."]);
   assert.deepEqual(s.processed(), ["v1"]);
 });
 
@@ -869,7 +888,7 @@ test("a forwarded Vrbo cancellation cancels that booking's cleaning by its reser
   const cancel = patches(s).find((c) => c.url.includes("/jobs/v?"));
   assert.deepEqual(plain([cancel.body.fields.cancelled, cancel.body.fields.cancelReason]), [B(true), S("Guest cancelled on Vrbo (forwarded email)")]);
   assert.equal(s.pushes().at(-1)[0].title, "Vrbo: 1 cancelled");
-  assert.deepEqual(msg.replies, ["Got it, thanks!"]);
+  assert.deepEqual(msg.replies, ["Got it, thanks! The Client House cleaning on Fri, Mar 5, 2027 is cancelled."]);
 });
 
 test("a Vrbo booking forwarded twice isn't scheduled twice", () => {

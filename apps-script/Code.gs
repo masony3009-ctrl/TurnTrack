@@ -1020,7 +1020,8 @@ function forwardedBooking(ctx, house, msg, b, p) {
       "Add the cleaning in the app, and give the house " + p.nickname + " as a nickname.");
   }
   // Already scheduled - or cancelled since, which an older email mustn't undo.
-  if (jobWithCode(ctx, b.code)) return confirmReceipt(ctx, msg);
+  var known = jobWithCode(ctx, b.code);
+  if (known) return confirmReceipt(ctx, msg, known);
 
   var key = dedupeKey(house.name, house.address);
   var sameDay = ctx.jobs.some(function (j) {
@@ -1050,7 +1051,7 @@ function forwardedBooking(ctx, house, msg, b, p) {
   if (before && before.name && !before.done && !before.sameDayTurnover && patchDoc(before.name, { sameDayTurnover: bool(true) })) {
     before.sameDayTurnover = true;
   }
-  return confirmReceipt(ctx, msg);
+  return confirmReceipt(ctx, msg, { property: house.name, address: house.address, dateKey: b.checkOut });
 }
 
 function forwardedCancel(ctx, house, msg, c, p) {
@@ -1072,7 +1073,7 @@ function forwardedCancel(ctx, house, msg, c, p) {
       "Reservation " + c.code + (c.checkOut ? " (checkout " + labelFromKey(c.checkOut) + ")" : "") +
       " was cancelled, but no matching cleaning was found, so nothing changed. Check the app.");
   }
-  if (job.cancelled || job.done) return confirmReceipt(ctx, msg);
+  if (job.cancelled || job.done) return confirmReceipt(ctx, msg, job);
   var fields = {
     cancelled: bool(true), cancelledAt: int(Date.now()), cancelReason: str("Guest cancelled on " + p.label + " (forwarded email)"), startedAt: nul()
   };
@@ -1080,7 +1081,7 @@ function forwardedCancel(ctx, house, msg, c, p) {
   job.cancelled = true;
   ctx[p.changes].cancelled.push({ dateKey: job.dateKey, property: job.property || job.address, jobId: jobIdOf(job) });
   clearSameDayBefore(ctx, job, job.checkIn || c.checkIn);
-  return confirmReceipt(ctx, msg);
+  return confirmReceipt(ctx, msg, job);
 }
 
 // The stay before a cancelled one no longer turns over the same day, unless
@@ -1197,23 +1198,35 @@ function parseVrboCancel(subject, text) {
 // remembered beside the processed ids.
 var RECEIPT_TEXT = "Got it, thanks!";
 
-function confirmReceipt(ctx, msg) {
+function confirmReceipt(ctx, msg, job) {
   var key = "receipt:" + msg.getId();
   if (isAlreadyProcessed(key)) return true;
   var hosts = ctx.forwardHosts || [];
   var sender = forwardAddresses(msg.getFrom()).filter(function (a) { return hosts.indexOf(a) !== -1; });
   var recipient = forwardAddresses(msg.getTo() + "," + (msg.getCc() || "")).filter(function (a) { return hosts.indexOf(a) !== -1; });
+  var text = receiptText(job);
   try {
-    if (sender.length) msg.reply(RECEIPT_TEXT);
-    else if (recipient.length) GmailApp.sendEmail(recipient[0], "Re: " + stripForward(msg.getSubject()), RECEIPT_TEXT);
+    if (sender.length) msg.reply(text);
+    else if (recipient.length) GmailApp.sendEmail(recipient[0], "Re: " + stripForward(msg.getSubject()), text);
     else return true;
   } catch (e) {
     Logger.log("receipt not sent: " + e);
     return alertOwnerTelegram("Couldn't email the host back",
-      "\"" + stripForward(msg.getSubject()) + "\" is handled in the app, but the \"" + RECEIPT_TEXT + "\" email to the host didn't send. Reply to them yourself.");
+      "\"" + stripForward(msg.getSubject()) + "\" is handled in the app, but the confirmation email to the host didn't send. Reply to them yourself.");
   }
   markAsProcessed(key);
   return true;
+}
+
+// Seven identical replies landing at once couldn't be told apart (Nov 11 2026),
+// so each one names the house and the cleaning day it's about.
+function receiptText(job) {
+  var house = job && (job.property || job.address);
+  var day = job && (job.dateKey || keyFromLabel(job.date));
+  if (!house || !day || job.done) return RECEIPT_TEXT;
+  var label = labelFromKey(day).replace(/ (\d{4})$/, ", $1");
+  if (job.cancelled) return RECEIPT_TEXT + " The " + house + " cleaning on " + label + " is cancelled.";
+  return RECEIPT_TEXT + " The " + house + " cleaning is on the schedule for " + label + ".";
 }
 
 // ---- processed message ids ----------------------------------------------
