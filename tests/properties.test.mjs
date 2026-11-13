@@ -125,14 +125,14 @@ test("parseProperties reads house notes and checkout and check-in times, ignorin
 });
 
 test("patchRegistry renames a house and keeps the old name as an alias", () => {
-  const raw = [{ name: "amy", address: "1 Brisas", aliases: ["brisas"], icalUrl: "keep" }, { name: "Palm", address: "2 Palm" }];
-  const items = patchRegistry(raw, "amy", { name: "Via Las Brisas", address: "1 Via Las Brisas" });
-  assert.deepEqual(items[0], { name: "Via Las Brisas", address: "1 Via Las Brisas", aliases: ["brisas", "amy"], icalUrl: "keep" });
+  const raw = [{ name: "oldname", address: "1 Sample Way", aliases: ["sample"], icalUrl: "keep" }, { name: "Palm", address: "2 Palm" }];
+  const items = patchRegistry(raw, "oldname", { name: "Sample House", address: "2 Sample Way" });
+  assert.deepEqual(items[0], { name: "Sample House", address: "2 Sample Way", aliases: ["sample", "oldname"], icalUrl: "keep" });
   // Old cleanings filed under the old name still find it.
-  assert.equal(findProperty(parseProperties(items), { property: "amy", address: "" }).name, "Via Las Brisas");
+  assert.equal(findProperty(parseProperties(items), { property: "oldname", address: "" }).name, "Sample House");
   // The same name is no rename.
   assert.deepEqual(patchRegistry(raw, "Palm", { name: "Palm" })[1].aliases, undefined);
-  assert.throws(() => patchRegistry(raw, "amy", { name: "palm" }), /already exists/);
+  assert.throws(() => patchRegistry(raw, "oldname", { name: "palm" }), /already exists/);
 });
 
 test("removeFromRegistry drops only that house", () => {
