@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { tapSelect, tapSuccess } from "../../components/haptics";
 import { HouseSheet } from "../../components/HouseSheet";
+import { StatementsSheet } from "../../components/StatementsSheet";
 import { useProfile } from "../../components/ProfileProvider";
 import { ActionSheet, EmptyState, ErrorState, IconButton, ScreenHeader, SectionHeader } from "../../components/ui";
 import { useProperties } from "../../components/useProperties";
@@ -71,6 +72,7 @@ export default function HousesScreen() {
   const [saving, setSaving] = useState(false);
   // The house whose host is being marked paid (picking how they paid).
   const [payingRow, setPayingRow] = useState<Row | null>(null);
+  const [showStatements, setShowStatements] = useState(false);
   const today = todayKey();
 
   // Money and door codes are the owner's: cleaners' phones never load this.
@@ -239,7 +241,12 @@ export default function HousesScreen() {
       <ScreenHeader
         title="Houses"
         subtitle={jobs ? `${houseCount} house${houseCount === 1 ? "" : "s"}` : "Loading houses…"}
-        right={<IconButton icon="add" onPress={() => { setEditing(null); setAdding(true); }} label="Add a house" />}
+        right={
+          <>
+            <IconButton icon="document-text-outline" onPress={() => setShowStatements(true)} label="Statements for hosts you bill" />
+            <IconButton icon="add" onPress={() => { setEditing(null); setAdding(true); }} label="Add a house" />
+          </>
+        }
       />
 
       <ActionSheet
@@ -249,6 +256,8 @@ export default function HousesScreen() {
         onClose={() => setPayingRow(null)}
         actions={payingRow ? HOST_PAY_METHODS.map(m => ({ label: m.label, icon: m.icon, onPress: () => settleHost(payingRow, m.label) })) : []}
       />
+
+      <StatementsSheet visible={showStatements} groups={[...groups.values()]} today={today} onClose={() => setShowStatements(false)} />
 
       <HouseSheet
         visible={adding || !!editing}
