@@ -22,6 +22,9 @@ import {
   templateFromDoc,
   templateStats,
   toggleStep,
+  stepKey,
+  findStep,
+  setStep,
   unfinishedByRoom,
 } from "../checklist.ts";
 
@@ -344,4 +347,33 @@ test("an untouched job picks up its house's steps; a started one keeps its list"
   assert.equal(titles(shown).at(-1), "This house");
   const ticked = toggleStep(stale, 1, "M", 1).items;
   assert.equal(checklistForJob({ stored: ticked, done: false, template: TEMPLATE, houseSteps: HOUSE_STEPS }), ticked);
+});
+
+test("a step is found again by room and text after the list changes around it", () => {
+  const h = (text) => ({ text, done: false, heading: true });
+  const st = (text, done = false) => ({ text, done });
+  const mine = [h("Kitchen"), st("Wipe counters"), st("Wipe counters"), h("Bathroom 1"), st("Mirror")];
+  const key = stepKey(mine, 2);
+  assert.deepEqual(key, { room: "Kitchen", text: "Wipe counters", nth: 1 });
+  // Another cleaner added a room at the top and ticked the bathroom mirror.
+  const theirs = [h("Garage"), st("Sweep"), h("Kitchen"), st("Wipe counters"), st("Wipe counters"), h("Bathroom 1"), st("Mirror", true)];
+  assert.equal(findStep(theirs, key), 4);
+  assert.equal(findStep(theirs, { room: "Office", text: "Dust", nth: 0 }), -1);
+  assert.equal(stepKey(mine, 0), null);
+});
+
+test("setStep ticks on top of another phone's list without undoing its ticks", () => {
+  const h = (text) => ({ text, done: false, heading: true });
+  const st = (text, done = false) => ({ text, done, ...(done ? { doneAt: 1, doneBy: "Shane" } : {}) });
+  const theirs = [h("Kitchen"), st("Counters", true), st("Floor")];
+  const { items, finishedRoom } = setStep(theirs, 2, true, "Jewel", 5);
+  assert.deepEqual(items.map((i) => [i.text, i.done, i.doneBy || null]), [["Kitchen", false, null], ["Counters", true, "Shane"], ["Floor", true, "Jewel"]]);
+  assert.equal(finishedRoom.title, "Kitchen");
+  assert.equal(items[0].notifiedAt, 5);
+  // Already in that state: nothing changes, no second "room done".
+  const again = setStep(items, 2, true, "Jewel", 9);
+  assert.equal(again.items, items);
+  assert.equal(again.finishedRoom, null);
+  // Unticking clears the stamp.
+  assert.deepEqual(setStep(items, 1, false, "Jewel", 9).items[1], { text: "Counters", done: false, doneAt: null, doneBy: null });
 });

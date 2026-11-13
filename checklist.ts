@@ -310,13 +310,58 @@ export function toggleStep(
 ): { items: ChecklistItem[]; finishedRoom: RoomSection | null } {
   const target = items[index];
   if (!target || target.heading) return { items, finishedRoom: null };
+  return setStep(items, index, !target.done, actor, now);
+}
+
+// Which step this is, in words that survive the list changing around it: its
+// room, its text, and which one of that text in the room (a room can repeat a
+// step). Index numbers don't survive: another cleaner adding a room shifts them.
+export type StepKey = { room: string; text: string; nth: number };
+
+export function stepKey(items: ChecklistItem[], index: number): StepKey | null {
+  const target = items[index];
+  if (!target || target.heading) return null;
+  let room = "";
+  let nth = 0;
+  for (let i = 0; i < index; i++) {
+    if (items[i].heading) { room = items[i].text; nth = 0; continue; }
+    if (items[i].text === target.text) nth++;
+  }
+  return { room, text: target.text, nth };
+}
+
+export function findStep(items: ChecklistItem[], key: StepKey): number {
+  let room = "";
+  let nth = 0;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.heading) { room = item.text; nth = 0; continue; }
+    if (room !== key.room || item.text !== key.text) continue;
+    if (nth === key.nth) return i;
+    nth++;
+  }
+  return -1;
+}
+
+// Puts one step in the state wanted (ticked or not). Unlike a toggle, doing it
+// twice changes nothing, so it can be applied on top of a list another phone
+// has saved since. Says which room it finished, once per room.
+export function setStep(
+  items: ChecklistItem[],
+  index: number,
+  done: boolean,
+  actor: string | null,
+  now: number,
+): { items: ChecklistItem[]; finishedRoom: RoomSection | null } {
+  const target = items[index];
+  if (!target || target.heading || target.done === done) return { items, finishedRoom: null };
   const updated = items.map((item, i) => {
     if (i !== index) return item;
-    return item.done
-      ? { ...item, done: false, doneAt: null, doneBy: null }
-      : { ...item, done: true, doneAt: now, doneBy: actor };
+    return done
+      ? { ...item, done: true, doneAt: now, doneBy: actor }
+      : { ...item, done: false, doneAt: null, doneBy: null };
   });
-  if (target.done) return { items: updated, finishedRoom: null };
+  if (!done) return { items: updated, finishedRoom: null };
   const room = roomSections(updated).find(s => s.steps.some(st => st.index === index));
   if (!room || !room.complete || room.headingIndex === null) return { items: updated, finishedRoom: null };
   const heading = updated[room.headingIndex];

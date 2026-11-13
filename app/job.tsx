@@ -22,7 +22,7 @@ import { nextGuestsLine, nextStay } from "../nextGuests";
 import { warnUnreached } from "../components/pushWarning";
 import { RoomChecklist } from "../components/RoomChecklist";
 import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
-import { addableRooms, addRoom, checkAll, checklistForJob, checklistProgress, ownsList, removeRoom, roomMinutes, templateFromDoc, toggleStep, type ChecklistItem } from "../checklist";
+import { addableRooms, addRoom, checkAll, checklistForJob, checklistProgress, findStep, ownsList, removeRoom, roomMinutes, setStep, stepKey, templateFromDoc, toggleStep, type ChecklistItem } from "../checklist";
 import { db } from "../firebase";
 import {
   assignmentMessage, cancellationMessage, discardedMessage, finishReportMessage, givenBackMessage, movedMessage, roomDoneMessage,
@@ -45,6 +45,12 @@ import { Employee, FinishNote, Job } from "../types";
 // How long a save may take before the screen stops waiting on it. With no
 // signal Firestore keeps the change on this phone and uploads it later.
 const SAVE_WAIT_MS = 2500;
+// How long a tick on a shared job waits for the connection before saving the plain way.
+const TICK_WAIT_MS = 6000;
+
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([work, new Promise<T>((_, reject) => setTimeout(() => reject(new Error("timed out")), ms))]);
+}
 
 // Thrown inside a claim transaction when someone else got the job first.
 class AlreadyTaken extends Error {}
@@ -897,12 +903,36 @@ export default function JobDetail() {
     const actor = selfName || (isOwner ? "Owner" : null);
     const base = checklistRef.current.length > 0 ? checklistRef.current : checklist;
     const now = Date.now();
-    const { items: updated, finishedRoom } = toggleStep(base, index, actor, now);
+    const local = toggleStep(base, index, actor, now);
     // Hold the new list locally so a rapid follow-up tap starts from it.
-    checklistRef.current = updated;
+    checklistRef.current = local.items;
     tapSelect();
+    let finishedRoom = local.finishedRoom;
     try {
-      await updateDoc(doc(db, "jobs", job.id), { checklist: updated });
+      // Two or more on the job: the tick goes on top of whatever the others
+      // saved, found by room and text, so nobody's ticks get written over.
+      // That needs a connection; without one it saves the plain way.
+      const key = crewOf(job).length > 1 ? stepKey(base, index) : null;
+      const want = !base[index]?.done;
+      const merged = key
+        ? await withTimeout(runTransaction(db, async (tx) => {
+          const ref = doc(db, "jobs", job.id);
+          const snap = await tx.get(ref);
+          const stored = (snap.data()?.checklist as ChecklistItem[] | undefined) || [];
+          const server = ownsList(stored) ? stored : base;
+          const at = findStep(server, key);
+          if (at === -1) return null;
+          const result = setStep(server, at, want, actor, now);
+          tx.update(ref, { checklist: result.items });
+          return result;
+        }), TICK_WAIT_MS).catch(e => { console.warn("tick merge failed, saving plainly:", e); return null; })
+        : null;
+      if (merged) {
+        checklistRef.current = merged.items;
+        finishedRoom = merged.finishedRoom;
+      } else {
+        await updateDoc(doc(db, "jobs", job.id), { checklist: local.items });
+      }
     } catch (e) {
       console.warn("checklist update failed:", e);
       Alert.alert("That tick didn't save", "Check your connection and tap it again.");
