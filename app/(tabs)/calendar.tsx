@@ -184,7 +184,7 @@ export default function CalendarScreen() {
       <ScreenHeader
         title={monthLabel(month, true)}
         subtitle={jobs ? `${monthTotal} cleaning${monthTotal === 1 ? "" : "s"} · ${totals.done} done, ${totals.left} to go` : "Loading cleanings…"}
-        right={<IconButton icon="today-outline" onPress={() => pickMonth(monthOfKey(today))} />}
+        right={<IconButton icon="today-outline" onPress={() => pickMonth(monthOfKey(today))} label="Go to this month" />}
       />
 
       <ScrollView ref={chipsRef} horizontal showsHorizontalScrollIndicator={false} style={styles.monthBar} contentContainerStyle={styles.monthBarContent}>
@@ -509,7 +509,7 @@ const styles = StyleSheet.create({
   monthChipWrap: { flexDirection: "row", alignItems: "center", gap: 8 },
   yearMark: { fontSize: 15, fontWeight: "800", color: colors.ink, marginHorizontal: 4 },
   monthChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
-  monthChipOn: { backgroundColor: colors.teal, borderColor: colors.teal },
+  monthChipOn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
   monthChipText: { fontSize: 14, fontWeight: "700", color: colors.ink },
   monthChipTextOn: { color: colors.white },
   loading: { alignItems: "center", paddingVertical: 48, gap: 10 },
@@ -524,7 +524,7 @@ const styles = StyleSheet.create({
   cell: { flex: 1, minHeight: 84, paddingHorizontal: 2, paddingTop: 4, paddingBottom: 4, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colors.line, gap: 2 },
   cellOut: { backgroundColor: colors.tealFaint },
   dayNum: { alignSelf: "center", width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 2 },
-  dayNumToday: { backgroundColor: colors.teal },
+  dayNumToday: { backgroundColor: colors.tealDark },
   dayNumText: { fontSize: 12.5, fontWeight: "700", color: colors.ink },
   dayNumOut: { color: colors.faint },
   dayNumTodayText: { color: colors.white },
@@ -551,13 +551,14 @@ const styles = StyleSheet.create({
   weekCard: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingVertical: 4, ...shadow.card },
   weekRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 11, gap: 10 },
   weekRowNow: { backgroundColor: colors.tealFaint },
-  weekLabelCol: { width: 104, gap: 4, alignItems: "flex-start" },
+  // Widths are minimums, so large system text wraps instead of clipping.
+  weekLabelCol: { minWidth: 104, flexShrink: 1, gap: 4, alignItems: "flex-start" },
   weekRange: { fontSize: 13.5, fontWeight: "700", color: colors.ink },
   barTrack: { flex: 1, height: 10, borderRadius: 5, backgroundColor: colors.bg, overflow: "hidden" },
   barFill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: 5 },
   barPast: { backgroundColor: colors.teal },
   barAhead: { backgroundColor: tint(colors.teal, 0.35) },
-  weekCount: { width: 96, textAlign: "right", fontSize: 13, fontWeight: "700", color: colors.ink },
+  weekCount: { minWidth: 72, flexShrink: 1, textAlign: "right", fontSize: 13, fontWeight: "700", color: colors.ink },
   pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
   sheetHouse: { fontSize: 16.5, fontWeight: "700", color: colors.ink },
   sheetAddress: { fontSize: 13.5, color: colors.muted, marginTop: 2 },

@@ -602,7 +602,7 @@ const styles = StyleSheet.create({
   historyNote: { fontSize: 12.5, color: colors.muted, textAlign: "center", marginBottom: 8 },
   deleteLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 6, minHeight: 44 },
   deleteLinkText: { color: colors.danger, fontSize: 13.5, fontWeight: "600" },
-  actionRow: { flexDirection: "row", gap: 8, marginTop: 12, alignItems: "stretch" },
+  actionRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "stretch" },
   actionMain: { flex: 1, paddingVertical: 11 },
   smallAction: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4,

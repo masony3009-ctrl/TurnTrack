@@ -3,7 +3,8 @@ import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { arrayUnion, collection, deleteDoc, doc, getDocs, onSnapshot, query, runTransaction, updateDoc, where, writeBatch } from "firebase/firestore";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
+import { cardTitle } from "../jobList";
 import { OWNER_PHONE, OWNER_PHONE_LABEL } from "../business";
 import { EndTimeSheet } from "../components/EndTimeSheet";
 import { addToCalendar } from "../components/calendar";
@@ -59,6 +60,9 @@ export default function JobDetail() {
   const [showEdit, setShowEdit] = useState(false);
   // Ticks each minute so "2h 10m left" before the next guests stays true.
   const [clock, setClock] = useState(Date.now());
+  // With large system text, side-by-side buttons at the bottom stack instead of clipping.
+  const { fontScale } = useWindowDimensions();
+  const stackBar = fontScale > 1.3;
   useEffect(() => {
     const t = setInterval(() => setClock(Date.now()), 60000);
     return () => clearInterval(t);
@@ -896,6 +900,10 @@ export default function JobDetail() {
     return (
       <View style={styles.container}>
         <ScreenHeader onBack={goBack} title="Loading…" />
+        <View style={styles.loadingBox}>
+          <ActivityIndicator color={colors.tealDark} />
+          <Text style={styles.loadingText}>Loading the cleaning…</Text>
+        </View>
       </View>
     );
   }
@@ -970,7 +978,7 @@ export default function JobDetail() {
       <ScreenHeader
         onBack={goBack}
         backLabel="Back"
-        title={job.address}
+        title={cardTitle(job, property).title}
         subtitle={key ? [withTime(dateHeading, job.time), rel].filter(Boolean).join(" · ") : job.date ? withTime(job.date, job.time) : "No date yet"}
       />
 
@@ -1407,18 +1415,18 @@ export default function JobDetail() {
       {!job.cancelled && !isPending && (canWork || canTake) && (
         <BottomBar>
           {running ? (
-            <View style={styles.barRow}>
-              <BrandButton label="Checklist" icon="list" variant="outline" onPress={() => setShowChecklist(true)} style={{ flex: 1 }} />
-              <BrandButton label={busy ? "Saving…" : "Finish cleaning"} icon="checkmark-circle" onPress={finishCleaning} disabled={busy} style={{ flex: 1.4 }} />
+            <View style={[styles.barRow, stackBar && styles.barStack]}>
+              <BrandButton label="Checklist" icon="list" variant="outline" onPress={() => setShowChecklist(true)} style={stackBar ? undefined : { flex: 1 }} />
+              <BrandButton label={busy ? "Saving…" : "Finish cleaning"} icon="checkmark-circle" onPress={finishCleaning} disabled={busy} style={stackBar ? undefined : { flex: 1.4 }} />
             </View>
           ) : canTake && days !== null && days > 0 ? (
             // Days ahead, a cleaner is signing up for it, not starting a clock.
             <BrandButton label={busy ? "Taking…" : "Take this job"} icon="hand-right-outline" onPress={takeJob} disabled={busy} />
           ) : canTake ? (
             // Today: take it for later, or take it and start the clock now.
-            <View style={styles.barRow}>
-              <BrandButton label="Take this job" icon="hand-right-outline" variant="outline" onPress={takeJob} disabled={busy} style={{ flex: 1 }} />
-              <BrandButton label={busy ? "Starting…" : "Take & start"} icon="play" onPress={startCleaning} disabled={busy} style={{ flex: 1 }} />
+            <View style={[styles.barRow, stackBar && styles.barStack]}>
+              <BrandButton label="Take this job" icon="hand-right-outline" variant="outline" onPress={takeJob} disabled={busy} style={stackBar ? undefined : { flex: 1 }} />
+              <BrandButton label={busy ? "Starting…" : "Take & start"} icon="play" onPress={startCleaning} disabled={busy} style={stackBar ? undefined : { flex: 1 }} />
             </View>
           ) : (
             <BrandButton
@@ -1571,6 +1579,9 @@ const styles = StyleSheet.create({
   cancelLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 48 },
   cancelLinkText: { fontSize: 14, fontWeight: "600", color: colors.danger },
   barRow: { flexDirection: "row", gap: 10 },
+  barStack: { flexDirection: "column" },
+  loadingBox: { alignItems: "center", paddingVertical: 48, gap: 10 },
+  loadingText: { fontSize: 14, color: colors.muted },
   giveBackLink: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 44, marginTop: 6, alignSelf: "flex-start" },
   giveBackText: { fontSize: 14, fontWeight: "600", color: colors.danger },
   giveBackBody: { fontSize: 14.5, color: colors.ink, lineHeight: 21 },

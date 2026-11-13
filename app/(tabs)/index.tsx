@@ -1,8 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { addDoc, collection, deleteDoc, doc, onSnapshot, setDoc, updateDoc } from "firebase/firestore";
-import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { tapSelect, tapSuccess } from "../../components/haptics";
 import { useProfile } from "../../components/ProfileProvider";
 import { ActionSheet, alertSoon, AssigneeRow, BrandButton, Card, DatePickerField, EmptyState, ErrorState, Fab, FormInput, IconButton, Pill, ProgressBar, ScreenHeader, SectionHeader, SheetModal } from "../../components/ui";
@@ -15,7 +15,9 @@ import { assignmentMessage, scheduleTodaysJobNotifications, sendPushToEmployee, 
 import { TimeChips } from "../../components/TimeChips";
 import { withTime } from "../../jobTime";
 import { formatClockTime } from "../../payroll";
-import { type Property } from "../../properties";
+import { findProperty, type Property } from "../../properties";
+import { cardTitle, matchesSearch, weeksOf } from "../../jobList";
+import { openInMaps } from "../../components/maps";
 import { availabilityColors, cleanerColor, colors, radius, unassignedColor } from "../../theme";
 import { daysFromToday, daysLeftInWeek, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate, todayKey } from "../../turnover";
 import { checklistProgress, currentRoom, DEFAULT_CHECKLIST, legacyItems, templateFromDoc, templateStats } from "../../checklist";
@@ -50,6 +52,11 @@ export default function JobsScreen() {
   const [newTime, setNewTime] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [scope, setScope] = useState<Scope>("all");
+  // What's typed in the search box, and the Today / This week filter from the boxes at the top.
+  const [query, setQuery] = useState("");
+  const [range, setRange] = useState<"today" | "week" | null>(null);
+  // Weeks after next start folded; these are the ones opened.
+  const [openWeeks, setOpenWeeks] = useState<Set<string>>(new Set());
   const [showCancelled, setShowCancelled] = useState(false);
   const [showChecklistEditor, setShowChecklistEditor] = useState(false);
   const [showMore, setShowMore] = useState(false);
@@ -68,6 +75,12 @@ export default function JobsScreen() {
   const firstName = state.status === "cleaner" ? state.employee.name.split(" ")[0] : null;
 
   const push = usePushRegistration(deviceId);
+
+  // Cleaners start on their own cleanings; the owner sees everything. A
+  // notification that opened a list (below) still picks its own.
+  useEffect(() => {
+    setScope(selfId ? "mine" : "all");
+  }, [selfId]);
 
   useEffect(() => {
     if (filter === "open" || filter === "mine") setScope(filter);
@@ -340,11 +353,22 @@ export default function JobsScreen() {
   const openJobs = useMemo(() => roleJobs.filter(j => isOpenJob(j, today)), [roleJobs, today]);
 
   const viewingCancelled = isOwner && showCancelled;
-  const visibleJobs = viewingCancelled
+  const scopedJobs = viewingCancelled
     ? cancelledJobs
     : selfId && scope === "mine" ? roleJobs.filter(j => isOnCrew(j, selfId))
     : selfId && scope === "open" ? openJobs
     : roleJobs;
+  const searching = query.trim().length > 0;
+  const visibleJobs = scopedJobs.filter(j => {
+    if (range && !viewingCancelled) {
+      const d = daysFromToday(j);
+      if (j.done || d === null || d < 0 || d > (range === "today" ? 0 : weekLeft)) return false;
+    }
+    if (!searching) return true;
+    const house = findProperty(properties, j);
+    const { title, subtitle } = cardTitle(j, house);
+    return matchesSearch([title, subtitle, house?.name, j.type, crewLabel(j, id => employeeById.get(id)?.name), j.contact?.name], query);
+  });
 
   const sections: Section[] = useMemo(() => {
     if (viewingCancelled) return [];
@@ -365,10 +389,16 @@ export default function JobsScreen() {
   const renderCard = (job: Job) => {
     const assignee = job.assignedTo ? employeeById.get(job.assignedTo) : undefined;
     const color = job.assignedTo ? cleanerColor(assignee || { id: job.assignedTo }) : unassignedColor;
+    const { title, subtitle } = cardTitle(job, findProperty(properties, job));
+    const mine = !!selfId && isOnCrew(job, selfId);
     return (
       <JobCard
         key={job.id}
         job={job}
+        title={title}
+        subtitle={subtitle}
+        yours={mine && scope !== "mine"}
+        onDirections={mine && daysFromToday(job) === 0 && !job.done && !job.cancelled ? () => openInMaps(job.address) : undefined}
         assigneeName={crewLabel(job, id => employeeById.get(id)?.name)}
         color={color}
         photo={assignee?.photo}
@@ -402,12 +432,24 @@ export default function JobsScreen() {
       <PushProblemCard result={push.result} checking={push.checking} onRetry={push.retry} />
 
       <View style={styles.statRow}>
-        <Stat label="Today" value={todayCount} />
-        <Stat label="This week" value={weekCount} />
+        <Stat
+          label="Today"
+          value={todayCount}
+          active={range === "today"}
+          onPress={() => { tapSelect(); setRange(r => (r === "today" ? null : "today")); }}
+          hint="Shows only today's cleanings. Tap again for all."
+        />
+        <Stat
+          label="This week"
+          value={weekCount}
+          active={range === "week"}
+          onPress={() => { tapSelect(); setRange(r => (r === "week" ? null : "week")); }}
+          hint="Shows only this week's cleanings. Tap again for all."
+        />
         {selfId ? (
-          <Stat label="Mine" value={mineCount} />
+          <Stat label="Mine" value={mineCount} active={scope === "mine"} onPress={() => { tapSelect(); setScope("mine"); }} hint="Shows your cleanings" />
         ) : (
-          <Stat label="Unassigned" value={unassignedCount} warn={unassignedCount > 0} onPress={() => router.push("/assign")} />
+          <Stat label="Unassigned ›" value={unassignedCount} warn={unassignedCount > 0} onPress={() => router.push("/assign")} hint="Opens the assign screen" />
         )}
       </View>
 
@@ -418,16 +460,31 @@ export default function JobsScreen() {
           <FilterChip label={`Open${openJobs.length ? ` (${openJobs.length})` : ""}`} active={scope === "open"} onPress={() => { tapSelect(); setScope("open"); }} />
         </View>
       )}
-      {isOwner && (
+      {viewingCancelled && (
         <View style={styles.filterRow}>
-          <FilterChip label="Schedule" active={!showCancelled} onPress={() => { tapSelect(); setShowCancelled(false); }} />
-          <FilterChip
-            label={`Cancelled${cancelledJobs.length ? ` (${cancelledJobs.length})` : ""}`}
-            active={showCancelled}
-            onPress={() => { tapSelect(); setShowCancelled(true); }}
-          />
+          <FilterChip label="Back to the schedule" active={false} onPress={() => { tapSelect(); setShowCancelled(false); }} />
         </View>
       )}
+
+      <View style={styles.searchRow}>
+        <Ionicons name="search" size={17} color={colors.muted} />
+        <TextInput
+          style={styles.searchInput}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search house, street or cleaner"
+          placeholderTextColor={colors.muted}
+          autoCorrect={false}
+          autoCapitalize="none"
+          returnKeyType="search"
+          accessibilityLabel="Search cleanings"
+        />
+        {query ? (
+          <TouchableOpacity onPress={() => setQuery("")} hitSlop={10} accessibilityRole="button" accessibilityLabel="Clear the search">
+            <Ionicons name="close-circle" size={18} color={colors.muted} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
 
       <ActionSheet
         visible={showMore}
@@ -437,6 +494,11 @@ export default function JobsScreen() {
           { label: "Assign cleanings", icon: "people-outline", onPress: () => router.push("/assign") },
           { label: "Edit cleaning checklist", icon: "list-outline", onPress: openChecklistEditor },
           { label: "Send a test notification", icon: "notifications-outline", onPress: sendTest },
+          {
+            label: `Cancelled cleanings${cancelledJobs.length ? ` (${cancelledJobs.length})` : ""}`,
+            icon: "close-circle-outline",
+            onPress: () => setShowCancelled(true),
+          },
         ]}
       />
 
@@ -548,7 +610,13 @@ export default function JobsScreen() {
             </>
           )
         ) : visibleJobs.length === 0 ? (
-          scope === "open" ? (
+          searching || range ? (
+            <EmptyState
+              icon="search-outline"
+              title="Nothing matches"
+              body={searching ? `No cleaning matches "${query.trim()}". Try a house, street or cleaner's name.` : "No cleanings left in that range. Tap the box again to see them all."}
+            />
+          ) : scope === "open" ? (
             <EmptyState
               icon="checkmark-done-outline"
               title="No open cleanings"
@@ -574,9 +642,39 @@ export default function JobsScreen() {
             <SectionHeader
               title={GROUP_TITLES[section.group]}
               count={section.jobs.length}
-              tone={section.group === "running" ? "live" : section.group === "overdue" || section.group === "pending" ? "warn" : "default"}
+              tone={section.group === "running" ? "live" : section.group === "overdue" ? "warn" : "default"}
             />
-            {section.jobs.map(renderCard)}
+            {section.group === "later" && !searching && !range
+              ? weeksOf(section.jobs, today).map((week, i) => {
+                const open = i === 0 || openWeeks.has(week.start);
+                const toggle = () => {
+                  tapSelect();
+                  setOpenWeeks(prev => {
+                    const next = new Set(prev);
+                    if (next.has(week.start)) next.delete(week.start);
+                    else next.add(week.start);
+                    return next;
+                  });
+                };
+                return (
+                  <View key={week.start || "later"}>
+                    <TouchableOpacity
+                      style={styles.weekHeader}
+                      onPress={toggle}
+                      disabled={i === 0}
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded: open }}
+                      accessibilityLabel={`${week.label}, ${week.jobs.length} cleaning${week.jobs.length === 1 ? "" : "s"}`}
+                    >
+                      <Text style={styles.weekHeaderText}>{week.label}</Text>
+                      <Text style={styles.weekHeaderCount}>{week.jobs.length} cleaning{week.jobs.length === 1 ? "" : "s"}</Text>
+                      {i === 0 ? null : <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={colors.muted} />}
+                    </TouchableOpacity>
+                    {open ? week.jobs.map(renderCard) : null}
+                  </View>
+                );
+              })
+              : section.jobs.map(renderCard)}
           </View>
         ))}
       </ScrollView>
@@ -586,23 +684,36 @@ export default function JobsScreen() {
   );
 }
 
-function Stat({ label, value, warn, onPress }: { label: string; value: number; warn?: boolean; onPress?: () => void }) {
+// One of the boxes at the top. Tapping filters the list (active) or opens a
+// screen; warn draws the eye to a number that needs doing something about.
+function Stat({ label, value, warn, active, onPress, hint }: {
+  label: string;
+  value: number;
+  warn?: boolean;
+  active?: boolean;
+  onPress?: () => void;
+  hint?: string;
+}) {
+  const textStyle = [warn && styles.statWarnText, active && styles.statActiveText];
   const body = (
     <>
-      <Text style={[styles.statNumber, warn && { color: colors.goldDark }]}>{value}</Text>
-      <Text style={[styles.statLabel, warn && { color: colors.goldDark }]}>{label}{onPress ? " ›" : ""}</Text>
+      <Text style={[styles.statNumber, ...textStyle]}>{value}</Text>
+      <Text style={[styles.statLabel, ...textStyle]}>{label}</Text>
     </>
   );
+  const chip = [styles.statChip, warn && styles.statChipWarn, active && styles.statChipActive];
   if (!onPress) {
-    return <View style={[styles.statChip, warn && styles.statChipWarn]} accessible accessibilityLabel={`${label}: ${value}`}>{body}</View>;
+    return <View style={chip} accessible accessibilityLabel={`${label}: ${value}`}>{body}</View>;
   }
   return (
     <TouchableOpacity
-      style={[styles.statChip, warn && styles.statChipWarn]}
+      style={chip}
       onPress={onPress}
       activeOpacity={0.7}
       accessibilityRole="button"
-      accessibilityLabel={`${label}: ${value}. Opens the assign screen`}
+      accessibilityLabel={`${label.replace(" ›", "")}: ${value}`}
+      accessibilityHint={hint}
+      accessibilityState={{ selected: !!active }}
     >
       {body}
     </TouchableOpacity>
@@ -651,8 +762,15 @@ function Choice({ text, selected, onPress, status, multi }: {
   );
 }
 
-function JobCard({ job, assigneeName, color, photo, canToggle, canDelete, onPress, onToggle, onDelete }: {
+function JobCard({ job, title, subtitle, yours, onDirections, assigneeName, color, photo, canToggle, canDelete, onPress, onToggle, onDelete }: {
   job: Job;
+  // The house it's at (or its street), and the address under that.
+  title: string;
+  subtitle: string | null;
+  // A cleaner's own cleaning in a list that has everyone's.
+  yours: boolean;
+  // A cleaner's own cleaning today: one tap to the map.
+  onDirections?: () => void;
   // "Jewel Smith", or "Jewel & Shane" when more than one is on it.
   assigneeName: string | null;
   color: string;
@@ -673,24 +791,33 @@ function JobCard({ job, assigneeName, color, photo, canToggle, canDelete, onPres
   // from the list without opening the job.
   const cl = checklistProgress(job.checklist);
   const room = running ? currentRoom(job.checklist) : null;
+  // At most three tags, the most important first; the kind of cleaning is
+  // the first to go when a card has more to say.
+  const pills: ReactNode[] = [];
+  if (pending) pills.push(<Pill key="pending" label="Needs confirmation" tone="request" icon="mail-unread" />);
+  if (job.cancelled) pills.push(<Pill key="cancelled" label="Cancelled" tone="danger" icon="close-circle" />);
+  if (running) pills.push(<Pill key="running" label="In progress" tone="solid" icon="time" />);
+  if (job.done) pills.push(<Pill key="done" label="Done" tone="neutral" icon="checkmark" />);
+  if (sameDay) pills.push(<Pill key="sameday" label="Same-day" tone="gold" icon="alert-circle" />);
+  if (yours) pills.push(<Pill key="yours" label="Yours" tone="teal" icon="person" />);
+  pills.push(<Pill key="type" label={job.type} tone="neutral" />);
   return (
-    <Card tone={(sameDay && !job.done) || pending ? "gold" : job.cancelled ? "danger" : "default"} accent={pending ? colors.gold : color} onPress={onPress} style={job.done || job.cancelled ? styles.cardDone : undefined}>
+    <Card
+      tone={sameDay && !job.done ? "gold" : pending ? "request" : job.cancelled ? "danger" : "default"}
+      accent={pending ? colors.request : color}
+      onPress={onPress}
+      style={job.done || job.cancelled ? styles.cardDone : undefined}
+    >
       <View style={styles.cardTop}>
-        <View style={styles.pillRow}>
-          {pending ? <Pill label="Needs confirmation" tone="gold" icon="mail-unread" /> : null}
-          {job.cancelled ? <Pill label="Cancelled" tone="danger" icon="close-circle" /> : null}
-          {running ? <Pill label="In progress" tone="solid" icon="time" /> : null}
-          {job.done ? <Pill label="Done" tone="neutral" icon="checkmark" /> : null}
-          {sameDay ? <Pill label="Same-day" tone="gold" icon="alert-circle" /> : null}
-          <Pill label={job.type} tone="neutral" />
-        </View>
+        <View style={styles.pillRow}>{pills.slice(0, 3)}</View>
         {canDelete && (
           <TouchableOpacity onPress={onDelete} hitSlop={10} style={styles.trashBtn} accessibilityRole="button" accessibilityLabel="Delete job">
             <Ionicons name="trash-outline" size={17} color={colors.muted} />
           </TouchableOpacity>
         )}
       </View>
-      <Text style={[styles.address, job.done && styles.addressDone]} numberOfLines={2}>{job.address}</Text>
+      <Text style={[styles.address, job.done && styles.addressDone]} numberOfLines={2}>{title}</Text>
+      {subtitle ? <Text style={styles.addressSub} numberOfLines={1}>{subtitle}</Text> : null}
       <View style={styles.metaRow}>
         <Ionicons name="calendar-clear-outline" size={13} color={colors.muted} />
         <Text style={styles.metaText}>{withTime(key ? formatShortDate(key) : job.date, job.time)}</Text>
@@ -713,6 +840,12 @@ function JobCard({ job, assigneeName, color, photo, canToggle, canDelete, onPres
         ) : (
           <AssigneeRow name={assigneeName} color={color} photo={photo} />
         )}
+        {onDirections ? (
+          <TouchableOpacity style={styles.dirBtn} onPress={onDirections} hitSlop={6} accessibilityRole="button" accessibilityLabel="Directions to this cleaning">
+            <Ionicons name="navigate-outline" size={15} color={colors.tealDark} />
+            <Text style={styles.dirText}>Directions</Text>
+          </TouchableOpacity>
+        ) : null}
         {pending ? <Ionicons name="chevron-forward" size={20} color={colors.faint} /> : null}
         {canToggle && (
           <TouchableOpacity
@@ -738,10 +871,28 @@ const styles = StyleSheet.create({
     flex: 1, backgroundColor: colors.card, borderRadius: radius.md, paddingVertical: 10,
     alignItems: "center", borderWidth: 1, borderColor: colors.line,
   },
-  statChipWarn: { backgroundColor: colors.goldSoft, borderColor: "#F0D9A6" },
+  // Not gold: gold means a same-day turnover.
+  statChipWarn: { borderColor: colors.tealDark, borderWidth: 1.5 },
+  statWarnText: { color: colors.tealDark },
+  statChipActive: { backgroundColor: colors.dark, borderColor: colors.dark },
+  statActiveText: { color: colors.white },
   statNumber: { fontSize: 20, fontWeight: "800", color: colors.ink },
   statLabel: { fontSize: 11, fontWeight: "600", color: colors.muted, marginTop: 1 },
-  filterRow: { flexDirection: "row", gap: 8, marginBottom: 10 },
+  filterRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 10 },
+  searchRow: {
+    flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.card, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.line, paddingHorizontal: 12, minHeight: 44, marginBottom: 12,
+  },
+  searchInput: { flex: 1, fontSize: 15, color: colors.ink, paddingVertical: 10 },
+  weekHeader: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 40, paddingHorizontal: 2, marginBottom: 6 },
+  weekHeaderText: { fontSize: 14, fontWeight: "700", color: colors.ink },
+  weekHeaderCount: { flex: 1, fontSize: 13, color: colors.muted },
+  addressSub: { fontSize: 13, color: colors.muted, marginTop: 2 },
+  dirBtn: {
+    flexDirection: "row", alignItems: "center", gap: 5, borderWidth: 1.5, borderColor: colors.tealDark,
+    borderRadius: radius.pill, paddingHorizontal: 12, minHeight: 36,
+  },
+  dirText: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
   filterChip: {
     borderRadius: radius.pill, paddingHorizontal: 16, minHeight: 40, justifyContent: "center",
     backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line,
@@ -758,7 +909,7 @@ const styles = StyleSheet.create({
     minHeight: 40, paddingHorizontal: 12, borderRadius: radius.sm, borderWidth: 1, maxWidth: "100%",
     borderColor: colors.line, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center",
   },
-  choiceOn: { backgroundColor: colors.teal, borderColor: colors.teal },
+  choiceOn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
   choiceText: { fontSize: 13.5, fontWeight: "600", color: colors.ink },
   choiceTextOn: { color: colors.white },
   choiceOff: { borderStyle: "dashed" },
@@ -789,5 +940,5 @@ const styles = StyleSheet.create({
     width: 44, height: 44, borderRadius: 22, borderWidth: 1.5, borderColor: colors.line,
     alignItems: "center", justifyContent: "center", backgroundColor: colors.card,
   },
-  doneCircleActive: { backgroundColor: colors.teal, borderColor: colors.teal },
+  doneCircleActive: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
 });

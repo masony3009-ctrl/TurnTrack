@@ -50,7 +50,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center",
   },
   chipWide: { minWidth: 120 },
-  chipOn: { backgroundColor: colors.teal, borderColor: colors.teal },
+  chipOn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
   chipText: { fontSize: 13.5, fontWeight: "600", color: colors.ink, fontVariant: ["tabular-nums"] },
   chipTextOn: { color: colors.white },
 });

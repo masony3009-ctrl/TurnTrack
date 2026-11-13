@@ -148,9 +148,10 @@ export function tidyAddress(raw: string | null | undefined): string {
   const seen = new Set<string>();
   const parts: string[] = [];
   for (const part of String(raw || "").split(",")) {
-    const p = part.trim();
+    // "AZ  85142 United States" -> "AZ 85142".
+    const p = part.replace(/\s+/g, " ").replace(/\s*\b(united states|usa)\s*$/i, "").trim();
     const k = normalize(p);
-    if (!k || k === "usa" || seen.has(k)) continue;
+    if (!k || k === "usa" || k === "unitedstates" || seen.has(k)) continue;
     seen.add(k);
     parts.push(p);
   }

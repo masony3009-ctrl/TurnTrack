@@ -157,7 +157,7 @@ export function IconButton({ icon, onPress, tint: tintColor, badge, label }: {
 export function Card({ children, style, tone, accent, onPress }: {
   children: ReactNode;
   style?: ViewStyle | ViewStyle[];
-  tone?: "default" | "gold" | "danger";
+  tone?: "default" | "gold" | "danger" | "request";
   // Left stripe color, used for the assigned cleaner.
   accent?: string;
   onPress?: () => void;
@@ -168,6 +168,7 @@ export function Card({ children, style, tone, accent, onPress }: {
         styles.card,
         tone === "gold" && styles.cardGold,
         tone === "danger" && styles.cardDanger,
+        tone === "request" && styles.cardRequest,
         accent ? { borderLeftWidth: 4, borderLeftColor: accent } : null,
         style,
       ]}
@@ -181,7 +182,7 @@ export function Card({ children, style, tone, accent, onPress }: {
 
 export function Pill({ label, tone = "teal", icon, color }: {
   label: string;
-  tone?: "teal" | "gold" | "danger" | "neutral" | "solid" | "custom";
+  tone?: "teal" | "gold" | "danger" | "neutral" | "solid" | "custom" | "request";
   icon?: keyof typeof Ionicons.glyphMap;
   color?: string;
 }) {
@@ -190,7 +191,8 @@ export function Pill({ label, tone = "teal", icon, color }: {
     gold: { bg: colors.goldSoft, fg: colors.goldDark },
     danger: { bg: colors.dangerSoft, fg: colors.danger },
     neutral: { bg: colors.bg, fg: colors.muted },
-    solid: { bg: colors.teal, fg: colors.white },
+    solid: { bg: colors.tealDark, fg: colors.white },
+    request: { bg: colors.requestSoft, fg: colors.request },
     custom: { bg: tint(color || colors.teal, 0.16), fg: color || colors.tealDark },
   }[tone];
   return (
@@ -202,7 +204,8 @@ export function Pill({ label, tone = "teal", icon, color }: {
 }
 
 export function SectionHeader({ title, count, tone }: { title: string; count?: number; tone?: "default" | "warn" | "live" }) {
-  const color = tone === "warn" ? colors.goldDark : tone === "live" ? colors.teal : colors.faint;
+  // Muted rather than faint: section titles have to read in sunlight.
+  const color = tone === "warn" ? colors.goldDark : tone === "live" ? colors.tealDark : colors.muted;
   return (
     <View style={styles.sectionHeader}>
       {tone === "live" ? <View style={styles.liveDot} /> : null}
@@ -269,7 +272,8 @@ export function BrandButton({ label, onPress, variant = "primary", icon, style, 
   compact?: boolean;
 }) {
   const isSolid = variant === "primary" || variant === "danger" || variant === "gold" || variant === "dark";
-  const bg = variant === "primary" ? colors.teal
+  // The darker teal: white text on the bright one is too faint to read outdoors.
+  const bg = variant === "primary" ? colors.tealDark
     : variant === "danger" ? colors.danger
     : variant === "gold" ? colors.gold
     : variant === "dark" ? colors.dark
@@ -288,6 +292,9 @@ export function BrandButton({ label, onPress, variant = "primary", icon, style, 
       onPress={onPress}
       disabled={disabled}
       activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
     >
       {icon ? <Ionicons name={icon} size={compact ? 15 : 18} color={fg} style={{ marginRight: 7 }} /> : null}
       <Text style={[styles.buttonText, compact && { fontSize: 13.5 }, { color: fg }]}>{label}</Text>
@@ -312,7 +319,13 @@ export function Fab({ icon, onPress, label }: {
 }) {
   const insets = useSafeAreaInsets();
   return (
-    <TouchableOpacity style={[styles.fab, { bottom: 16 + Math.max(insets.bottom - 8, 0) }, shadow.raised]} onPress={onPress} activeOpacity={0.85}>
+    <TouchableOpacity
+      style={[styles.fab, { bottom: 16 + Math.max(insets.bottom - 8, 0) }, shadow.raised]}
+      onPress={onPress}
+      activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
       <Ionicons name={icon} size={22} color={colors.white} />
       {label ? <Text style={styles.fabLabel}>{label}</Text> : null}
     </TouchableOpacity>
@@ -571,6 +584,7 @@ const styles = StyleSheet.create({
   },
   cardGold: { borderColor: "#F0D9A6", backgroundColor: "#FFFDF8" },
   cardDanger: { borderColor: "#F3C8C8", backgroundColor: "#FDF7F7" },
+  cardRequest: { borderColor: "#C9D7F5", backgroundColor: "#F8FAFE" },
   pill: {
     flexDirection: "row", alignItems: "center", alignSelf: "flex-start",
     borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 4,
@@ -589,7 +603,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md, minHeight: 50, paddingVertical: 13, paddingHorizontal: 16,
   },
   buttonCompact: { minHeight: 40, paddingVertical: 9, paddingHorizontal: 13 },
-  buttonOutline: { borderWidth: 1.5, borderColor: colors.teal, backgroundColor: colors.card },
+  buttonOutline: { borderWidth: 1.5, borderColor: colors.tealDark, backgroundColor: colors.card },
   buttonText: { fontSize: 15, fontWeight: "700" },
   bottomBar: {
     position: "absolute", left: 0, right: 0, bottom: 0,
@@ -598,7 +612,7 @@ const styles = StyleSheet.create({
   },
   fab: {
     position: "absolute", right: 20, flexDirection: "row", alignItems: "center",
-    backgroundColor: colors.teal, borderRadius: radius.pill, paddingHorizontal: 18, height: 54,
+    backgroundColor: colors.tealDark, borderRadius: radius.pill, paddingHorizontal: 18, height: 54,
   },
   fabLabel: { color: colors.white, fontSize: 15, fontWeight: "700", marginLeft: 8 },
   timerText: { fontSize: 40, fontWeight: "800", color: colors.ink, letterSpacing: 1, fontVariant: ["tabular-nums"] },
@@ -631,7 +645,7 @@ const styles = StyleSheet.create({
     width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, borderColor: colors.line,
     alignItems: "center", justifyContent: "center", backgroundColor: colors.card,
   },
-  checkCircleActive: { backgroundColor: colors.teal, borderColor: colors.teal },
+  checkCircleActive: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
   checkCircleMissed: { borderColor: colors.danger },
   checkItem: { flex: 1, fontSize: 15, color: colors.ink, lineHeight: 20 },
   checkItemDone: { color: colors.faint, textDecorationLine: "line-through" },

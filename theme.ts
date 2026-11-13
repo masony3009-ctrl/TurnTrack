@@ -19,6 +19,9 @@ export const colors = {
   partial: "#7E22CE",
   partialSoft: "#F3E8FF",
   white: "#FFFFFF",
+  // Website requests waiting to be confirmed. Gold is kept for same-day turnovers.
+  request: "#2F5FD0",
+  requestSoft: "#EAF0FC",
 };
 
 // Text color for a cleaner's availability line (availability.ts tones).

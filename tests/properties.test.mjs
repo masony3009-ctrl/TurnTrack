@@ -141,3 +141,8 @@ test("removeFromRegistry drops only that house", () => {
   assert.deepEqual(removeFromRegistry(raw, "Nope").length, 2);
   assert.deepEqual(removeFromRegistry(undefined, "A"), []);
 });
+
+test("tidyAddress drops a trailing United States and doubled spaces", () => {
+  assert.equal(tidyAddress("12 Sample Rd Queen Creek, AZ  85142 United States"), "12 Sample Rd Queen Creek, AZ 85142");
+  assert.equal(tidyAddress("12 Sample Rd, Mesa, AZ 85201, United States"), "12 Sample Rd, Mesa, AZ 85201");
+});
