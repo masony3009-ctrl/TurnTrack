@@ -805,6 +805,28 @@ test("forwarded mail already marked done is read once more, the first run after 
   assert.deepEqual(created(later), []);
 });
 
+// ---- host emails the script can't read ---------------------------------------
+
+test("a host's own email that isn't a booking tells the owner to read it, once", () => {
+  const note = mailMsg("n1", { subject: "Owner stay", from: `Host Person <${HOST}>`, plain: "Owners are staying Mar 7 to 16, clean after they leave." });
+  const s = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(note)] } });
+  s.gs.scanAllEmails();
+  const alert = s.pushes().find((p) => p[0].title === "Email from a host to read");
+  assert.ok(alert, "owner was alerted");
+  assert.deepEqual(alert.map((m) => m.to), ["ExponentPushToken[owner]"]);
+  assert.match(alert[0].body, /"Owner stay" came from the host of Client House/);
+  assert.match(alert[0].body, /Owners are staying Mar 7 to 16/);
+  assert.deepEqual([s.processed(), note.replies, created(s)], [["n1"], [], []]);
+});
+
+test("Airbnb's own mail that reaches us by auto-forward stays quiet", () => {
+  const payout = autoForwarded("p1", "We sent a payout", "We sent your payout of $500. Airbnb");
+  const s = run({ answer: services({ registry: REGISTRY_FWD }), mail: { airbnb: [thread(payout)] } });
+  s.gs.scanAllEmails();
+  assert.deepEqual(s.pushes().filter((p) => p[0].title === "Email from a host to read"), []);
+  assert.deepEqual(s.processed(), ["p1"]);
+});
+
 // ---- Vrbo -------------------------------------------------------------------
 
 // Laid out like Vrbo's real "Instant Booking" email; guest, numbers and house made up.

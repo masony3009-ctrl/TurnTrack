@@ -903,15 +903,31 @@ function handleForwardedAirbnb(ctx, houses, msg) {
   var plain = String(msg.getPlainBody() || "");
   var text = cleanBody(msg.getBody()) + " " + plain.replace(/\s+/g, " ");
   var subject = stripForward(msg.getSubject());
-  if (isVrboMail(subject, text)) return handleForwardedVrbo(ctx, mine, msg, subject, text);
-  // Anything else the host emails us is none of this code's business.
-  if (!/airbnb/i.test(text)) return true;
-  var kind = airbnbKind(subject, text);
-  if (!kind) return true;
+  if (isVrboMail(subject, text)) return handleForwardedVrbo(ctx, mine, msg, subject, text, plain);
+  var kind = /airbnb/i.test(text) ? airbnbKind(subject, text) : "";
+  if (!kind) return unreadForward(mine, msg, subject, plain);
   var house = pickHouse(mine, listingTitle(plain), text);
   if (kind === "booking") return forwardedBooking(ctx, house, msg, parseAirbnbBooking(text), AIRBNB);
   if (kind === "cancel") return forwardedCancel(ctx, house, msg, parseAirbnbCancel(subject, text), AIRBNB);
   return forwardedChange(house, msg, subject, AIRBNB);
+}
+
+// Something the host wrote that isn't a booking email the code can read: an
+// owner stay, a date change in their own words, a question. A missed one is a
+// missed cleaning, so the owner is told to read it. Airbnb's and Vrbo's own
+// mail (reminders, payouts, reviews) that reaches us by auto-forward isn't the
+// host writing, and stays quiet.
+function unreadForward(houses, msg, subject, plain) {
+  var hosts = [];
+  houses.forEach(function (h) { h.forwardsFrom.forEach(function (a) { if (hosts.indexOf(a) === -1) hosts.push(a); }); });
+  var fromHost = forwardAddresses(msg.getFrom()).some(function (a) { return hosts.indexOf(a) !== -1; });
+  if (!fromHost) return true;
+  var where = houses.length === 1 ? houses[0].name : houses[0].name + " and " + (houses.length - 1) + " more house" + (houses.length === 2 ? "" : "s");
+  // The host's own words come first in what they send.
+  var said = String(plain || "").replace(/\s+/g, " ").trim().slice(0, 160);
+  return alertOwnerTelegram("Email from a host to read",
+    "\"" + (subject || "(no subject)") + "\" came from the host of " + where + ". It isn't a booking email the app can read. " +
+    "If it's about a cleaning, add it in the app and reply to them." + (said ? "\n\n" + said : ""));
 }
 
 // "Pat <pat@example.com>, lee@example.com" -> ["pat@example.com", "lee@example.com"]
@@ -1143,9 +1159,9 @@ function vrboKind(subject, text) {
   return "";
 }
 
-function handleForwardedVrbo(ctx, mine, msg, subject, text) {
+function handleForwardedVrbo(ctx, mine, msg, subject, text, plain) {
   var kind = vrboKind(subject, text);
-  if (!kind) return true;
+  if (!kind) return unreadForward(mine, msg, subject, plain || text);
   var house = pickHouse(mine, "", subject + " " + text);
   if (kind === "booking") return forwardedBooking(ctx, house, msg, parseVrboBooking(subject, text), VRBO);
   if (kind === "cancel") return forwardedCancel(ctx, house, msg, parseVrboCancel(subject, text), VRBO);
