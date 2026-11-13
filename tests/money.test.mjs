@@ -7,6 +7,7 @@ import {
   houseMoney,
   isDeepClean,
   jobLabor,
+  jobPay,
   jobPrice,
   OTHER_HOUSE,
   parsePrice,
@@ -90,6 +91,7 @@ test("houseMoney splits finished from booked and counts gaps", () => {
   assert.equal(m.revenue, 450);
   assert.equal(m.unpriced, 1);
   assert.equal(m.labor, 125);
+  assert.equal(m.costed, 2);
   assert.equal(m.timed, 2);
   assert.equal(m.minutes, 300);
   assert.equal(m.booked, 1);
@@ -97,16 +99,40 @@ test("houseMoney splits finished from booked and counts gaps", () => {
   assert.equal(houseMoney(group, null).cleanings, 5);
 });
 
-test("perCleaning averages only timed cleanings", () => {
+test("perCleaning averages time over timed cleanings and pay over the ones with known pay", () => {
   const base = { booked: 0, bookedRevenue: 0 };
-  assert.deepEqual(perCleaning({ ...base, cleanings: 3, revenue: 450, unpriced: 0, labor: 125, minutes: 300, timed: 2 }), { minutes: 150, labor: 62.5, margin: 87.5 });
-  assert.deepEqual(perCleaning({ ...base, cleanings: 3, revenue: 0, unpriced: 3, labor: 50, minutes: 100, timed: 1 }), { minutes: 100, labor: 50, margin: null });
-  assert.deepEqual(perCleaning({ ...base, cleanings: 3, revenue: 450, unpriced: 0, labor: 0, minutes: 0, timed: 0 }), { minutes: null, labor: null, margin: null });
+  assert.deepEqual(perCleaning({ ...base, cleanings: 3, revenue: 450, unpriced: 0, labor: 125, costed: 2, minutes: 300, timed: 2 }), { minutes: 150, labor: 62.5, margin: 87.5 });
+  assert.deepEqual(perCleaning({ ...base, cleanings: 3, revenue: 0, unpriced: 3, labor: 50, costed: 1, minutes: 100, timed: 1 }), { minutes: 100, labor: 50, margin: null });
+  assert.deepEqual(perCleaning({ ...base, cleanings: 3, revenue: 450, unpriced: 0, labor: 0, costed: 0, minutes: 0, timed: 0 }), { minutes: null, labor: null, margin: null });
+  // Flat pay is known without the timer: a margin, but no time.
+  assert.deepEqual(perCleaning({ ...base, cleanings: 2, revenue: 360, unpriced: 0, labor: 160, costed: 2, minutes: 0, timed: 0 }), { minutes: null, labor: 80, margin: 100 });
+});
+
+test("since flat pay, a finished cleaning costs the house's pay for everyone on it, timer or not", () => {
+  const h = house("Palm", { price: 180 });
+  assert.equal(jobPay(job("2026-11-12", { assignedTo: "j" }), h), 80);
+  assert.equal(jobPay(job("2026-11-12", { assignedTo: "j", crew: ["s"] }), h), 160);
+  assert.equal(jobPay(job("2026-11-12", { assignedTo: "j" }), house("Big", { cleanerPay: 100 })), 100);
+  // Someone paid and later taken off still cost what they were paid.
+  assert.equal(jobPay(job("2026-11-12", { assignedTo: "j", paidTo: ["j", "s"] }), h), 160);
+  // The owner cleaned it: nothing to pay.
+  assert.equal(jobPay(job("2026-11-12"), h), 0);
+  // Before Nov 9 only the timer knew, and only when it ran.
+  assert.equal(jobPay(job("2026-11-08", { assignedTo: "j", timeSummary: { minutes: 120, earned: 50 } }), h), 50);
+  assert.equal(jobPay(job("2026-11-08", { assignedTo: "j" }), h), null);
+
+  const group = { key: "palm", house: h, jobs: [
+    job("2026-11-10", { assignedTo: "j" }),
+    job("2026-11-11", { assignedTo: "j", crew: ["s"], timeSummary: { minutes: 90, earned: 160 } }),
+    job("2026-11-12"),
+  ] };
+  const m = houseMoney(group, periodRange("month", "2026-11-13"));
+  assert.deepEqual([m.cleanings, m.labor, m.costed, m.timed, m.minutes], [3, 240, 3, 1, 90]);
 });
 
 test("sumMoney adds the rows up and works out profit", () => {
-  const a = { cleanings: 2, revenue: 300, unpriced: 0, labor: 100.1, minutes: 240, timed: 2, booked: 1, bookedRevenue: 150 };
-  const b = { cleanings: 1, revenue: 0, unpriced: 1, labor: 0, minutes: 0, timed: 0, booked: 0, bookedRevenue: 0 };
+  const a = { cleanings: 2, revenue: 300, unpriced: 0, labor: 100.1, costed: 2, minutes: 240, timed: 2, booked: 1, bookedRevenue: 150 };
+  const b = { cleanings: 1, revenue: 0, unpriced: 1, labor: 0, costed: 0, minutes: 0, timed: 0, booked: 0, bookedRevenue: 0 };
   const t = sumMoney([a, b]);
   assert.equal(t.cleanings, 3);
   assert.equal(t.unpriced, 1);

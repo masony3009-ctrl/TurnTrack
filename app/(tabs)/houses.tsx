@@ -29,7 +29,7 @@ type Row = {
   label: string;
   // Finished and booked cleanings in the chosen period.
   money: HouseMoney;
-  // Averages over every timed cleaning on record, steadier than one month's.
+  // Averages over every cleaning on record (time: timed ones; pay: ones with known pay), steadier than one month's.
   per: ReturnType<typeof perCleaning>;
   deep: DeepCleanStatus | null;
   owed: { amount: number; jobs: Job[] };
@@ -184,12 +184,14 @@ export default function HousesScreen() {
     );
   }
 
-  const untimed = totals.cleanings - totals.timed;
+  // Pay is known for every cleaning since pay went flat; before that, only
+  // where the timer ran.
+  const uncosted = totals.cleanings - totals.costed;
   const margin = totals.revenue > 0 ? Math.round((totals.profit / totals.revenue) * 100) : null;
   const notes = [
     totals.unpriced > 0 ? `${totals.unpriced} without a price` : null,
-    untimed > 0 && totals.timed > 0 ? `Pay counts the ${totals.timed} timed cleaning${totals.timed === 1 ? "" : "s"} of ${totals.cleanings}` : null,
-    untimed > 0 && totals.timed === 0 ? "No timed cleanings, so no pay counted" : null,
+    uncosted > 0 && totals.costed > 0 ? `Pay counts ${totals.costed} of ${totals.cleanings} cleanings (older ones without the timer aren't known)` : null,
+    uncosted > 0 && totals.costed === 0 ? "No pay known for these older cleanings (no timer ran)" : null,
   ].filter(Boolean);
 
   return (

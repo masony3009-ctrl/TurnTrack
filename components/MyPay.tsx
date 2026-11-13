@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { OWNER_PHONE, OWNER_PHONE_LABEL } from "../business";
 import { db } from "../firebase";
-import { formatDuration, formatEntryDate, formatMoney, paymentsOf, weekStartMs, workedBetween } from "../payroll";
+import { cleaningsLabel, formatDuration, formatEntryDate, formatMoney, paymentsOf, weekStartMs, workedBetween } from "../payroll";
 import { colors, radius, shadow } from "../theme";
 import { Employee, TimeEntry } from "../types";
 import { Card, EmptyState, ErrorState, ScreenHeader, SectionHeader } from "./ui";
@@ -38,7 +38,6 @@ export function MyPay({ employee }: { employee: Employee }) {
   const all = useMemo(() => entries || [], [entries]);
   const unpaid = all.filter(e => !e.paid);
   const owed = Math.round(unpaid.reduce((sum, e) => sum + e.earned, 0) * 100) / 100;
-  const owedMinutes = unpaid.reduce((sum, e) => sum + e.minutes, 0);
   const now = Date.now();
   const thisWeek = workedBetween(all, weekStartMs(now), weekStartMs(now) + 7 * 86400000);
   const lastWeek = workedBetween(all, weekStartMs(now, 1), weekStartMs(now));
@@ -54,7 +53,7 @@ export function MyPay({ employee }: { employee: Employee }) {
             <>
               <Text style={styles.heroAmount}>{formatMoney(owed)}</Text>
               <Text style={styles.heroSub}>
-                {owed > 0 ? `${formatDuration(owedMinutes)} unpaid` : "All paid up"}
+                {owed > 0 ? `${cleaningsLabel(unpaid.length)} not paid yet` : "All paid up"}
               </Text>
             </>
           ) : (
@@ -84,7 +83,7 @@ export function MyPay({ employee }: { employee: Employee }) {
                     <View key={entry.id} style={[styles.entryRow, i > 0 && styles.entryDivider]}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.entryTitle} numberOfLines={1}>{entry.jobAddress}</Text>
-                        <Text style={styles.entryMeta}>{entry.jobDate} · {formatDuration(entry.minutes)}{entry.manual ? " · added by the owner" : ""}</Text>
+                        <Text style={styles.entryMeta}>{entry.jobDate}{entry.minutes > 0 ? ` · ${formatDuration(entry.minutes)}` : ""}{entry.manual ? " · added by the owner" : ""}</Text>
                       </View>
                       <Text style={styles.entryAmount}>{formatMoney(entry.earned)}</Text>
                     </View>
@@ -124,10 +123,10 @@ export function MyPay({ employee }: { employee: Employee }) {
 
 function WeekTile({ label, minutes, earned, count }: { label: string; minutes: number; earned: number; count: number }) {
   return (
-    <View style={styles.weekTile} accessible accessibilityLabel={`${label}: ${formatDuration(minutes)}, ${formatMoney(earned)}`}>
+    <View style={styles.weekTile} accessible accessibilityLabel={`${label}: ${cleaningsLabel(count)}, ${formatMoney(earned)}`}>
       <Text style={styles.weekLabel}>{label}</Text>
       <Text style={styles.weekAmount}>{formatMoney(earned)}</Text>
-      <Text style={styles.weekSub}>{count ? `${formatDuration(minutes)} · ${count} cleaning${count === 1 ? "" : "s"}` : "No time logged"}</Text>
+      <Text style={styles.weekSub}>{count ? `${cleaningsLabel(count)}${minutes > 0 ? ` · ${formatDuration(minutes)}` : ""}` : "No cleanings"}</Text>
     </View>
   );
 }

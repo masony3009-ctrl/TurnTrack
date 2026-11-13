@@ -3,6 +3,8 @@
 //
 // Pure (no React, no Firebase) so it runs under node --test.
 
+import { crewOf } from "./crew.ts";
+import { cleanerPayFor, FLAT_PAY_SINCE } from "./payroll.ts";
 import { findProperty, houseKey, streetOf, tidyAddress, type Property } from "./properties.ts";
 import { countsAsCleaning, type ScheduleJob } from "./schedule.ts";
 import { jobDateKey } from "./turnover.ts";
@@ -12,6 +14,9 @@ export type MoneyJob = ScheduleJob & {
   price?: number | null;
   timeSummary?: { minutes: number; earned: number } | null;
   hostPaid?: boolean | null;
+  assignedTo?: string | null;
+  crew?: string[] | null;
+  paidTo?: string[] | null;
   contact?: { name?: string | null } | null;
 };
 
@@ -39,6 +44,20 @@ export function parsePrice(input: string): number | null {
 export function jobLabor(job: MoneyJob): { minutes: number; earned: number } | null {
   const t = job.timeSummary;
   return t && t.minutes > 0 ? { minutes: t.minutes, earned: t.earned || 0 } : null;
+}
+
+// What a finished cleaning cost in cleaner pay. Since pay went flat, that's the
+// house's cleaner pay for everyone on it (or paid for it), timer or not; a
+// cleaning nobody was on (the owner did it) cost nothing. Before that, only
+// what the timer logged is known; null when it didn't run.
+export function jobPay(job: MoneyJob, house: Property | null): number | null {
+  const key = jobDateKey(job);
+  if (key && key >= FLAT_PAY_SINCE) {
+    const people = new Set([...crewOf(job), ...(job.paidTo || [])]);
+    return people.size * cleanerPayFor(house);
+  }
+  const t = jobLabor(job);
+  return t ? t.earned : null;
 }
 
 export type Period = "month" | "lastMonth" | "year" | "all";
@@ -165,10 +184,12 @@ export type HouseMoney = {
   revenue: number;
   // Finished cleanings with no price, house or job.
   unpriced: number;
-  // Pay logged by the timer on the finished ones.
+  // Cleaner pay for the finished ones whose pay is known (see jobPay).
   labor: number;
+  // Finished cleanings whose pay is known.
+  costed: number;
+  // Time the timer logged, and how many finished cleanings it ran on.
   minutes: number;
-  // Finished cleanings that had the timer run.
   timed: number;
   // Still to do in the period, and what the priced ones will pay.
   booked: number;
@@ -176,7 +197,7 @@ export type HouseMoney = {
 };
 
 export function houseMoney(group: HouseJobs, range: { from: string; to: string } | null): HouseMoney {
-  const m: HouseMoney = { cleanings: 0, revenue: 0, unpriced: 0, labor: 0, minutes: 0, timed: 0, booked: 0, bookedRevenue: 0 };
+  const m: HouseMoney = { cleanings: 0, revenue: 0, unpriced: 0, labor: 0, costed: 0, minutes: 0, timed: 0, booked: 0, bookedRevenue: 0 };
   for (const job of group.jobs) {
     if (!inRange(jobDateKey(job) as string, range)) continue;
     const price = jobPrice(job, group.house);
@@ -188,11 +209,15 @@ export function houseMoney(group: HouseJobs, range: { from: string; to: string }
     m.cleanings += 1;
     if (price === null) m.unpriced += 1;
     else m.revenue += price;
-    const labor = jobLabor(job);
-    if (labor) {
+    const pay = jobPay(job, group.house);
+    if (pay !== null) {
+      m.costed += 1;
+      m.labor += pay;
+    }
+    const timer = jobLabor(job);
+    if (timer) {
       m.timed += 1;
-      m.labor += labor.earned;
-      m.minutes += labor.minutes;
+      m.minutes += timer.minutes;
     }
   }
   m.labor = Math.round(m.labor * 100) / 100;
@@ -200,7 +225,7 @@ export function houseMoney(group: HouseJobs, range: { from: string; to: string }
 }
 
 export function sumMoney(rows: HouseMoney[]): HouseMoney & { profit: number } {
-  const t: HouseMoney = { cleanings: 0, revenue: 0, unpriced: 0, labor: 0, minutes: 0, timed: 0, booked: 0, bookedRevenue: 0 };
+  const t: HouseMoney = { cleanings: 0, revenue: 0, unpriced: 0, labor: 0, costed: 0, minutes: 0, timed: 0, booked: 0, bookedRevenue: 0 };
   for (const r of rows) {
     (Object.keys(t) as (keyof HouseMoney)[]).forEach((k) => { t[k] += r[k]; });
   }
@@ -209,17 +234,17 @@ export function sumMoney(rows: HouseMoney[]): HouseMoney & { profit: number } {
 }
 
 // The averages that say whether a house is worth it: how long a cleaning takes,
-// what it costs in pay, and what's left of its price. Only cleanings that had
-// the timer run count toward time and pay; null until there's one.
+// what it costs in pay, and what's left of its price. Time averages only the
+// timed cleanings and pay only the ones whose pay is known; each is null until
+// there's one.
 export function perCleaning(m: HouseMoney): { minutes: number | null; labor: number | null; margin: number | null } {
-  if (m.timed === 0) return { minutes: null, labor: null, margin: null };
-  const labor = Math.round((m.labor / m.timed) * 100) / 100;
+  const labor = m.costed > 0 ? Math.round((m.labor / m.costed) * 100) / 100 : null;
   const priced = m.cleanings - m.unpriced;
   const price = priced > 0 ? m.revenue / priced : null;
   return {
-    minutes: Math.round(m.minutes / m.timed),
+    minutes: m.timed > 0 ? Math.round(m.minutes / m.timed) : null,
     labor,
-    margin: price === null ? null : Math.round((price - labor) * 100) / 100,
+    margin: price === null || labor === null ? null : Math.round((price - labor) * 100) / 100,
   };
 }
 

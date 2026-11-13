@@ -481,6 +481,10 @@ export default function JobDetail() {
     shares.forEach(({ emp, earned: share }) => {
       // The main cleaner keeps the id phones have always written.
       const id = emp.id === job.assignedTo ? sessionEntryId(job.id, startedAt) : `${sessionEntryId(job.id, startedAt)}_${emp.id}`;
+      // Merged, and never touching paid/paidAt/method: a second Finish of the
+      // same session (a phone that saved late, after the owner finished it
+      // and marked it paid) must not turn it back to owed. A new entry has no
+      // paid field yet, which reads as owed everywhere.
       batch.set(doc(db, "timeEntries", id), {
         jobId: job.id,
         jobAddress: job.address,
@@ -493,10 +497,7 @@ export default function JobDetail() {
         hourlyRate: emp.hourlyRate,
         flatPay: pay,
         earned: share,
-        paid: false,
-        paidAt: null,
-        method: null,
-      });
+      }, { merge: true });
     });
     const session = { employeeName, minutes, earned };
     batch.update(doc(db, "jobs", job.id), {

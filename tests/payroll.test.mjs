@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cleanerPayFor, DEFAULT_CLEANER_PAY, flatPayDue, formatDollars, formatMoney, paymentsOf, weekStartMs, workedBetween } from "../payroll.ts";
+import { cleanerPayFor, cleaningsLabel, DEFAULT_CLEANER_PAY, flatEntry, flatEntryId, flatPayDue, formatDollars, formatMoney, payNotRecorded, paymentsOf, weekStartMs, workedBetween } from "../payroll.ts";
 
 test("formatDollars drops empty cents and groups thousands", () => {
   assert.equal(formatDollars(42840), "$42,840");
@@ -73,4 +73,40 @@ test("flatPayDue reads the names on cleanings finished before paidTo existed", (
   assert.equal(flatPayDue({ timeSummary: { employeeName: "Sam Lee" } }, pat, 80), 80);
   // Once paidTo is there, it decides.
   assert.equal(flatPayDue({ ...old, paidTo: ["sam"] }, pat, 80), 80);
+});
+
+test("payNotRecorded lists each cleaner on a finished cleaning since flat pay with nothing recorded", () => {
+  const people = [{ id: "j", name: "Jewel" }, { id: "s", name: "Shane Stewart" }];
+  const job = (id, dateKey, extra = {}) => ({ id, date: "", dateKey, done: true, assignedTo: "j", ...extra });
+  const jobs = [
+    job("a", "2026-11-10"),
+    job("b", "2026-11-12", { crew: ["s"], paidTo: ["j"] }),
+    job("c", "2026-11-11", { timeSummary: { employeeName: "Jewel", minutes: 90, earned: 80 } }),
+    job("d", "2026-11-08"),
+    job("e", "2026-11-12", { done: false }),
+    job("f", "2026-11-12", { cancelled: true }),
+    job("g", "2026-11-12", { pending: true }),
+    job("h", "2026-11-12", { assignedTo: null }),
+    job("i", "2026-11-12", { assignedTo: "gone" }),
+  ];
+  const rows = payNotRecorded(jobs, people, () => 80);
+  assert.deepEqual(rows.map((r) => [r.job.id, r.employee.id, r.pay]), [["b", "s", 80], ["a", "j", 80]]);
+  // A house that pays nothing owes nothing.
+  assert.deepEqual(payNotRecorded(jobs, people, () => 0), []);
+});
+
+test("a pay entry added from a finished cleaning has a fixed id and owes the house's pay", () => {
+  assert.equal(flatEntryId("job1", "j"), "job1_pay_j");
+  const e = flatEntry({ id: "job1", address: "1 Main St", date: "Thu, Nov 12 2026" }, { id: "j", name: "Jewel", hourlyRate: 25 }, 80, 1000);
+  assert.deepEqual(
+    [e.jobId, e.employeeId, e.employeeName, e.earned, e.flatPay, e.minutes, e.paid, e.startedAt, e.endedAt, e.fromDone],
+    ["job1", "j", "Jewel", 80, 80, 0, false, 1000, 1000, true],
+  );
+  assert.equal(flatEntry({ id: "x", address: "", date: "" }, { id: "j", name: "J" }, 80, 1).hourlyRate, 0);
+});
+
+test("cleaningsLabel counts cleanings", () => {
+  assert.equal(cleaningsLabel(1), "1 cleaning");
+  assert.equal(cleaningsLabel(3), "3 cleanings");
+  assert.equal(cleaningsLabel(0), "0 cleanings");
 });

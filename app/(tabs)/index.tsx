@@ -7,6 +7,7 @@ import { tapSelect, tapSuccess } from "../../components/haptics";
 import { useProfile } from "../../components/ProfileProvider";
 import { alertSoon, AssigneeRow, BrandButton, Card, DatePickerField, EmptyState, ErrorState, Fab, FormInput, IconButton, Pill, ProgressBar, ScreenHeader, SectionHeader, SheetModal } from "../../components/ui";
 import { useProperties } from "../../components/useProperties";
+import { duesSentence, payDueFor, recordCleaningPay } from "../../components/cleaningPay";
 import { db } from "../../firebase";
 import { PushProblemCard, usePushRegistration } from "../../components/PushProblem";
 import { assignmentMessage, scheduleTodaysJobNotifications, sendPushToEmployee, sendTestNotification } from "../../notifications";
@@ -139,15 +140,38 @@ export default function JobsScreen() {
       return;
     }
     tapSelect();
+    const finishing = !job.done;
+    const completedAt = finishing ? Date.now() : null;
     try {
-      await updateDoc(doc(db, "jobs", job.id), {
-        done: !job.done,
-        completedAt: !job.done ? Date.now() : null,
-      });
+      await updateDoc(doc(db, "jobs", job.id), { done: finishing, completedAt });
     } catch (e) {
       console.warn("toggle done failed:", e);
       Alert.alert("Couldn't update", "Check your connection and try again.");
+      return;
     }
+    // Pay is per cleaning now, so a cleaning closed without the timer still
+    // owes the cleaners on it. Ask rather than guess: it may have been paid
+    // already. "Not now" leaves it on Payroll's "no pay recorded" list.
+    const dues = finishing ? payDueFor({ ...job, done: true, completedAt }, employees, properties) : [];
+    if (dues.length === 0) return;
+    const record = async (settled: boolean) => {
+      try {
+        await recordCleaningPay({ ...job, done: true, completedAt }, dues, settled);
+        if (!settled) alertSoon("Added to payroll", `${duesSentence(dues)} for this cleaning. Mark it paid on the Payroll tab once you've sent it.`);
+      } catch (e) {
+        console.warn("record pay failed:", e);
+        Alert.alert("Couldn't add the pay", "The cleaning is done, but the pay didn't save. It's listed on the Payroll tab to add from there.");
+      }
+    };
+    Alert.alert(
+      "Add the pay?",
+      `${duesSentence(dues)} for this cleaning. No timer ran, so nothing is on payroll for it yet.`,
+      [
+        { text: "Not now", style: "cancel" },
+        { text: "Already paid", onPress: () => record(true) },
+        { text: "Add to payroll", onPress: () => record(false) },
+      ]
+    );
   };
 
   const deleteJob = (job: Job) => {

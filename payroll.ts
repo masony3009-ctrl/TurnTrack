@@ -1,3 +1,6 @@
+import { crewOf, type CrewJob } from "./crew.ts";
+import { jobDateKey, type JobLike } from "./turnover.ts";
+
 export function computeEarned(minutes: number, hourlyRate: number): number {
   return Math.round((minutes / 60) * hourlyRate * 100) / 100;
 }
@@ -5,6 +8,12 @@ export function computeEarned(minutes: number, hourlyRate: number): number {
 // What a cleaner earns for one cleaning, however long it takes, unless the
 // house sets its own amount. Every cleaner on the job earns it.
 export const DEFAULT_CLEANER_PAY = 80;
+
+// Pay went from hourly to a flat amount per house on Nov 9 2026. From that day
+// on, every finished cleaning owes each cleaner on it the house's pay, whether
+// or not the timer ran. Earlier cleanings were paid by the hour, mostly
+// outside the app, so nothing before it is treated as owed.
+export const FLAT_PAY_SINCE = "2026-11-09";
 
 export function cleanerPayFor(house: { cleanerPay?: number } | null | undefined): number {
   return house?.cleanerPay && house.cleanerPay > 0 ? house.cleanerPay : DEFAULT_CLEANER_PAY;
@@ -19,6 +28,75 @@ export function flatPayDue(job: PaidJob, employee: { id: string; name: string },
   if (job.paidTo) return job.paidTo.includes(employee.id) ? 0 : pay;
   const names = job.timeSummary ? job.timeSummary.employeeName.split(" & ") : [];
   return names.includes(employee.name) ? 0 : pay;
+}
+
+type DoneJob = JobLike & CrewJob & PaidJob & {
+  id: string;
+  done?: boolean | null;
+  cancelled?: boolean | null;
+  pending?: boolean | null;
+};
+
+// Each cleaner on a finished cleaning (since pay went flat) with no pay
+// recorded for it: no time entry, and not marked as settled some other way.
+// This is what "Everyone is paid up" used to miss when a job was ticked done
+// without the timer. Newest first.
+export function payNotRecorded<J extends DoneJob, E extends { id: string; name: string }>(
+  jobs: J[],
+  employees: E[],
+  payFor: (job: J) => number,
+): { job: J; employee: E; pay: number }[] {
+  const byId = new Map(employees.map((e) => [e.id, e]));
+  const out: { job: J; employee: E; pay: number; key: string }[] = [];
+  for (const job of jobs) {
+    if (!job.done || job.cancelled || job.pending) continue;
+    const key = jobDateKey(job);
+    if (!key || key < FLAT_PAY_SINCE) continue;
+    const pay = payFor(job);
+    for (const id of crewOf(job)) {
+      const employee = byId.get(id);
+      if (employee && flatPayDue(job, employee, pay) > 0) out.push({ job, employee, pay, key });
+    }
+  }
+  out.sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
+  return out.map(({ job, employee, pay }) => ({ job, employee, pay }));
+}
+
+// The id of the pay entry for one cleaner on one cleaning when it's added
+// without the timer, so adding it twice (two phones, a retry) can't pay twice.
+export function flatEntryId(jobId: string, employeeId: string): string {
+  return `${jobId}_pay_${employeeId}`;
+}
+
+// That entry: the house's pay, no time worked, owed until marked paid.
+export function flatEntry(
+  job: { id: string; address: string; date: string },
+  employee: { id: string; name: string; hourlyRate?: number | null },
+  pay: number,
+  endedAt: number,
+) {
+  return {
+    jobId: job.id,
+    jobAddress: job.address,
+    jobDate: job.date,
+    employeeId: employee.id,
+    employeeName: employee.name,
+    startedAt: endedAt,
+    endedAt,
+    minutes: 0,
+    hourlyRate: employee.hourlyRate || 0,
+    flatPay: pay,
+    earned: pay,
+    paid: false,
+    paidAt: null,
+    method: null,
+    fromDone: true,
+  };
+}
+
+// "2 cleanings", "1 cleaning".
+export function cleaningsLabel(count: number): string {
+  return `${count} cleaning${count === 1 ? "" : "s"}`;
 }
 
 export function minutesBetween(startMs: number, endMs: number): number {
