@@ -16,6 +16,8 @@ import { useProfile } from "../components/ProfileProvider";
 import { FinishSheet } from "../components/FinishSheet";
 import { PriceSheet } from "../components/PriceSheet";
 import { EditJobSheet, type JobDetails } from "../components/EditJobSheet";
+import { addSeries, cancelSeriesAfter, updateSeries, useRecurring } from "../components/recurringStore";
+import { newSeriesId, repeatLabel, type Series } from "../recurring";
 import { nextGuestsLine, nextStay } from "../nextGuests";
 import { warnUnreached } from "../components/pushWarning";
 import { RoomChecklist } from "../components/RoomChecklist";
@@ -143,6 +145,9 @@ export default function JobDetail() {
     });
   }, []);
   const bookings = useMemo(() => bookingsOf(allJobs || []), [allJobs]);
+  // The repeat this cleaning belongs to, for the owner's Edit details.
+  const seriesList = useRecurring(isOwner);
+  const jobSeries = (job?.seriesId && seriesList?.find(s => s.id === job.seriesId)) || null;
 
   const goBack = () => {
     if (router.canGoBack()) router.back();
@@ -318,14 +323,30 @@ export default function JobDetail() {
   // assigned hears about the change.
   const saveDetails = async (d: JobDetails) => {
     if (!job || !isOwner || busy) return;
+    const start = jobDateKey(job);
+    if (d.repeat && !start) {
+      Alert.alert("Pick a date first", "A cleaning repeats from its date. Set the date, then make it repeat.");
+      return;
+    }
     setBusy(true);
     try {
+      // Repeating from now on: the repeat starts at this cleaning, which is its first.
+      let repeat: { seriesId: string; seriesDate: string } | null = null;
+      if (d.repeat && start && !job.seriesId) {
+        const series: Series = {
+          id: newSeriesId(Date.now(), Math.random()), every: d.repeat, start, until: null, property: d.property,
+          address: d.address, type: d.type, time: job.time || null, crew: crewOf(job), skip: [], createdAt: Date.now(),
+        };
+        await addSeries(series);
+        repeat = { seriesId: series.id, seriesDate: start };
+      }
       await updateDoc(doc(db, "jobs", job.id), {
         type: d.type,
         sameDayTurnover: d.sameDayTurnover,
         property: d.property,
         address: d.address,
         notes: d.notes,
+        ...(repeat || {}),
       });
       setShowEdit(false);
       tapSuccess();
@@ -334,6 +355,36 @@ export default function JobDetail() {
       Alert.alert("Couldn't save", "Nothing changed. Check your connection and try again.");
     }
     setBusy(false);
+  };
+
+  // Stops the repeat after this cleaning: no more are made, and the ones
+  // already made for later days are cancelled (the crew isn't told one by one).
+  const stopRepeat = () => {
+    if (!job || !jobSeries || !isOwner) return;
+    const from = jobDateKey(job) || todayKey();
+    const later = (allJobs || []).filter(j => j.seriesId === jobSeries.id && !j.done && !j.cancelled && !j.startedAt && (j.dateKey || "") > from).length;
+    Alert.alert(
+      "Stop repeating?",
+      `No more cleanings are added after this one.${later ? ` The ${later} already on the schedule after it are cancelled.` : ""}`,
+      [
+        { text: "Keep repeating", style: "cancel" },
+        {
+          text: "Stop",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await updateSeries(jobSeries.id, { until: from });
+              await cancelSeriesAfter(allJobs || [], jobSeries.id, from);
+              setShowEdit(false);
+              tapSuccess();
+            } catch (e) {
+              console.warn("stop repeat failed:", e);
+              Alert.alert("Couldn't stop it", "Check your connection and try again.");
+            }
+          },
+        },
+      ]
+    );
   };
 
   const saveWhen = async (next: { dateKey: string | null; time: string | null }) => {
@@ -993,7 +1044,16 @@ export default function JobDetail() {
       />
 
       {isOwner ? (
-        <EditJobSheet visible={showEdit} job={job} properties={properties} busy={busy} onClose={() => setShowEdit(false)} onSave={saveDetails} />
+        <EditJobSheet
+          visible={showEdit}
+          job={job}
+          properties={properties}
+          series={jobSeries}
+          busy={busy}
+          onClose={() => setShowEdit(false)}
+          onSave={saveDetails}
+          onStopRepeat={stopRepeat}
+        />
       ) : null}
 
       <PriceSheet
@@ -1255,7 +1315,7 @@ export default function JobDetail() {
             <InfoRow
               icon="options-outline"
               value="Edit details"
-              sub="Kind of cleaning, same-day, house, notes"
+              sub={jobSeries ? `${repeatLabel(jobSeries.every)}${jobSeries.until ? " (stopped)" : ""} · kind, house, notes` : "Kind of cleaning, same-day, house, notes, repeats"}
               trailing="chevron-forward"
               onPress={() => setShowEdit(true)}
               label="Edit the cleaning's details"

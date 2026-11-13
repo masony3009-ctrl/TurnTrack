@@ -38,6 +38,10 @@ export type Job = {
   done: boolean;
   completedAt: number | null;
   sameDayTurnover?: boolean;
+  // A repeating cleaning (recurring.ts): which repeat, and the day it was
+  // made for (kept if the cleaning is moved, so it isn't made again).
+  seriesId?: string | null;
+  seriesDate?: string | null;
   // When a finished cleaning was reopened by "Start another session": its
   // original finish time, put back if that session is discarded.
   reopenedFrom?: number | null;

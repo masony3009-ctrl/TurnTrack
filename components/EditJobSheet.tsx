@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { canEditDate } from "../jobTime";
 import { findProperty, type Property } from "../properties";
+import { repeatLabel, REPEATS, type Repeat, type Series } from "../recurring";
 import { colors, radius } from "../theme";
 import { JOB_TYPES, type Job } from "../types";
 import { tapSelect } from "./haptics";
@@ -14,9 +15,11 @@ export type JobDetails = {
   property: string | null;
   address: string;
   notes: string | null;
+  // Set to start repeating this cleaning from its day; null leaves it alone.
+  repeat: Repeat | null;
 };
 
-type Form = { type: string; sameDay: boolean; house: Property | null; address: string; notes: string };
+type Form = { type: string; sameDay: boolean; house: Property | null; address: string; notes: string; repeat: Repeat | null };
 
 function formOf(job: Job, properties: Property[]): Form {
   return {
@@ -25,6 +28,7 @@ function formOf(job: Job, properties: Property[]): Form {
     house: findProperty(properties, job),
     address: job.address || "",
     notes: job.notes || "",
+    repeat: null,
   };
 }
 
@@ -32,13 +36,16 @@ function formOf(job: Job, properties: Property[]): Form {
 // flag, which house and address, and notes for the crew. A cleaning a sync
 // keeps in step with Airbnb or Turno keeps its house, address and same-day
 // flag from there; changing them here would be undone on the next sync.
-export function EditJobSheet({ visible, job, properties, busy, onClose, onSave }: {
+export function EditJobSheet({ visible, job, properties, series, busy, onClose, onSave, onStopRepeat }: {
   visible: boolean;
   job: Job;
   properties: Property[];
+  // The repeat this cleaning belongs to, if any.
+  series: Series | null;
   busy: boolean;
   onClose: () => void;
   onSave: (details: JobDetails) => void;
+  onStopRepeat: () => void;
 }) {
   const [form, setForm] = useState<Form>(() => formOf(job, properties));
   useEffect(() => {
@@ -50,7 +57,7 @@ export function EditJobSheet({ visible, job, properties, busy, onClose, onSave }
   const types = JOB_TYPES.includes(form.type) ? JOB_TYPES : [form.type, ...JOB_TYPES];
   const start = formOf(job, properties);
   const dirty = form.type !== start.type || form.sameDay !== start.sameDay || form.house?.name !== start.house?.name ||
-    form.address !== start.address || form.notes !== start.notes;
+    form.address !== start.address || form.notes !== start.notes || form.repeat !== null;
 
   const pickHouse = (house: Property | null) => {
     tapSelect();
@@ -65,6 +72,7 @@ export function EditJobSheet({ visible, job, properties, busy, onClose, onSave }
       property: form.house ? form.house.name : synced ? job.property || null : null,
       address,
       notes: form.notes.trim() || null,
+      repeat: form.repeat,
     });
   };
 
@@ -105,6 +113,28 @@ export function EditJobSheet({ visible, job, properties, busy, onClose, onSave }
           <FormInput label="Address" placeholder="Street, city, ZIP" value={form.address} onChangeText={t => setForm(prev => ({ ...prev, address: t }))} autoCapitalize="words" />
         </>
       )}
+
+      {series ? (
+        <View style={styles.repeatRow}>
+          <Ionicons name="repeat" size={18} color={colors.tealDark} />
+          <Text style={styles.repeatText}>{repeatLabel(series.every)}{series.until ? ` · stopped after ${series.until}` : ""}</Text>
+          {!series.until ? (
+            <TouchableOpacity onPress={onStopRepeat} hitSlop={8} accessibilityRole="button">
+              <Text style={styles.stopText}>Stop repeating</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : !synced ? (
+        <>
+          <Text style={styles.label}>Repeats</Text>
+          <View style={styles.grid}>
+            <Chip text="Doesn't repeat" on={form.repeat === null} onPress={() => { tapSelect(); setForm(prev => ({ ...prev, repeat: null })); }} />
+            {REPEATS.map(r => (
+              <Chip key={r.value} text={r.label} on={form.repeat === r.value} onPress={() => { tapSelect(); setForm(prev => ({ ...prev, repeat: r.value })); }} />
+            ))}
+          </View>
+        </>
+      ) : null}
 
       <FormInput
         label="Notes for the crew (optional)"
@@ -150,4 +180,10 @@ const styles = StyleSheet.create({
   toggleRowOn: { borderColor: colors.gold, backgroundColor: colors.goldSoft },
   toggleText: { fontSize: 15, fontWeight: "600", color: colors.ink },
   toggleSub: { fontSize: 12.5, color: colors.muted, marginTop: 1 },
+  repeatRow: {
+    flexDirection: "row", alignItems: "center", gap: 8, padding: 12, borderRadius: radius.md,
+    backgroundColor: colors.tealSoft, marginBottom: 14,
+  },
+  repeatText: { flex: 1, fontSize: 14.5, fontWeight: "600", color: colors.ink },
+  stopText: { fontSize: 14, fontWeight: "700", color: colors.danger },
 });

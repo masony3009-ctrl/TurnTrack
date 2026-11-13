@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { addDoc, collection, deleteDoc, doc, onSnapshot, setDoc, updateDoc } from "firebase/firestore";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { tapSelect, tapSuccess } from "../../components/haptics";
 import { useProfile } from "../../components/ProfileProvider";
@@ -17,6 +17,8 @@ import { withTime } from "../../jobTime";
 import { formatClockTime } from "../../payroll";
 import { findProperty, type Property } from "../../properties";
 import { cardTitle, matchesSearch, weeksOf } from "../../jobList";
+import { fillPlan, newSeriesId, REPEATS, seriesJobId, type Repeat, type Series } from "../../recurring";
+import { addSeries, fillRepeats, skipDay, useRecurring } from "../../components/recurringStore";
 import { openInMaps } from "../../components/maps";
 import { availabilityColors, cleanerColor, colors, radius, unassignedColor } from "../../theme";
 import { daysFromToday, daysLeftInWeek, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate, todayKey } from "../../turnover";
@@ -50,6 +52,7 @@ export default function JobsScreen() {
   const [newCrew, setNewCrew] = useState<Employee[]>([]);
   const [newSameDayTurnover, setNewSameDayTurnover] = useState(false);
   const [newTime, setNewTime] = useState<string | null>(null);
+  const [newRepeat, setNewRepeat] = useState<Repeat | null>(null);
   const [saving, setSaving] = useState(false);
   const [scope, setScope] = useState<Scope>("all");
   // What's typed in the search box, and the Today / This week filter from the boxes at the top.
@@ -66,7 +69,8 @@ export default function JobsScreen() {
   const [checklistTemplate, setChecklistTemplate] = useState<string[]>(DEFAULT_CHECKLIST);
   const router = useRouter();
   // Set by a tapped notification about several cleanings ("open", "mine").
-  const { filter, at } = useLocalSearchParams<{ filter?: string; at?: string }>();
+  // add: a day picked on the Calendar to add a cleaning on.
+  const { filter, at, add } = useLocalSearchParams<{ filter?: string; at?: string; add?: string }>();
   const properties = useProperties();
   const { state, switchProfile, viewAs, employees, deviceId } = useProfile();
   const isOwner = state.status === "owner";
@@ -85,6 +89,16 @@ export default function JobsScreen() {
   useEffect(() => {
     if (filter === "open" || filter === "mine") setScope(filter);
   }, [filter, at]);
+
+  // "Add a cleaning this day" on the Calendar opens the form with the day picked.
+  useEffect(() => {
+    if (!add || state.status !== "owner") return;
+    resetForm();
+    setNewDateKey(add);
+    setShowForm(true);
+    // Only a new request from the Calendar opens it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [add, at]);
 
   // The owner's checklist template lives at settings/checklist.
   useEffect(() => {
@@ -128,6 +142,21 @@ export default function JobsScreen() {
     const relevant = selfId && !ownerViewing ? scheduled.filter(j => isOnCrew(j, selfId)) : scheduled;
     scheduleTodaysJobNotifications(relevant);
   }, [allJobs, jobs, selfId, ownerViewing]);
+
+  // The owner's phone keeps repeating cleanings filled a couple of months
+  // ahead. Each is made with a fixed id, so a second owner phone doing the
+  // same can't double it; when everything's there the plan is empty.
+  const series = useRecurring(isOwner);
+  const filling = useRef(false);
+  useEffect(() => {
+    if (!isOwner || !allJobs || !series || series.length === 0 || filling.current) return;
+    const plan = fillPlan(series, allJobs, todayKey());
+    if (plan.create.length === 0 && plan.adopt.length === 0) return;
+    filling.current = true;
+    fillRepeats(plan, checklistTemplate, employees)
+      .catch(e => console.warn("filling repeats failed:", e))
+      .finally(() => { filling.current = false; });
+  }, [isOwner, allJobs, series, checklistTemplate, employees]);
 
   // Cleaners (and the owner viewing as one) never see unconfirmed requests.
   const roleJobs = useMemo(() => (selfId ? jobs.filter(j => !j.pending) : jobs), [jobs, selfId]);
@@ -210,6 +239,11 @@ export default function JobsScreen() {
             } catch (e) {
               console.warn("delete job failed:", e);
               Alert.alert("Couldn't delete", "The job is still there. Check your connection and try again.");
+              return;
+            }
+            // A repeat's cleaning deleted by hand stays gone.
+            if (job.seriesId && job.seriesDate) {
+              skipDay(job.seriesId, job.seriesDate).catch(e => console.warn("skipping repeat day failed:", e));
             }
           },
         },
@@ -266,6 +300,7 @@ export default function JobsScreen() {
     setNewType(JOB_TYPES[0]);
     setNewCrew([]);
     setNewSameDayTurnover(false);
+    setNewRepeat(null);
   };
 
   const newSlot = { id: null, key: newDateKey, time: newTime };
@@ -302,6 +337,9 @@ export default function JobsScreen() {
   const saveJob = async (dateKey: string, address: string) => {
     setSaving(true);
     try {
+      // A repeating cleaning: the repeat is saved first, and this is its first
+      // cleaning, under the fixed id the filling uses, so it isn't made twice.
+      const seriesId = newRepeat ? newSeriesId(Date.now(), Math.random()) : null;
       const fields = {
         ...newJobDoc({ dateKey, time: newTime, address, type: newType, sameDayTurnover: newSameDayTurnover }, checklistTemplate),
         // The registry name is what every other writer files a house under.
@@ -310,8 +348,20 @@ export default function JobsScreen() {
         assignedTo: newCrew[0]?.id || null,
         assignedToName: newCrew[0]?.name || null,
         crew: newCrew.length > 1 ? newCrew.slice(1).map(e => e.id) : null,
+        ...(seriesId ? { seriesId, seriesDate: dateKey } : {}),
       };
-      const ref = await addDoc(collection(db, "jobs"), fields);
+      let ref: { id: string };
+      if (seriesId && newRepeat) {
+        const repeat: Series = {
+          id: seriesId, every: newRepeat, start: dateKey, until: null, property: fields.property, address, type: newType,
+          time: newTime, crew: newCrew.map(e => e.id), skip: [], createdAt: Date.now(),
+        };
+        await addSeries(repeat);
+        ref = doc(db, "jobs", seriesJobId(seriesId, dateKey));
+        await setDoc(doc(db, "jobs", ref.id), fields);
+      } else {
+        ref = await addDoc(collection(db, "jobs"), fields);
+      }
       tapSuccess();
       warnUnreached(
         newCrew.map(emp => ({ name: emp.name, reached: sendPushToEmployee(emp.id, assignmentMessage({ id: ref.id, ...fields } as Job)) })),
@@ -525,7 +575,7 @@ export default function JobsScreen() {
         visible={showForm}
         title="New cleaning"
         onClose={() => { resetForm(); setShowForm(false); }}
-        dirty={!!(newDateKey || newTime || newHouse || newAddress.trim() || newCrew.length || newSameDayTurnover || newType !== JOB_TYPES[0])}
+        dirty={!!(newDateKey || newTime || newHouse || newAddress.trim() || newCrew.length || newSameDayTurnover || newRepeat || newType !== JOB_TYPES[0])}
       >
         <DatePickerField label="Date" value={newDateKey} onChange={setNewDateKey} />
         <Text style={styles.fieldLabel}>House</Text>
@@ -549,6 +599,13 @@ export default function JobsScreen() {
         <View style={styles.choiceGrid}>
           {JOB_TYPES.map(t => (
             <Choice key={t} text={t} selected={newType === t} onPress={() => { tapSelect(); setNewType(t); }} />
+          ))}
+        </View>
+        <Text style={styles.fieldLabel}>Repeats</Text>
+        <View style={styles.choiceGrid}>
+          <Choice text="Doesn't repeat" selected={newRepeat === null} onPress={() => { tapSelect(); setNewRepeat(null); }} />
+          {REPEATS.map(r => (
+            <Choice key={r.value} text={r.label} selected={newRepeat === r.value} onPress={() => { tapSelect(); setNewRepeat(r.value); }} />
           ))}
         </View>
         <Text style={styles.fieldLabel}>Cleaners</Text>

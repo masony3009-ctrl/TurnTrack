@@ -229,8 +229,8 @@ export default function CalendarScreen() {
                       isToday={key === today}
                       jobs={byDay.get(key) || []}
                       offs={offOn(key).map(offChip)}
-                      // A cleaner can open any day to block it out.
-                      tappable={!isOwner}
+                      // Any day opens: a cleaner blocks it out, the owner adds a cleaning.
+                      tappable
                       label={job => houseLabel(job, properties)}
                       colorFor={colorFor}
                       onPress={() => { tapSelect(); setOpenDay(key); }}
@@ -317,6 +317,20 @@ export default function CalendarScreen() {
             style={{ marginBottom: 12 }}
           />
         ) : null}
+        {isOwner && openDay && openDay >= today ? (
+          <BrandButton
+            label="Add a cleaning this day"
+            icon="add"
+            variant="outline"
+            compact
+            onPress={() => {
+              const day = openDay;
+              setOpenDay(null);
+              router.navigate({ pathname: "/", params: { add: day, at: String(Date.now()) } });
+            }}
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
         {dayJobs.length === 0 ? (
           <Text style={styles.emptyDay}>No cleanings this day.</Text>
         ) : (
@@ -381,7 +395,7 @@ function TeamTimeOff({ people, today }: { people: Employee[]; today: string }) {
                 <ColorDot color={cleanerColor(e)} />
                 <Text style={styles.dayOffName}>{e.name}</Text>
               </View>
-              {blocks.map(block => <TimeOffRow key={block.id} block={block} today={today} />)}
+              {blocks.map(block => <TimeOffRow key={block.id} block={block} today={today} onRemove={() => confirmRemoveTimeOff(e, block, true)} />)}
             </View>
           ))}
         </View>
