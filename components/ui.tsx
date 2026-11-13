@@ -329,12 +329,29 @@ export function ElapsedTimer({ startedAt, style }: { startedAt: number; style?: 
   return <Text style={[styles.timerText, style]}>{formatElapsed(startedAt, now)}</Text>;
 }
 
-export function SheetModal({ visible, title, onClose, children }: {
+// Asks before throwing away what was typed in a form.
+export function confirmDiscard(discard: () => void) {
+  if (Platform.OS === "web") {
+    // Alerts with buttons do nothing on the web preview.
+    if (typeof window !== "undefined" && window.confirm("Discard changes? What you typed here won't be saved.")) discard();
+    return;
+  }
+  Alert.alert("Discard changes?", "What you typed here won't be saved.", [
+    { text: "Keep editing", style: "cancel" },
+    { text: "Discard", style: "destructive", onPress: discard },
+  ]);
+}
+
+// dirty: the form has unsaved typing, so a stray tap above the sheet (or the
+// X, or Android's back button) asks before closing instead of losing it.
+export function SheetModal({ visible, title, onClose, children, dirty = false }: {
   visible: boolean;
   title: string;
   onClose: () => void;
   children: ReactNode;
+  dirty?: boolean;
 }) {
+  const requestClose = () => (dirty ? confirmDiscard(onClose) : onClose());
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   // With the keyboard up, the sheet has to fit in what's left above it, or its
@@ -350,15 +367,15 @@ export function SheetModal({ visible, title, onClose, children }: {
   }, []);
   const maxHeight = Math.max(160, Math.min(height * 0.72, height - keyboard - insets.top - 120));
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={requestClose}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <View style={styles.sheetOverlay}>
-          <TouchableOpacity style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Close" accessibilityRole="button" />
+          <TouchableOpacity style={{ flex: 1 }} onPress={requestClose} accessibilityLabel="Close" accessibilityRole="button" />
           <View style={[styles.sheet, { paddingBottom: keyboard ? 12 : Math.max(insets.bottom, 20) + 8 }]}>
             <View style={styles.sheetHandle} />
             <View style={styles.sheetTitleRow}>
               <Text style={styles.sheetTitle}>{title}</Text>
-              <TouchableOpacity onPress={onClose} hitSlop={10} style={styles.sheetClose} accessibilityLabel="Close" accessibilityRole="button">
+              <TouchableOpacity onPress={requestClose} hitSlop={10} style={styles.sheetClose} accessibilityLabel="Close" accessibilityRole="button">
                 <Ionicons name="close" size={20} color={colors.muted} />
               </TouchableOpacity>
             </View>
@@ -374,6 +391,41 @@ export function SheetModal({ visible, title, onClose, children }: {
         </View>
       </KeyboardAvoidingView>
     </Modal>
+  );
+}
+
+export type SheetAction = { label: string; icon: keyof typeof Ionicons.glyphMap; onPress: () => void; destructive?: boolean };
+
+// A short menu of choices. Android alerts show at most three buttons and drop
+// the rest, so anything longer is a sheet. The sheet closes before the choice
+// runs, so a choice that opens another sheet or an alert isn't lost on iOS.
+export function ActionSheet({ visible, title, message, actions, onClose }: {
+  visible: boolean;
+  title: string;
+  message?: string;
+  actions: SheetAction[];
+  onClose: () => void;
+}) {
+  const choose = (action: SheetAction) => {
+    onClose();
+    setTimeout(action.onPress, 450);
+  };
+  return (
+    <SheetModal visible={visible} title={title} onClose={onClose}>
+      {message ? <Text style={styles.actionMessage}>{message}</Text> : null}
+      {actions.map((a, i) => (
+        <TouchableOpacity
+          key={a.label}
+          style={[styles.actionRow, i > 0 && styles.actionDivider]}
+          onPress={() => choose(a)}
+          accessibilityRole="button"
+        >
+          <Ionicons name={a.icon} size={20} color={a.destructive ? colors.danger : colors.tealDark} />
+          <Text style={[styles.actionLabel, a.destructive && { color: colors.danger }]}>{a.label}</Text>
+          <Ionicons name="chevron-forward" size={16} color={colors.faint} />
+        </TouchableOpacity>
+      ))}
+    </SheetModal>
   );
 }
 
@@ -550,6 +602,10 @@ const styles = StyleSheet.create({
   },
   fabLabel: { color: colors.white, fontSize: 15, fontWeight: "700", marginLeft: 8 },
   timerText: { fontSize: 40, fontWeight: "800", color: colors.ink, letterSpacing: 1, fontVariant: ["tabular-nums"] },
+  actionMessage: { fontSize: 14, color: colors.muted, marginBottom: 8 },
+  actionRow: { flexDirection: "row", alignItems: "center", gap: 12, minHeight: 52, paddingVertical: 12 },
+  actionDivider: { borderTopWidth: 1, borderTopColor: colors.line },
+  actionLabel: { flex: 1, fontSize: 15.5, fontWeight: "600", color: colors.ink },
   sheetOverlay: { flex: 1, backgroundColor: "rgba(30, 42, 50, 0.45)", justifyContent: "flex-end" },
   sheet: {
     backgroundColor: colors.card, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,

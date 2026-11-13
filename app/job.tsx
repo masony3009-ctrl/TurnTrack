@@ -3,7 +3,7 @@ import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { arrayUnion, collection, deleteDoc, doc, getDocs, onSnapshot, query, runTransaction, updateDoc, where, writeBatch } from "firebase/firestore";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, AppState, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { OWNER_PHONE, OWNER_PHONE_LABEL } from "../business";
 import { EndTimeSheet } from "../components/EndTimeSheet";
 import { addToCalendar } from "../components/calendar";
@@ -14,6 +14,7 @@ import { cleaningEvent } from "../calendarEvent";
 import { useProfile } from "../components/ProfileProvider";
 import { FinishSheet } from "../components/FinishSheet";
 import { PriceSheet } from "../components/PriceSheet";
+import { warnUnreached } from "../components/pushWarning";
 import { RoomChecklist } from "../components/RoomChecklist";
 import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
 import { addableRooms, addRoom, checkAll, checklistForJob, checklistProgress, ownsList, removeRoom, roomMinutes, templateFromDoc, toggleStep, type ChecklistItem } from "../checklist";
@@ -53,6 +54,9 @@ export default function JobDetail() {
   const [showFinish, setShowFinish] = useState(false);
   const [showGiveBack, setShowGiveBack] = useState(false);
   const [showWhen, setShowWhen] = useState(false);
+  // Set when confirming a website request that has no date: saving the date
+  // confirms it too.
+  const [confirmOnDate, setConfirmOnDate] = useState(false);
   const [showPrice, setShowPrice] = useState(false);
   // A long session waiting on "when did you finish?", with what Finish chose.
   const [endTimeFor, setEndTimeFor] = useState<{ note: string | null; allChecked: boolean; supplies: string[] } | null>(null);
@@ -189,14 +193,42 @@ export default function JobDetail() {
     }
   };
 
-  const notify = (employeeId: string | null | undefined, message: ReturnType<typeof assignmentMessage>) => {
-    if (employeeId) sendPushToEmployee(employeeId, message);
+  const nameOf = (id: string) => employees.find(e => e.id === id)?.name;
+  // Sends to each cleaner, and tells the owner about anyone whose phone
+  // couldn't take it so they can text instead.
+  const notifyEach = (ids: string[], message: ReturnType<typeof assignmentMessage>, about: string) => {
+    warnUnreached(ids.map(id => ({ name: nameOf(id) || "The cleaner", reached: sendPushToEmployee(id, message) })), about);
   };
   // Everyone on the cleaning hears about a move or a cancellation.
-  const notifyCrew = (message: ReturnType<typeof assignmentMessage>) => {
-    if (job) crewOf(job).forEach(id => notify(id, message));
+  const notifyCrew = (message: ReturnType<typeof assignmentMessage>, about: string) => {
+    if (job) notifyEach(crewOf(job), message, about);
   };
-  const nameOf = (id: string) => employees.find(e => e.id === id)?.name;
+
+  // Who was put on or taken off in the "Who's cleaning" sheet. They're told
+  // once, when it closes, so a mis-tap undone right away sends nothing.
+  // "none": a change that was undone.
+  const crewNotes = useRef(new Map<string, "added" | "removed" | "none">());
+  const flushCrewNotes = () => {
+    const current = job;
+    const notes = [...crewNotes.current.entries()];
+    crewNotes.current.clear();
+    if (!current) return;
+    const added = notes.filter(([, k]) => k === "added").map(([id]) => id);
+    const removed = notes.filter(([, k]) => k === "removed").map(([id]) => id);
+    if (added.length) notifyEach(added, assignmentMessage(current), "this cleaning");
+    if (removed.length) notifyEach(removed, unassignedMessage(current), "being taken off this cleaning");
+  };
+  // Leaving the screen or the app sends whatever is still waiting.
+  const flushRef = useRef(flushCrewNotes);
+  flushRef.current = flushCrewNotes;
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", next => { if (next !== "active") flushRef.current(); });
+    return () => { sub.remove(); flushRef.current(); };
+  }, []);
+  const closeAssign = () => {
+    setShowAssign(false);
+    flushCrewNotes();
+  };
 
   // Puts cleaners on the job or takes them off. The sheet stays open so the
   // owner can put more than one on; each is paid the house's cleaner pay.
@@ -213,8 +245,9 @@ export default function JobDetail() {
     try {
       await updateDoc(doc(db, "jobs", job.id), changes);
       tapSuccess();
-      if (added) notify(added.id, assignmentMessage({ ...job, ...changes }));
-      removed.forEach(id => notify(id, unassignedMessage(job)));
+      const notes = crewNotes.current;
+      if (added) notes.set(added.id, notes.get(added.id) === "removed" ? "none" : "added");
+      removed.forEach(id => notes.set(id, notes.get(id) === "added" ? "none" : "removed"));
     } catch (e) {
       console.warn("assign failed:", e);
       Alert.alert("Couldn't assign", "The change didn't save. Check your connection and try again.");
@@ -227,7 +260,15 @@ export default function JobDetail() {
   };
   const clearCrew = () => {
     if (!job) return;
-    saveCrew({ assignedTo: null, assignedToName: null, crew: null }, null, crewOf(job));
+    const ids = crewOf(job);
+    Alert.alert(
+      ids.length > 1 ? "Take everyone off?" : "Remove the assignment?",
+      `${crewLabel(job, nameOf) || "The cleaner"} will be taken off this cleaning and told when you close this.`,
+      [
+        { text: "Keep", style: "cancel" },
+        { text: "Take off", style: "destructive", onPress: () => saveCrew({ assignedTo: null, assignedToName: null, crew: null }, null, ids) },
+      ]
+    );
   };
 
   // The owner prices this one cleaning (or clears it back to the house price)
@@ -261,16 +302,19 @@ export default function JobDetail() {
   const saveWhen = async (next: { dateKey: string | null; time: string | null }) => {
     if (!job || !isOwner || busy) return;
     const moveDate = canEditDate(job.source) && !!next.dateKey && next.dateKey !== jobDateKey(job);
+    const confirming = confirmOnDate && moveDate;
     const changes = {
       time: next.time,
       ...(moveDate && next.dateKey ? { dateKey: next.dateKey, date: formatDateLabel(next.dateKey) } : {}),
+      ...(confirming ? { pending: false } : {}),
     };
     setBusy(true);
     try {
       await updateDoc(doc(db, "jobs", job.id), changes);
       setShowWhen(false);
+      setConfirmOnDate(false);
       tapSuccess();
-      notifyCrew(movedMessage({ ...job, ...changes }));
+      notifyCrew(movedMessage({ ...job, ...changes }), "the new date or time");
     } catch (e) {
       console.warn("save date failed:", e);
       Alert.alert("Couldn't save the date", "Nothing changed. Check your connection and try again.");
@@ -408,7 +452,7 @@ export default function JobDetail() {
     const changes = {
       startedAt: Date.now(),
       // Another session on a finished job reopens it until it's finished again.
-      ...(job.done ? { done: false, completedAt: null } : {}),
+      ...(job.done ? { done: false, completedAt: null, reopenedFrom: job.completedAt || Date.now() } : {}),
       ...(freshChecklist ? { checklist } : {}),
     };
     try {
@@ -436,7 +480,10 @@ export default function JobDetail() {
         style: "destructive",
         onPress: async () => {
           try {
-            await waitBriefly(updateDoc(doc(db, "jobs", job.id), { startedAt: null }), SAVE_WAIT_MS, lateSaveFailed("Discarding the timer"));
+            // A session started on a finished cleaning, thrown away, leaves it
+            // finished at its original time.
+            const restore = job.reopenedFrom ? { done: true, completedAt: job.reopenedFrom, reopenedFrom: null } : {};
+            await waitBriefly(updateDoc(doc(db, "jobs", job.id), { startedAt: null, ...restore }), SAVE_WAIT_MS, lateSaveFailed("Discarding the timer"));
             tapWarning();
             if (!ownerAtPhone) sendPushToOwners(discardedMessage(job, selfName, minutes, house));
           } catch (e) {
@@ -502,6 +549,7 @@ export default function JobDetail() {
     const session = { employeeName, minutes, earned };
     batch.update(doc(db, "jobs", job.id), {
       startedAt: null,
+      reopenedFrom: null,
       done: !opts.cancel,
       completedAt: opts.cancel ? null : endedAt,
       // Earlier sessions on this job stay counted; this one adds to them.
@@ -622,7 +670,7 @@ export default function JobDetail() {
             startedAt: null,
           });
         }
-        notifyCrew(cancellationMessage(job));
+        notifyCrew(cancellationMessage(job), "this cleaning being cancelled");
         tapWarning();
         goBack();
       } catch (e) {
@@ -664,7 +712,7 @@ export default function JobDetail() {
     if (!job || !isOwner) return;
     try {
       await updateDoc(doc(db, "jobs", job.id), { cancelled: false, cancelledAt: null, cancelReason: null });
-      notifyCrew(assignmentMessage(job));
+      notifyCrew(assignmentMessage(job), "this cleaning being back on");
       tapSuccess();
     } catch (e) {
       console.warn("restore failed:", e);
@@ -676,6 +724,13 @@ export default function JobDetail() {
   // request itself stays in the website admin and email either way.
   const confirmRequest = async () => {
     if (!job || !isOwner || busy) return;
+    // Confirmed with no readable date, it would be missing from the calendar,
+    // reminders and availability. Pick the day first; saving it confirms.
+    if (!jobDateKey(job)) {
+      setConfirmOnDate(true);
+      setShowWhen(true);
+      return;
+    }
     setBusy(true);
     try {
       await updateDoc(doc(db, "jobs", job.id), { pending: false });
@@ -746,7 +801,7 @@ export default function JobDetail() {
     if (!isOwner && !job.startedAt && !job.done) {
       Alert.alert("Start the timer first?", "The clock should be running while you work through the checklist.", [
         { text: "Not now", style: "cancel" },
-        { text: "Start timer", onPress: startCleaning },
+        { text: "Start timer", onPress: () => { pendingTick.current = { index, at: Date.now() }; startCleaning(); } },
       ]);
       return;
     }
@@ -776,6 +831,18 @@ export default function JobDetail() {
       }));
     }
   };
+
+  // The step tapped before the timer was running gets its tick once the timer
+  // starts (within a couple of minutes, so a start much later doesn't tick it).
+  const pendingTick = useRef<{ index: number; at: number } | null>(null);
+  useEffect(() => {
+    const p = pendingTick.current;
+    if (!job?.startedAt || !p) return;
+    pendingTick.current = null;
+    if (Date.now() - p.at < 2 * 60000) toggleChecklistItem(p.index);
+    // Only the timer starting matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.startedAt]);
 
   if (loadError && !job) {
     return (
@@ -876,7 +943,7 @@ export default function JobDetail() {
         dateKey={key}
         time={job.time || null}
         busy={busy}
-        onClose={() => setShowWhen(false)}
+        onClose={() => { setShowWhen(false); setConfirmOnDate(false); }}
         onSave={saveWhen}
       />
 
@@ -891,11 +958,11 @@ export default function JobDetail() {
         onSave={savePrice}
       />
 
-      <SheetModal visible={showAssign} title="Who's cleaning" onClose={() => setShowAssign(false)}>
+      <SheetModal visible={showAssign} title="Who's cleaning" onClose={closeAssign}>
         {activeEmployees.length === 0 ? (
           <Text style={styles.sheetHint}>No cleaners yet. Add one on the Team tab.</Text>
         ) : (
-          <Text style={styles.sheetHint}>Tap to put someone on or take them off. Each one earns {formatDollars(cleanerPayFor(property))} for this cleaning.</Text>
+          <Text style={styles.sheetHint}>Tap to put someone on or take them off. Each one earns {formatDollars(cleanerPayFor(property))} for this cleaning. They&apos;re notified when you close this.</Text>
         )}
         {activeEmployees.map(emp => {
           const on = isOnCrew(job, emp.id);
@@ -944,7 +1011,7 @@ export default function JobDetail() {
             <Text style={styles.unassignText}>{crewIds.length > 1 ? "Take everyone off" : "Remove assignment"}</Text>
           </TouchableOpacity>
         )}
-        {activeEmployees.length > 0 ? <BrandButton label="Done" icon="checkmark" onPress={() => setShowAssign(false)} /> : null}
+        {activeEmployees.length > 0 ? <BrandButton label="Done" icon="checkmark" onPress={closeAssign} /> : null}
       </SheetModal>
 
       <SheetModal visible={showChecklist} title="Cleaning checklist" onClose={() => setShowChecklist(false)}>
@@ -1099,7 +1166,7 @@ export default function JobDetail() {
             <InfoRow
               icon="calendar-outline"
               value={formatDayHeading(key)}
-              sub={formatTime(job.time) || "No set time"}
+              sub={`${formatTime(job.time) || "No set time"} · Tap to add to your calendar`}
               trailing="add-circle-outline"
               onPress={() => addToCalendar(calendarEvent)}
               label="Add to your calendar"
@@ -1119,6 +1186,7 @@ export default function JobDetail() {
           <InfoRow
             icon="location"
             value={job.address}
+            sub="Tap for directions"
             trailing="navigate-circle-outline"
             onPress={() => openInMaps(job.address)}
             label="Open in Maps"
@@ -1167,9 +1235,6 @@ export default function JobDetail() {
           <View style={{ marginTop: 10 }}>
             <AssigneeRow name={crewName} color={assignedColor} photo={assignedEmployee?.photo} size={38} />
           </View>
-          {canTake && (
-            <BrandButton label="Take this job" icon="hand-right-outline" variant="outline" compact onPress={takeJob} style={{ marginTop: 12, alignSelf: "flex-start" }} />
-          )}
           {canGiveBack && (
             <TouchableOpacity style={styles.giveBackLink} onPress={() => setShowGiveBack(true)} hitSlop={6} accessibilityRole="button">
               <Ionicons name="arrow-undo-outline" size={16} color={colors.danger} />
@@ -1280,9 +1345,15 @@ export default function JobDetail() {
           ) : canTake && days !== null && days > 0 ? (
             // Days ahead, a cleaner is signing up for it, not starting a clock.
             <BrandButton label={busy ? "Taking…" : "Take this job"} icon="hand-right-outline" onPress={takeJob} disabled={busy} />
+          ) : canTake ? (
+            // Today: take it for later, or take it and start the clock now.
+            <View style={styles.barRow}>
+              <BrandButton label="Take this job" icon="hand-right-outline" variant="outline" onPress={takeJob} disabled={busy} style={{ flex: 1 }} />
+              <BrandButton label={busy ? "Starting…" : "Take & start"} icon="play" onPress={startCleaning} disabled={busy} style={{ flex: 1 }} />
+            </View>
           ) : (
             <BrandButton
-              label={busy ? "Starting…" : canWork ? (job.done ? "Start another session" : "Start cleaning") : "Take this job & start"}
+              label={busy ? "Starting…" : job.done ? "Start another session" : "Start cleaning"}
               icon="play"
               variant={job.done ? "outline" : "primary"}
               onPress={startCleaning}

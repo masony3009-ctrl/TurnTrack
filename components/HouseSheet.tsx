@@ -169,7 +169,12 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
   const linkLabel = linkedCount ? ` · ${linkedCount} cleaning${linkedCount === 1 ? "" : "s"}` : "";
 
   return (
-    <SheetModal visible={visible} title={adding ? "Add a house" : house.short || house.name} onClose={onClose}>
+    <SheetModal
+      visible={visible}
+      title={adding ? "Add a house" : house.short || house.name}
+      onClose={onClose}
+      dirty={picked.size > 0 || JSON.stringify(form) !== JSON.stringify(formOf(house))}
+    >
       {adding ? linkList : null}
       {adding ? (
         <>

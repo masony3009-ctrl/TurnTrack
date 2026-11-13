@@ -318,11 +318,22 @@ export async function scheduleTodaysJobNotifications(jobs: Job[]) {
     .map(({ job }) => [job.id, jobDateKey(job), job.time || "", job.address, job.type, job.assignedToName || "", job.sameDayTurnover ? 1 : 0].join("|"))
     .join("\n");
   if (fingerprint === lastScheduleFingerprint) return;
-  lastScheduleFingerprint = fingerprint;
 
   const generation = ++scheduleGeneration;
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  try {
+    await Notifications.cancelAllScheduledNotificationsAsync();
+    await scheduleReminders(upcoming, generation);
+    // Only a full run counts as done. A run that failed partway is retried the
+    // next time the jobs list updates, instead of leaving reminders missing
+    // until something about the jobs changes.
+    if (generation === scheduleGeneration) lastScheduleFingerprint = fingerprint;
+  } catch (e) {
+    console.warn("scheduling reminders failed:", e);
+    lastScheduleFingerprint = "";
+  }
+}
 
+async function scheduleReminders(upcoming: { job: Job; date: Date }[], generation: number) {
   const now = new Date();
   for (const { job, date } of upcoming) {
     if (generation !== scheduleGeneration) return;

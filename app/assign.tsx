@@ -7,6 +7,7 @@ import { addToCrew, isOnCrew, removeFromCrew, type CrewChanges } from "../crew";
 import { tapSelect, tapSuccess } from "../components/haptics";
 import { useProfile } from "../components/ProfileProvider";
 import { BottomBar, BrandButton, Card, ColorDot, EmptyState, ErrorState, Pill, ScreenHeader } from "../components/ui";
+import { warnUnreached } from "../components/pushWarning";
 import { useProperties } from "../components/useProperties";
 import { db } from "../firebase";
 import { formatTime } from "../jobTime";
@@ -51,6 +52,8 @@ export default function AssignScreen() {
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const labelOf = useRef((job: Job) => houseLabel(job, properties));
   labelOf.current = (job: Job) => houseLabel(job, properties);
+  const nameOfRef = useRef((id: string) => employees.find(e => e.id === id)?.name || "The cleaner");
+  nameOfRef.current = (id: string) => employees.find(e => e.id === id)?.name || "The cleaner";
 
   useEffect(() => {
     return onSnapshot(
@@ -68,7 +71,8 @@ export default function AssignScreen() {
     outbox.current.clear();
     grouped.forEach((list, employeeId) => {
       list.forEach(j => told.current.add(`${j.id}|${employeeId}`));
-      sendPushToEmployee(employeeId, list.length === 1 ? assignmentMessage(list[0]) : assignmentDigestMessage(list, labelOf.current));
+      const reached = sendPushToEmployee(employeeId, list.length === 1 ? assignmentMessage(list[0]) : assignmentDigestMessage(list, labelOf.current));
+      warnUnreached([{ name: nameOfRef.current(employeeId), reached }], list.length === 1 ? "the cleaning you gave them" : `the ${list.length} cleanings you gave them`);
     });
   };
 
@@ -130,7 +134,7 @@ export default function AssignScreen() {
         // Someone already told about this one is losing it.
         if (told.current.has(pair)) {
           told.current.delete(pair);
-          sendPushToEmployee(emp.id, unassignedMessage(job));
+          warnUnreached([{ name: emp.name, reached: sendPushToEmployee(emp.id, unassignedMessage(job)) }], "being taken off that cleaning");
         }
       }
       if (flushTimer.current) clearTimeout(flushTimer.current);

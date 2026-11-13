@@ -166,7 +166,7 @@ export function TimeOffSheet({ visible, employee, ownerViewing, jobs, houseOf, s
   };
 
   return (
-    <SheetModal visible={visible} title="Block out time" onClose={onClose}>
+    <SheetModal visible={visible} title="Block out time" onClose={onClose} dirty={note.trim().length > 0 || from !== null || to !== null || end !== null}>
       <Text style={styles.label}>How long</Text>
       <View style={styles.segment}>
         {KINDS.map(k => (

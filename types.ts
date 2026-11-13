@@ -34,6 +34,9 @@ export type Job = {
   done: boolean;
   completedAt: number | null;
   sameDayTurnover?: boolean;
+  // When a finished cleaning was reopened by "Start another session": its
+  // original finish time, put back if that session is discarded.
+  reopenedFrom?: number | null;
   // The main cleaner. Anyone else on the cleaning is in crew (crew.ts).
   assignedTo?: string | null;
   assignedToName?: string | null;

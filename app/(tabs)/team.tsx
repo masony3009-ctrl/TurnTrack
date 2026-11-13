@@ -210,6 +210,13 @@ export default function TeamScreen() {
 
   const remove = (emp: Employee) => takeOff(emp, "delete");
 
+  // Typing in the profile form that hasn't been saved yet.
+  const editingEmp = editingId ? employees.find(e => e.id === editingId) : null;
+  const formDirty = editingEmp
+    ? name !== editingEmp.name || phone !== (editingEmp.phone || "") || zelle !== (editingEmp.zelle || "") ||
+      photo !== (editingEmp.photo || null) || color !== cleanerColor(editingEmp)
+    : !!(name.trim() || phone.trim() || zelle.trim() || photo);
+
   const activeCount = employees.filter(e => e.active).length;
   const canSeePay = (emp: Employee) => isOwner || self?.id === emp.id;
 
@@ -224,6 +231,7 @@ export default function TeamScreen() {
         visible={showForm}
         title={!isOwner ? "Edit your profile" : editingId ? "Edit cleaner" : "New cleaner"}
         onClose={() => setShowForm(false)}
+        dirty={formDirty}
       >
         <View style={styles.photoRow}>
           <Avatar name={name || "?"} photo={photo} color={color || undefined} size={58} />

@@ -46,7 +46,7 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
 
   if (count === 0) {
     return (
-      <SheetModal visible={visible} title="Finish cleaning" onClose={onClose}>
+      <SheetModal visible={visible} title="Finish cleaning" onClose={onClose} dirty={text.trim().length > 0}>
         <Text style={styles.lead}>{total > 0 ? `All ${total} steps checked.` : "Ready to stop the clock."}</Text>
         {picker}
         <Text style={[styles.label, { marginTop: 14 }]}>Note for the owner (optional)</Text>
@@ -76,7 +76,7 @@ export function FinishSheet({ visible, items, busy, onClose, onReview, onFinish,
   const hidden = count - listed.reduce((n, r) => n + r.steps.length, 0);
 
   return (
-    <SheetModal visible={visible} title={`${count} step${count === 1 ? "" : "s"} not checked`} onClose={onClose}>
+    <SheetModal visible={visible} title={`${count} step${count === 1 ? "" : "s"} not checked`} onClose={onClose} dirty={text.trim().length > 0}>
       {picker}
       <Text style={[styles.lead, { marginTop: 16 }]}>Did it all but forgot to tick?</Text>
       <BrandButton

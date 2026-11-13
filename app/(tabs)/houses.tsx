@@ -5,7 +5,7 @@ import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacit
 import { tapSelect, tapSuccess } from "../../components/haptics";
 import { HouseSheet } from "../../components/HouseSheet";
 import { useProfile } from "../../components/ProfileProvider";
-import { EmptyState, ErrorState, IconButton, ScreenHeader, SectionHeader } from "../../components/ui";
+import { ActionSheet, EmptyState, ErrorState, IconButton, ScreenHeader, SectionHeader } from "../../components/ui";
 import { useProperties } from "../../components/useProperties";
 import { useSupplies } from "../../components/useSupplies";
 import { db } from "../../firebase";
@@ -22,6 +22,13 @@ import { Job } from "../../types";
 
 const PERIODS: Period[] = ["month", "lastMonth", "year", "all"];
 const CHIP_LABELS: Record<Period, string> = { month: "Month", lastMonth: "Last month", year: "Year", all: "All" };
+
+// How a host who bills directly can pay us.
+const HOST_PAY_METHODS: { label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { label: "Zelle", icon: "phone-portrait-outline" },
+  { label: "Check", icon: "document-text-outline" },
+  { label: "Cash", icon: "cash-outline" },
+];
 
 type Row = {
   key: string;
@@ -62,6 +69,8 @@ export default function HousesScreen() {
   const [editing, setEditing] = useState<Property | null>(null);
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
+  // The house whose host is being marked paid (picking how they paid).
+  const [payingRow, setPayingRow] = useState<Row | null>(null);
   const today = todayKey();
 
   // Money and door codes are the owner's: cleaners' phones never load this.
@@ -153,26 +162,20 @@ export default function HousesScreen() {
     ]);
   };
 
-  const markHostPaid = (row: Row) => {
-    const settle = async (method: string) => {
-      try {
-        const batch = writeBatch(db);
-        const at = Date.now();
-        row.owed.jobs.forEach(j => batch.update(doc(db, "jobs", j.id), { hostPaid: true, hostPaidAt: at, hostPaidMethod: method }));
-        await batch.commit();
-        tapSuccess();
-      } catch (e) {
-        console.warn("mark host paid failed:", e);
-        Alert.alert("Couldn't mark it paid", "Check your signal and try again.");
-      }
-    };
-    const n = row.owed.jobs.length;
-    Alert.alert(`${row.label} paid?`, `${formatDollars(row.owed.amount)} for ${n} cleaning${n === 1 ? "" : "s"}.`, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Zelle", onPress: () => settle("Zelle") },
-      { text: "Check", onPress: () => settle("Check") },
-      { text: "Cash", onPress: () => settle("Cash") },
-    ]);
+  // Three ways to be paid plus Cancel is one more button than Android alerts
+  // show, so the choice is a sheet.
+  const markHostPaid = (row: Row) => setPayingRow(row);
+  const settleHost = async (row: Row, method: string) => {
+    try {
+      const batch = writeBatch(db);
+      const at = Date.now();
+      row.owed.jobs.forEach(j => batch.update(doc(db, "jobs", j.id), { hostPaid: true, hostPaidAt: at, hostPaidMethod: method }));
+      await batch.commit();
+      tapSuccess();
+    } catch (e) {
+      console.warn("mark host paid failed:", e);
+      Alert.alert("Couldn't mark it paid", "Check your signal and try again.");
+    }
   };
 
   if (!isOwner) {
@@ -200,6 +203,14 @@ export default function HousesScreen() {
         title="Houses"
         subtitle={jobs ? `${houseCount} house${houseCount === 1 ? "" : "s"}` : "Loading houses…"}
         right={<IconButton icon="add" onPress={() => { setEditing(null); setAdding(true); }} label="Add a house" />}
+      />
+
+      <ActionSheet
+        visible={payingRow !== null}
+        title={payingRow ? `${payingRow.label} paid?` : ""}
+        message={payingRow ? `${formatDollars(payingRow.owed.amount)} for ${payingRow.owed.jobs.length} cleaning${payingRow.owed.jobs.length === 1 ? "" : "s"}. How did they pay?` : undefined}
+        onClose={() => setPayingRow(null)}
+        actions={payingRow ? HOST_PAY_METHODS.map(m => ({ label: m.label, icon: m.icon, onPress: () => settleHost(payingRow, m.label) })) : []}
       />
 
       <HouseSheet

@@ -5,7 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { tapSelect, tapSuccess } from "../../components/haptics";
 import { useProfile } from "../../components/ProfileProvider";
-import { alertSoon, AssigneeRow, BrandButton, Card, DatePickerField, EmptyState, ErrorState, Fab, FormInput, IconButton, Pill, ProgressBar, ScreenHeader, SectionHeader, SheetModal } from "../../components/ui";
+import { ActionSheet, alertSoon, AssigneeRow, BrandButton, Card, DatePickerField, EmptyState, ErrorState, Fab, FormInput, IconButton, Pill, ProgressBar, ScreenHeader, SectionHeader, SheetModal } from "../../components/ui";
+import { warnUnreached } from "../../components/pushWarning";
 import { useProperties } from "../../components/useProperties";
 import { duesSentence, payDueFor, recordCleaningPay } from "../../components/cleaningPay";
 import { db } from "../../firebase";
@@ -54,7 +55,10 @@ export default function JobsScreen() {
   const [scope, setScope] = useState<Scope>("all");
   const [showCancelled, setShowCancelled] = useState(false);
   const [showChecklistEditor, setShowChecklistEditor] = useState(false);
+  const [showMore, setShowMore] = useState(false);
   const [checklistText, setChecklistText] = useState("");
+  // What the editor opened with, to tell whether anything was typed.
+  const [checklistOriginal, setChecklistOriginal] = useState("");
   const [checklistTemplate, setChecklistTemplate] = useState<string[]>(DEFAULT_CHECKLIST);
   const router = useRouter();
   // Set by a tapped notification about several cleanings ("open", "mine").
@@ -204,7 +208,9 @@ export default function JobsScreen() {
   };
 
   const openChecklistEditor = () => {
-    setChecklistText(checklistTemplate.join("\n"));
+    const text = checklistTemplate.join("\n");
+    setChecklistText(text);
+    setChecklistOriginal(text);
     setShowChecklistEditor(true);
   };
 
@@ -218,14 +224,7 @@ export default function JobsScreen() {
     }
   };
 
-  const openMore = () => {
-    Alert.alert("More", undefined, [
-      { text: "Assign cleanings", onPress: () => router.push("/assign") },
-      { text: "Edit cleaning checklist", onPress: openChecklistEditor },
-      { text: "Send a test notification", onPress: sendTest },
-      { text: "Close", style: "cancel" },
-    ]);
-  };
+  const openMore = () => setShowMore(true);
 
   const saveChecklist = async () => {
     const lines = parseChecklistText(checklistText);
@@ -304,7 +303,10 @@ export default function JobsScreen() {
       };
       const ref = await addDoc(collection(db, "jobs"), fields);
       tapSuccess();
-      newCrew.forEach(emp => sendPushToEmployee(emp.id, assignmentMessage({ id: ref.id, ...fields } as Job)));
+      warnUnreached(
+        newCrew.map(emp => ({ name: emp.name, reached: sendPushToEmployee(emp.id, assignmentMessage({ id: ref.id, ...fields } as Job)) })),
+        "this cleaning"
+      );
       resetForm();
       setShowForm(false);
     } catch (e) {
@@ -430,7 +432,23 @@ export default function JobsScreen() {
         </View>
       )}
 
-      <SheetModal visible={showChecklistEditor} title="Cleaning checklist" onClose={() => setShowChecklistEditor(false)}>
+      <ActionSheet
+        visible={showMore}
+        title="More"
+        onClose={() => setShowMore(false)}
+        actions={[
+          { label: "Assign cleanings", icon: "people-outline", onPress: () => router.push("/assign") },
+          { label: "Edit cleaning checklist", icon: "list-outline", onPress: openChecklistEditor },
+          { label: "Send a test notification", icon: "notifications-outline", onPress: sendTest },
+        ]}
+      />
+
+      <SheetModal
+        visible={showChecklistEditor}
+        title="Cleaning checklist"
+        onClose={() => setShowChecklistEditor(false)}
+        dirty={checklistText !== checklistOriginal}
+      >
         <Text style={styles.sheetHint}>
           {"One step per line.\nKitchen: starts a room · Oven | tip · > room note\nBathroom #: one per bath · Half bath: only if there is one · Bedroom (optional): added by hand"}
         </Text>
@@ -444,7 +462,12 @@ export default function JobsScreen() {
         <BrandButton label="Save checklist" icon="checkmark" onPress={saveChecklist} />
       </SheetModal>
 
-      <SheetModal visible={showForm} title="New cleaning" onClose={() => setShowForm(false)}>
+      <SheetModal
+        visible={showForm}
+        title="New cleaning"
+        onClose={() => { resetForm(); setShowForm(false); }}
+        dirty={!!(newDateKey || newTime || newHouse || newAddress.trim() || newCrew.length || newSameDayTurnover || newType !== JOB_TYPES[0])}
+      >
         <DatePickerField label="Date" value={newDateKey} onChange={setNewDateKey} />
         <Text style={styles.fieldLabel}>House</Text>
         <View style={styles.choiceGrid}>

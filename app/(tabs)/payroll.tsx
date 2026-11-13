@@ -306,7 +306,12 @@ export default function PayrollScreen() {
     <View style={styles.container}>
       <ScreenHeader title="Payroll" />
 
-      <SheetModal visible={editing !== null} title={`Fix ${editing?.employeeName.split(" ")[0] || ""}'s entry`} onClose={() => setEditing(null)}>
+      <SheetModal
+        visible={editing !== null}
+        title={`Fix ${editing?.employeeName.split(" ")[0] || ""}'s entry`}
+        onClose={() => setEditing(null)}
+        dirty={!!editing && (editMinutes !== (editing.minutes > 0 ? String(editing.minutes) : "") || editPay !== String(editing.earned) || editDateKey !== keyFromDate(new Date(editing.endedAt)))}
+      >
         {editing ? (
           <Text style={styles.editLead}>
             {editing.jobAddress} · {isFlat(editing) ? "paid by the house" : `logged at ${formatMoney(editing.hourlyRate)}/hr`}
@@ -340,7 +345,12 @@ export default function PayrollScreen() {
         ) : null}
       </SheetModal>
 
-      <SheetModal visible={manualFor !== null} title={`Add pay for ${manualFor?.name || ""}`} onClose={() => setManualFor(null)}>
+      <SheetModal
+        visible={manualFor !== null}
+        title={`Add pay for ${manualFor?.name || ""}`}
+        onClose={() => setManualFor(null)}
+        dirty={!!(manualMinutes.trim() || manualNote.trim() || manualPay !== String(DEFAULT_CLEANER_PAY) || manualDateKey !== todayKey())}
+      >
         <DatePickerField label="Day" value={manualDateKey} onChange={setManualDateKey} />
         <FormInput label="What was it for? (optional)" placeholder="e.g. Turnover at Desert Oasis" value={manualNote} onChangeText={setManualNote} />
         <View style={styles.pair}>
