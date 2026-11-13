@@ -8,6 +8,7 @@ import { colors, radius } from "../theme";
 import { formatShortDate, todayKey } from "../turnover";
 import { parseChecklistText } from "../types";
 import { tapSelect } from "./haptics";
+import { TimeChips } from "./TimeChips";
 import { BrandButton, DatePickerField, FormInput, SheetModal } from "./ui";
 
 type Form = {
@@ -26,7 +27,14 @@ type Form = {
   billedFrom: string | null;
   steps: string;
   forwardsFrom: string;
+  notes: string;
+  checkOutTime: string | null;
+  checkInTime: string | null;
 };
+
+// Checkout from 8 AM to noon, check-in from 2 PM to 6 PM, on the half hour.
+const CHECKOUT_TIMES = ["08:00", "09:00", "10:00", "10:30", "11:00", "11:30", "12:00"];
+const CHECKIN_TIMES = ["14:00", "15:00", "15:30", "16:00", "16:30", "17:00", "18:00"];
 
 function formOf(house: Property | null): Form {
   return {
@@ -45,6 +53,9 @@ function formOf(house: Property | null): Form {
     billedFrom: house?.billedFrom || null,
     steps: (house?.checklist || []).join("\n"),
     forwardsFrom: house?.forwardsFrom || "",
+    notes: house?.notes || "",
+    checkOutTime: house?.checkOutTime || null,
+    checkInTime: house?.checkInTime || null,
   };
 }
 
@@ -61,13 +72,14 @@ const CLIENTS_SHOWN = 5;
 // Edits one house in the registry, or adds one (house = null). Codes typed
 // here show up on every cleaning at that house, past and future. Cleanings
 // that aren't under a house yet can be linked to it, so their money counts.
-export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
+export function HouseSheet({ visible, house, clients, busy, onClose, onSave, onDelete }: {
   visible: boolean;
   house: Property | null;
   clients: Client[];
   busy: boolean;
   onClose: () => void;
   onSave: (name: string, changes: RegistryChanges, aliases: string[]) => void;
+  onDelete?: (house: Property) => void;
 }) {
   const [form, setForm] = useState<Form>(formOf(house));
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -105,8 +117,8 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
 
   const save = () => {
     const name = form.name.trim();
-    if (adding && (!name || !form.address.trim())) {
-      Alert.alert("Name and address", "Add both to save a new house.");
+    if (!name || !form.address.trim()) {
+      Alert.alert("Name and address", adding ? "Add both to save a new house." : "A house needs a name and an address.");
       return;
     }
     const price = form.price.trim() ? parsePrice(form.price) : null;
@@ -146,8 +158,12 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
       billedFrom: form.billedFrom,
       checklist: steps.length ? steps : null,
       forwardsFrom: forwardsFrom || null,
+      notes: form.notes.trim() || null,
+      checkOutTime: form.checkOutTime,
+      checkInTime: form.checkInTime,
     };
-    if (adding) changes.address = form.address.trim();
+    changes.address = form.address.trim();
+    if (!adding && house && name !== house.name) changes.name = name;
     const base: Property = house || { name, address: form.address.trim(), aliases: [], bedrooms: 0, bathrooms: 0 };
     onSave(base.name, changes, aliasesToLink(base, linked.flatMap(c => c.jobs)));
   };
@@ -176,15 +192,12 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
       dirty={picked.size > 0 || JSON.stringify(form) !== JSON.stringify(formOf(house))}
     >
       {adding ? linkList : null}
-      {adding ? (
-        <>
-          {clients.length ? <Text style={styles.group}>House</Text> : null}
-          <FormInput label="Listing name" placeholder="e.g. Desert Oasis" value={form.name} onChangeText={set("name")} autoCapitalize="words" />
-          <FormInput label="Address" placeholder="Street, city, ZIP" value={form.address} onChangeText={set("address")} autoCapitalize="words" />
-        </>
-      ) : (
-        <Text style={styles.address}>{house.address}</Text>
-      )}
+      {adding && clients.length ? <Text style={styles.group}>House</Text> : null}
+      <FormInput label="Listing name" placeholder="e.g. Desert Oasis" value={form.name} onChangeText={set("name")} autoCapitalize="words" />
+      {!adding && house && form.name.trim() !== house.name ? (
+        <Text style={styles.hint}>Cleanings filed under &quot;{house.name}&quot; stay with this house.</Text>
+      ) : null}
+      <FormInput label="Address" placeholder="Street, city, ZIP" value={form.address} onChangeText={set("address")} autoCapitalize="words" />
       <FormInput label="Short name" placeholder="e.g. Desert Oasis" value={form.short} onChangeText={set("short")} autoCapitalize="words" />
       <View style={styles.pair}>
         <View style={{ flex: 1 }}>
@@ -215,6 +228,16 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
         </View>
       </View>
       <FormInput label="Supply closet" placeholder="Not set" value={form.supplyCode} onChangeText={set("supplyCode")} autoCapitalize="none" />
+      <Text style={styles.group}>For the crew</Text>
+      <FormInput
+        label="House notes"
+        placeholder={"Parking, trash day, where the linens are, the alarm"}
+        value={form.notes}
+        onChangeText={set("notes")}
+        multiline
+      />
+      <TimeChips label="Guests check out by" value={form.checkOutTime} onChange={t => setForm(prev => ({ ...prev, checkOutTime: t }))} choices={CHECKOUT_TIMES} noneLabel="Not set" />
+      <TimeChips label="Next guests check in at" value={form.checkInTime} onChange={t => setForm(prev => ({ ...prev, checkInTime: t }))} choices={CHECKIN_TIMES} noneLabel="Not set" />
       <Text style={styles.group}>Checklist</Text>
       <Text style={styles.hint}>Only this house gets these, at the end of every cleaning here. One step per line.</Text>
       <FormInput
@@ -253,6 +276,12 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave }: {
       ) : null}
       {adding ? null : linkList}
       <BrandButton label={busy ? "Saving…" : (adding ? "Add house" : "Save") + linkLabel} icon="checkmark" onPress={save} disabled={busy} />
+      {!adding && house && onDelete ? (
+        <TouchableOpacity style={styles.deleteLink} onPress={() => onDelete(house)} hitSlop={6} accessibilityRole="button">
+          <Ionicons name="trash-outline" size={15} color={colors.danger} />
+          <Text style={styles.deleteText}>Delete this house</Text>
+        </TouchableOpacity>
+      ) : null}
     </SheetModal>
   );
 }
@@ -283,7 +312,8 @@ function ClientRow({ client, on, onPress }: { client: Client; on: boolean; onPre
 }
 
 const styles = StyleSheet.create({
-  address: { fontSize: 13.5, color: colors.muted, marginBottom: 12 },
+  deleteLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44, marginTop: 6 },
+  deleteText: { fontSize: 13.5, fontWeight: "600", color: colors.danger },
   pair: { flexDirection: "row", gap: 10 },
   group: { fontSize: 12.5, fontWeight: "700", color: colors.ink, marginTop: 4, marginBottom: 8 },
   hint: { fontSize: 12, color: colors.muted, marginTop: -4, marginBottom: 8 },

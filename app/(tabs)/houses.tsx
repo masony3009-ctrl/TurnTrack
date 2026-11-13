@@ -14,7 +14,7 @@ import {
   type DeepCleanStatus, type HouseMoney, type Period,
 } from "../../money";
 import { formatDollars, formatDuration, formatEntryDate } from "../../payroll";
-import { houseKey, patchRegistry, type Property, type RegistryChanges } from "../../properties";
+import { houseKey, patchRegistry, removeFromRegistry, type Property, type RegistryChanges } from "../../properties";
 import { type SupplyReport } from "../../supplies";
 import { colors, radius, shadow } from "../../theme";
 import { formatShortDate, todayKey } from "../../turnover";
@@ -115,6 +115,11 @@ export default function HousesScreen() {
       Alert.alert("Already on the list", `${name} is already a house. Tap it to edit.`);
       return;
     }
+    const renamed = typeof changes.name === "string" ? changes.name : null;
+    if (renamed && properties.some(p => p.name !== name && houseKey(p.name) === houseKey(renamed))) {
+      Alert.alert("Name taken", `Another house is already called ${renamed}. Pick a different name.`);
+      return;
+    }
     setSaving(true);
     try {
       // Read and write in one go so an edit never drops a house the scripts
@@ -132,6 +137,38 @@ export default function HousesScreen() {
       Alert.alert("Couldn't save", "Nothing changed. Check your signal and try again.");
     }
     setSaving(false);
+  };
+
+  // Takes a house off the list. Its cleanings stay in the records.
+  const deleteHouse = (house: Property) => {
+    const label = house.short || house.name;
+    Alert.alert(
+      `Delete ${label}?`,
+      `Its cleanings stay, filed under Other clients.${house.forwardsFrom ? " Emails its host forwards will stop adding cleanings." : ""} This can't be undone from the app.`,
+      [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setSaving(true);
+            try {
+              await runTransaction(db, async tx => {
+                const ref = doc(db, "settings", "properties");
+                const snap = await tx.get(ref);
+                tx.set(ref, { items: removeFromRegistry(snap.data()?.items, house.name), updatedAt: Date.now() }, { merge: true });
+              });
+              tapSuccess();
+              setEditing(null);
+            } catch (e) {
+              console.warn("delete house failed:", e);
+              Alert.alert("Couldn't delete", "The house is still there. Check your signal and try again.");
+            }
+            setSaving(false);
+          },
+        },
+      ]
+    );
   };
 
   const restockItem = async (report: SupplyReport, item: string) => {
@@ -220,6 +257,7 @@ export default function HousesScreen() {
         busy={saving}
         onClose={() => { setEditing(null); setAdding(false); }}
         onSave={saveHouse}
+        onDelete={deleteHouse}
       />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>

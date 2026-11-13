@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { accessCodes, aliasesToLink, findProperty, houseKey, parseProperties, patchRegistry, streetOf, tidyAddress } from "../properties.ts";
+import { accessCodes, aliasesToLink, findProperty, houseKey, parseProperties, patchRegistry, removeFromRegistry, streetOf, tidyAddress } from "../properties.ts";
 
 test("parseProperties reads price, cleaner pay and billing start, ignoring junk", () => {
   const [a, b] = parseProperties([
@@ -25,7 +25,7 @@ test("patchRegistry edits one house and keeps fields it doesn't know", () => {
     { name: "Palm", address: "1 Palm Rd", aliases: ["palm"], doorCode: "1111", scriptOnly: "keep me" },
     { name: "Mesa", address: "2 Mesa Rd" },
   ];
-  const out = patchRegistry(raw, "Palm", { price: 150, doorCode: "", short: "Palm C", name: "Renamed" });
+  const out = patchRegistry(raw, "Palm", { price: 150, doorCode: "", short: "Palm C" });
   assert.equal(out[0].price, 150);
   assert.equal(out[0].doorCode, undefined);
   assert.equal(out[0].scriptOnly, "keep me");
@@ -113,4 +113,31 @@ test("a lock box shows with where it is, after the door and garage", () => {
   ]);
   const [bare] = parseProperties([{ name: "Mesa", address: "2 Mesa Rd", lockboxCode: "4444" }]);
   assert.deepEqual(accessCodes(bare), [{ label: "Lock box", code: "4444" }]);
+});
+
+test("parseProperties reads house notes and checkout and check-in times, ignoring junk", () => {
+  const [a, b] = parseProperties([
+    { name: "Palm", notes: "  Park on the street  ", checkOutTime: "11:00", checkInTime: "16:00" },
+    { name: "Mesa", notes: "   ", checkOutTime: "11am", checkInTime: 16 },
+  ]);
+  assert.deepEqual([a.notes, a.checkOutTime, a.checkInTime], ["Park on the street", "11:00", "16:00"]);
+  assert.deepEqual([b.notes, b.checkOutTime, b.checkInTime], [undefined, undefined, undefined]);
+});
+
+test("patchRegistry renames a house and keeps the old name as an alias", () => {
+  const raw = [{ name: "amy", address: "1 Brisas", aliases: ["brisas"], icalUrl: "keep" }, { name: "Palm", address: "2 Palm" }];
+  const items = patchRegistry(raw, "amy", { name: "Via Las Brisas", address: "1 Via Las Brisas" });
+  assert.deepEqual(items[0], { name: "Via Las Brisas", address: "1 Via Las Brisas", aliases: ["brisas", "amy"], icalUrl: "keep" });
+  // Old cleanings filed under the old name still find it.
+  assert.equal(findProperty(parseProperties(items), { property: "amy", address: "" }).name, "Via Las Brisas");
+  // The same name is no rename.
+  assert.deepEqual(patchRegistry(raw, "Palm", { name: "Palm" })[1].aliases, undefined);
+  assert.throws(() => patchRegistry(raw, "amy", { name: "palm" }), /already exists/);
+});
+
+test("removeFromRegistry drops only that house", () => {
+  const raw = [{ name: "A", address: "1" }, { name: "B", address: "2", extra: 1 }, null];
+  assert.deepEqual(removeFromRegistry(raw, "A"), [{ name: "B", address: "2", extra: 1 }]);
+  assert.deepEqual(removeFromRegistry(raw, "Nope").length, 2);
+  assert.deepEqual(removeFromRegistry(undefined, "A"), []);
 });

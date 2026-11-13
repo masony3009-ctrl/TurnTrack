@@ -23,16 +23,13 @@ import { isOpenJob } from "../../assign";
 import { crewLabel, isOnCrew } from "../../crew";
 import { availabilityFor, availabilityShort, availabilityTone, availabilityWarning, bookingsOf, type Availability } from "../../availability";
 import { houseLabel } from "../../schedule";
-import { Employee, Job, newJobDoc, parseChecklistText } from "../../types";
+import { Employee, Job, JOB_TYPES, newJobDoc, parseChecklistText } from "../../types";
 
 type Section = { group: JobGroup; jobs: Job[] };
 
 // What a cleaner's list shows: everything, their own, or the ones nobody has.
 type Scope = "all" | "mine" | "open";
 
-// Picked from a list rather than typed, so the same kind of job is always
-// spelled the same way.
-const JOB_TYPES = ["Turnover", "Standard Cleaning", "Deep Cleaning", "Move-out Cleaning", "Handyman"];
 
 // Cancelled cleanings stay findable (to restore one) for this long after their date.
 const CANCELLED_WINDOW_DAYS = 30;

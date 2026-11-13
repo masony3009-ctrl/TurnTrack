@@ -10,6 +10,10 @@ export type { ChecklistItem, ChecklistProgress } from "./checklist";
 
 // Written when a cleaner finishes with steps still unchecked: they have to
 // say why, and the owner sees it on the job.
+// The kinds of cleaning picked from a list, so the same kind is always spelled
+// the same way. Synced cleanings may carry their own ("Airbnb Turnover").
+export const JOB_TYPES = ["Turnover", "Standard Cleaning", "Deep Cleaning", "Move-out Cleaning", "Handyman"];
+
 export type FinishNote = {
   text: string;
   by: string | null;

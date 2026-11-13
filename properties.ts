@@ -33,6 +33,13 @@ export type Property = {
   // host does that instead of sharing a calendar link. The Apps Script reads
   // their booking and cancellation emails from it and nothing else.
   forwardsFrom?: string;
+  // Anything the crew should know about the house: parking, trash day, where
+  // the linens are, the alarm. Shown on every cleaning there.
+  notes?: string;
+  // "HH:MM" 24-hour: when guests have to be out, and when the next ones can
+  // come in. Used to tell the crew how long they have on a turnover.
+  checkOutTime?: string;
+  checkInTime?: string;
 };
 
 export type AccessCode = { label: string; code: string };
@@ -111,7 +118,15 @@ export function parseProperties(raw: unknown): Property[] {
       billedFrom: typeof v.billedFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.billedFrom) ? v.billedFrom : undefined,
       checklist: houseSteps(v.checklist),
       forwardsFrom: typeof v.forwardsFrom === "string" && v.forwardsFrom.trim() ? v.forwardsFrom.trim() : undefined,
+      notes: typeof v.notes === "string" && v.notes.trim() ? v.notes.trim() : undefined,
+      checkOutTime: clockTime(v.checkOutTime),
+      checkInTime: clockTime(v.checkInTime),
     }));
+}
+
+// "16:00" stays; anything else is no time.
+function clockTime(raw: unknown): string | undefined {
+  return typeof raw === "string" && /^\d{1,2}:\d{2}$/.test(raw) ? raw : undefined;
 }
 
 // A house's own checklist lines: the non-blank strings, or undefined for none.
@@ -173,6 +188,16 @@ export function patchRegistry(raw: unknown, name: string, changes: RegistryChang
     target = { name, address: "", aliases: [], bedrooms: 0, bathrooms: 0 };
     items.push(target);
   }
+  // A new listing name. Cleanings, the scripts and the syncs all file under
+  // the name, so the old one stays on as an alias and nothing comes unlinked.
+  const renamed = typeof changes.name === "string" ? changes.name.trim() : "";
+  if (renamed && renamed !== name) {
+    if (items.some((v) => v !== target && normalize(String(v.name)) === normalize(renamed))) {
+      throw new Error(`a house named ${renamed} already exists`);
+    }
+    target.name = renamed;
+    addAliases = [name, ...addAliases];
+  }
   for (const [field, value] of Object.entries(changes)) {
     if (field === "name") continue;
     if (value === null || value === "") delete target[field];
@@ -190,4 +215,13 @@ export function patchRegistry(raw: unknown, name: string, changes: RegistryChang
     target.aliases = aliases;
   }
   return items;
+}
+
+// The registry without this house. Its cleanings stay; they just stop filing
+// under it (and a host's forwarded emails for it stop being read).
+export function removeFromRegistry(raw: unknown, name: string): Record<string, unknown>[] {
+  const items = Array.isArray(raw)
+    ? raw.filter((v): v is Record<string, unknown> => !!v && typeof v === "object").map((v) => ({ ...v }))
+    : [];
+  return items.filter((v) => v.name !== name);
 }

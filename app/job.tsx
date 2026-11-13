@@ -14,6 +14,8 @@ import { cleaningEvent } from "../calendarEvent";
 import { useProfile } from "../components/ProfileProvider";
 import { FinishSheet } from "../components/FinishSheet";
 import { PriceSheet } from "../components/PriceSheet";
+import { EditJobSheet, type JobDetails } from "../components/EditJobSheet";
+import { nextGuestsLine, nextStay } from "../nextGuests";
 import { warnUnreached } from "../components/pushWarning";
 import { RoomChecklist } from "../components/RoomChecklist";
 import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
@@ -34,7 +36,7 @@ import { houseLabel } from "../schedule";
 import { isLongSession, mergeSummary, otherRunningJob, sessionEntryId, startCheck, waitBriefly } from "../session";
 import { supplyList } from "../supplies";
 import { availabilityColors, cleanerColor, colors, radius, type, unassignedColor } from "../theme";
-import { daysFromToday, formatDateLabel, formatDayHeading, jobDateKey, relativeDayLabel } from "../turnover";
+import { daysFromToday, formatDateLabel, formatDayHeading, jobDateKey, relativeDayLabel, todayKey } from "../turnover";
 import { Employee, FinishNote, Job } from "../types";
 
 // How long a save may take before the screen stops waiting on it. With no
@@ -54,6 +56,13 @@ export default function JobDetail() {
   const [showFinish, setShowFinish] = useState(false);
   const [showGiveBack, setShowGiveBack] = useState(false);
   const [showWhen, setShowWhen] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  // Ticks each minute so "2h 10m left" before the next guests stays true.
+  const [clock, setClock] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setClock(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, []);
   // Set when confirming a website request that has no date: saving the date
   // confirms it too.
   const [confirmOnDate, setConfirmOnDate] = useState(false);
@@ -115,13 +124,12 @@ export default function JobDetail() {
     return unsub;
   }, [id, reloadKey]);
 
-  // Every cleaning, only while the owner has the Assign to list open, so it
-  // can say who's already booked that day. The Jobs tab listens to the same
-  // query, so Firestore answers from what it already has. Null until loaded.
+  // Every cleaning: who's already booked that day (the Assign to list), and
+  // when the next guests arrive at this house. The Jobs tab listens to the
+  // same query, so Firestore answers from what it already has. Null until loaded.
   const [allJobs, setAllJobs] = useState<Job[] | null>(null);
   const [allJobsFailed, setAllJobsFailed] = useState(false);
   useEffect(() => {
-    if (!showAssign || !isOwner) return;
     return onSnapshot(collection(db, "jobs"), (snapshot) => {
       setAllJobsFailed(false);
       setAllJobs(snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Job[]);
@@ -129,7 +137,7 @@ export default function JobDetail() {
       console.warn("jobs listener error:", error);
       setAllJobsFailed(true);
     });
-  }, [showAssign, isOwner]);
+  }, []);
   const bookings = useMemo(() => bookingsOf(allJobs || []), [allJobs]);
 
   const goBack = () => {
@@ -150,6 +158,11 @@ export default function JobDetail() {
   // code in one place changes it on every cleaning at that house, past and
   // future, without rewriting a single job.
   const property = findProperty(properties, job);
+  // The next guests at this house, from the stays the syncs and emails recorded.
+  const stay = useMemo(
+    () => (job ? nextStay(job, allJobs || [], j => houseKey(findProperty(properties, j)?.name || j.property || j.address)) : null),
+    [job, allJobs, properties]
+  );
   const codes = accessCodes(property);
   const house = property?.short || job?.property || job?.address || "the house";
   // A host who pays us directly: this cleaning can be marked paid.
@@ -299,6 +312,26 @@ export default function JobDetail() {
   // The owner moves a job or sets its start time. A synced job's date stays
   // with its calendar (WhenSheet only offers the time there); whoever is
   // assigned hears about the change.
+  const saveDetails = async (d: JobDetails) => {
+    if (!job || !isOwner || busy) return;
+    setBusy(true);
+    try {
+      await updateDoc(doc(db, "jobs", job.id), {
+        type: d.type,
+        sameDayTurnover: d.sameDayTurnover,
+        property: d.property,
+        address: d.address,
+        notes: d.notes,
+      });
+      setShowEdit(false);
+      tapSuccess();
+    } catch (e) {
+      console.warn("save details failed:", e);
+      Alert.alert("Couldn't save", "Nothing changed. Check your connection and try again.");
+    }
+    setBusy(false);
+  };
+
   const saveWhen = async (next: { dateKey: string | null; time: string | null }) => {
     if (!job || !isOwner || busy) return;
     const moveDate = canEditDate(job.source) && !!next.dateKey && next.dateKey !== jobDateKey(job);
@@ -884,6 +917,10 @@ export default function JobDetail() {
   const days = daysFromToday(job);
   const rel = relativeDayLabel(days);
   const sameDay = job.sameDayTurnover === true;
+  // When the next guests come and when these ones have to be out.
+  const guestsLine = nextGuestsLine(job, stay, property?.checkInTime, clock, todayKey());
+  const checkoutLine = property?.checkOutTime ? `Guests check out by ${formatTime(property.checkOutTime)}` : null;
+  const guestRow = [sameDay ? null : guestsLine, checkoutLine].filter((l): l is string => !!l);
   const running = !!job.startedAt;
   const contact = job.contact || null;
   const hasContact = !!(contact && (contact.name || contact.phone));
@@ -946,6 +983,10 @@ export default function JobDetail() {
         onClose={() => { setShowWhen(false); setConfirmOnDate(false); }}
         onSave={saveWhen}
       />
+
+      {isOwner ? (
+        <EditJobSheet visible={showEdit} job={job} properties={properties} busy={busy} onClose={() => setShowEdit(false)} onSave={saveDetails} />
+      ) : null}
 
       <PriceSheet
         visible={showPrice}
@@ -1120,7 +1161,7 @@ export default function JobDetail() {
         {sameDay && !job.cancelled && (
           <View style={styles.sameDayBanner}>
             <Ionicons name="alert-circle" size={17} color={colors.goldDark} />
-            <Text style={styles.sameDayBannerText}>Same day: clean between checkout and check-in.</Text>
+            <Text style={styles.sameDayBannerText}>{guestsLine ? `Same day. ${guestsLine}.` : "Same day: clean between checkout and check-in."}</Text>
           </View>
         )}
 
@@ -1145,7 +1186,14 @@ export default function JobDetail() {
 
         {job.notes ? (
           <Card>
-            <Text style={type.section}>Request details</Text>
+            <View style={styles.cardHeaderRow}>
+              <Text style={type.section}>{job.source === "website" ? "Request details" : "Notes"}</Text>
+              {isOwner && !job.cancelled ? (
+                <TouchableOpacity onPress={() => setShowEdit(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit the notes">
+                  <Text style={styles.changeLink}>Edit</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
             <Text style={styles.notesText}>{job.notes}</Text>
           </Card>
         ) : null}
@@ -1183,6 +1231,9 @@ export default function JobDetail() {
               divider
             />
           ) : null}
+          {guestRow.length ? (
+            <StaticRow icon="people-outline" value={guestRow[0]} sub={guestRow[1]} divider={(isOwner && !job.cancelled) || !!calendarEvent} />
+          ) : null}
           <InfoRow
             icon="location"
             value={job.address}
@@ -1190,9 +1241,27 @@ export default function JobDetail() {
             trailing="navigate-circle-outline"
             onPress={() => openInMaps(job.address)}
             label="Open in Maps"
-            divider={(isOwner && !job.cancelled) || !!calendarEvent}
+            divider={(isOwner && !job.cancelled) || !!calendarEvent || guestRow.length > 0}
           />
+          {isOwner && !job.cancelled ? (
+            <InfoRow
+              icon="options-outline"
+              value="Edit details"
+              sub="Kind of cleaning, same-day, house, notes"
+              trailing="chevron-forward"
+              onPress={() => setShowEdit(true)}
+              label="Edit the cleaning's details"
+              divider
+            />
+          ) : null}
         </Card>
+
+        {property?.notes ? (
+          <Card>
+            <Text style={type.section}>House notes</Text>
+            <Text style={styles.notesText}>{property.notes}</Text>
+          </Card>
+        ) : null}
 
         {!isPending && codes.length > 0 && !(isOwner || isMine || viewingAs) && !job.done && (
           <Text style={styles.codesLocked}>Codes show once this cleaning is yours.</Text>
@@ -1366,6 +1435,26 @@ export default function JobDetail() {
   );
 }
 
+// A line in the info card that only tells (nothing to tap).
+function StaticRow({ icon, value, sub, divider }: {
+  icon: keyof typeof Ionicons.glyphMap;
+  value: string;
+  sub?: string;
+  divider?: boolean;
+}) {
+  return (
+    <View style={[styles.infoRow, divider && styles.infoDivider]} accessible accessibilityLabel={sub ? `${value}. ${sub}` : value}>
+      <View style={styles.addressIcon}>
+        <Ionicons name={icon} size={19} color={colors.tealDark} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.staticText}>{value}</Text>
+        {sub ? <Text style={styles.addressHint}>{sub}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
 // One tappable line of the job's info card: an icon, the value, an optional
 // second line, and the icon for what tapping does.
 function InfoRow({ icon, value, sub, trailing, onPress, label, divider }: {
@@ -1427,6 +1516,7 @@ const styles = StyleSheet.create({
   addressIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.tealSoft, alignItems: "center", justifyContent: "center" },
   addressText: { fontSize: 16, fontWeight: "700", color: colors.ink, marginTop: 3 },
   addressHint: { fontSize: 12, color: colors.tealDark, fontWeight: "600", marginTop: 2 },
+  staticText: { fontSize: 14.5, fontWeight: "600", color: colors.ink, marginTop: 3, lineHeight: 20 },
   // Codes get read off the screen one-handed at a keypad, so they are big,
   // tabular, and widely spaced.
   codeRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 12 },
