@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   blocksOn, buildTimeOff, clashingJobs, clashMessage, conflictFor, conflictText, coversDay, datesLabel, hoursLabel,
-  isTimeOff, MAX_DAYS, NOTE_MAX, pastTimeOff, shortHours, timeOffOf, upcomingTimeOff,
+  isTimeOff, MAX_DAYS, NOTE_MAX, offSummary, pastTimeOff, shortHours, timeOffOf, upcomingTimeOff,
 } from "../timeOff.ts";
 
 // 2026-11-10 is a Tuesday.
@@ -91,6 +91,16 @@ test("all day wins over busy hours on the same day", () => {
 test("blocksOn lists a day's blocks in time order", () => {
   const list = [block({ id: "pm", from: "13:00", to: "17:00" }), block({ id: "am", from: "08:00", to: "10:00" }), block({ id: "x", start: "2026-11-20", end: "2026-11-20" })];
   assert.deepEqual(blocksOn(list, "2026-11-13").map(b => b.id), ["am", "pm"]);
+});
+
+test("offSummary: what's off today, then how many are coming up", () => {
+  const weekly = block({ id: "w", start: "2026-11-01", end: null, weekdays: [2], from: "17:30", to: "19:00" }); // Tuesdays
+  const later = block({ id: "l", start: "2026-12-06", end: "2026-12-06" });
+  assert.equal(offSummary([weekly, later], TODAY), "Off today 5:30 PM – 7:00 PM · 2 coming up");
+  assert.equal(offSummary([later], TODAY), "1 coming up");
+  assert.equal(offSummary([weekly, block({ id: "a", start: TODAY, end: TODAY })], TODAY), "Off all day today · 2 coming up");
+  const morning = block({ id: "m", start: TODAY, end: TODAY, from: "08:00", to: "10:00" });
+  assert.equal(offSummary([weekly, morning], TODAY), "Off today 8:00 AM – 10:00 AM, 5:30 PM – 7:00 PM · 2 coming up");
 });
 
 test("hour labels, long and short", () => {

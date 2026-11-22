@@ -151,6 +151,20 @@ export function upcomingTimeOff(list: TimeOff[], today: string): TimeOff[] {
   return list.filter(t => t.end === null || t.end >= today).sort(byStart);
 }
 
+// One line for a cleaner while the owner's time-off list is folded up:
+// "Off today 7:00 AM – 2:00 PM · 7 coming up" / "3 coming up".
+export function offSummary(upcoming: TimeOff[], today: string): string {
+  const todays = blocksOn(upcoming, today);
+  const parts: string[] = [];
+  if (todays.some(isAllDay)) parts.push("Off all day today");
+  else if (todays.length) {
+    const byHour = [...todays].sort((a, b) => minutesOf(a.from as string) - minutesOf(b.from as string));
+    parts.push(`Off today ${byHour.map(hoursLabel).join(", ")}`);
+  }
+  parts.push(`${upcoming.length} coming up`);
+  return parts.join(" · ");
+}
+
 // Blocks that ended before today: dropped from the record whenever the
 // cleaner removes one, so the list doesn't grow forever.
 export function pastTimeOff(list: TimeOff[], today: string): TimeOff[] {
