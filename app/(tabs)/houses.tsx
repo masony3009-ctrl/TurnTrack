@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { tapSelect, tapSuccess } from "../../components/haptics";
 import { HouseSheet } from "../../components/HouseSheet";
+import { deletePhotos } from "../../components/notePhotoStore";
 import { StatementsSheet } from "../../components/StatementsSheet";
 import { useProfile } from "../../components/ProfileProvider";
 import { ActionSheet, EmptyState, ErrorState, IconButton, ScreenHeader, SectionHeader } from "../../components/ui";
@@ -160,6 +161,8 @@ export default function HousesScreen() {
                 const snap = await tx.get(ref);
                 tx.set(ref, { items: removeFromRegistry(snap.data()?.items, house.name), updatedAt: Date.now() }, { merge: true });
               });
+              // Its note photos go with it; nothing else points at them.
+              if (house.notePhotos?.length) deletePhotos(house.notePhotos);
               tapSuccess();
               setEditing(null);
             } catch (e) {

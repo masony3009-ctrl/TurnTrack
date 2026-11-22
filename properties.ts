@@ -1,3 +1,5 @@
+import { photoIdsOf } from "./notePhotos.ts";
+
 // The house registry at settings/properties. It is the one place a street
 // address or a door code is written down; the Apps Script, the Airbnb sync and
 // the app all read it, so changing a code here changes it everywhere at once
@@ -36,6 +38,11 @@ export type Property = {
   // Anything the crew should know about the house: parking, trash day, where
   // the linens are, the alarm. Shown on every cleaning there.
   notes?: string;
+  // Photos that go with the notes (ids in /photos, see notePhotos.ts).
+  notePhotos?: string[];
+  // A link to one video walking through the house, so the crew can see how
+  // it should look without asking. Opens in YouTube, Google Drive, etc.
+  walkthroughUrl?: string;
   // "HH:MM" 24-hour: when guests have to be out, and when the next ones can
   // come in. Used to tell the crew how long they have on a turnover.
   checkOutTime?: string;
@@ -119,9 +126,37 @@ export function parseProperties(raw: unknown): Property[] {
       checklist: houseSteps(v.checklist),
       forwardsFrom: typeof v.forwardsFrom === "string" && v.forwardsFrom.trim() ? v.forwardsFrom.trim() : undefined,
       notes: typeof v.notes === "string" && v.notes.trim() ? v.notes.trim() : undefined,
+      notePhotos: photoIdsOf(v.notePhotos).length ? photoIdsOf(v.notePhotos) : undefined,
+      walkthroughUrl: videoLink(v.walkthroughUrl),
       checkOutTime: clockTime(v.checkOutTime),
       checkInTime: clockTime(v.checkInTime),
     }));
+}
+
+// A web link the crew can open: http or https, no spaces. A link pasted
+// without "https://" ("youtu.be/abc") gets it added. Anything else is no link.
+export function videoLink(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  let t = raw.trim();
+  if (!t || /\s/.test(t)) return undefined;
+  if (!/^https?:\/\//i.test(t)) {
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+(\/|$)/i.test(t)) return undefined;
+    t = `https://${t}`;
+  }
+  return /^https?:\/\/[^/?#]+\.[^/?#]+/i.test(t) ? t : undefined;
+}
+
+// Where a video link opens, for the button under it: "YouTube", "Google Drive".
+// Null for any other site.
+export function videoSite(url: string | null | undefined): string | null {
+  const host = String(url || "").replace(/^https?:\/\//i, "").split(/[/?#]/)[0].toLowerCase().replace(/^www\.|^m\./, "");
+  if (host === "youtu.be" || host.endsWith("youtube.com")) return "YouTube";
+  if (host === "drive.google.com") return "Google Drive";
+  if (host === "photos.google.com" || host === "photos.app.goo.gl") return "Google Photos";
+  if (host.endsWith("icloud.com") || host === "share.icloud.com") return "iCloud";
+  if (host.endsWith("vimeo.com")) return "Vimeo";
+  if (host.endsWith("dropbox.com")) return "Dropbox";
+  return null;
 }
 
 // "16:00" stays; anything else is no time.

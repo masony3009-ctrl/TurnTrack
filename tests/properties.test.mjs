@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { accessCodes, aliasesToLink, findProperty, houseKey, parseProperties, patchRegistry, removeFromRegistry, streetOf, tidyAddress } from "../properties.ts";
+import { accessCodes, aliasesToLink, findProperty, houseKey, parseProperties, patchRegistry, removeFromRegistry, streetOf, tidyAddress, videoLink, videoSite } from "../properties.ts";
 
 test("parseProperties reads price, cleaner pay and billing start, ignoring junk", () => {
   const [a, b] = parseProperties([
@@ -145,4 +145,37 @@ test("removeFromRegistry drops only that house", () => {
 test("tidyAddress drops a trailing United States and doubled spaces", () => {
   assert.equal(tidyAddress("12 Sample Rd Queen Creek, AZ  85142 United States"), "12 Sample Rd Queen Creek, AZ 85142");
   assert.equal(tidyAddress("12 Sample Rd, Mesa, AZ 85201, United States"), "12 Sample Rd, Mesa, AZ 85201");
+});
+
+test("videoLink accepts web links, adds https:// when missing, rejects the rest", () => {
+  assert.equal(videoLink(" https://youtu.be/abc123 "), "https://youtu.be/abc123");
+  assert.equal(videoLink("youtu.be/abc123"), "https://youtu.be/abc123");
+  assert.equal(videoLink("http://drive.google.com/file/d/x/view"), "http://drive.google.com/file/d/x/view");
+  assert.equal(videoLink("not a link"), undefined);
+  assert.equal(videoLink("javascript:alert(1)"), undefined);
+  assert.equal(videoLink("https://localhost"), undefined);
+  assert.equal(videoLink(""), undefined);
+  assert.equal(videoLink(42), undefined);
+});
+
+test("videoSite names the common places a video lives", () => {
+  assert.equal(videoSite("https://youtu.be/abc"), "YouTube");
+  assert.equal(videoSite("https://www.youtube.com/watch?v=abc"), "YouTube");
+  assert.equal(videoSite("https://m.youtube.com/shorts/abc"), "YouTube");
+  assert.equal(videoSite("https://drive.google.com/file/d/x/view"), "Google Drive");
+  assert.equal(videoSite("https://photos.app.goo.gl/x"), "Google Photos");
+  assert.equal(videoSite("https://www.icloud.com/photos/#x"), "iCloud");
+  assert.equal(videoSite("https://example.com/v.mp4"), null);
+  assert.equal(videoSite(null), null);
+});
+
+test("parseProperties reads the walkthrough link and note photos", () => {
+  const [a, b] = parseProperties([
+    { name: "Palm", address: "1 Palm Rd", walkthroughUrl: "youtu.be/abc", notePhotos: ["photoAAA111", "photoAAA111", 5] },
+    { name: "Mesa", address: "2 Mesa Rd", walkthroughUrl: "nope", notePhotos: [] },
+  ]);
+  assert.equal(a.walkthroughUrl, "https://youtu.be/abc");
+  assert.deepEqual(a.notePhotos, ["photoAAA111"]);
+  assert.equal(b.walkthroughUrl, undefined);
+  assert.equal(b.notePhotos, undefined);
 });

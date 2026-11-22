@@ -10,6 +10,8 @@ import { EndTimeSheet } from "../components/EndTimeSheet";
 import { addToCalendar } from "../components/calendar";
 import { tapImpact, tapSelect, tapSuccess, tapWarning } from "../components/haptics";
 import { openInMaps } from "../components/maps";
+import { deletePhotos } from "../components/notePhotoStore";
+import { PhotoGrid } from "../components/NotePhotos";
 import { availabilityDetail, availabilityFor, availabilityTone, availabilityWarning, bookingsOf } from "../availability";
 import { cleaningEvent } from "../calendarEvent";
 import { useProfile } from "../components/ProfileProvider";
@@ -34,7 +36,7 @@ import { cleanerPayFor, flatPayDue, formatClockTime, formatDollars, formatDurati
 import { useProperties } from "../components/useProperties";
 import { isDeepClean, jobPrice } from "../money";
 import { addToCrew, crewLabel, crewOf, isOnCrew, removeFromCrew, type CrewChanges } from "../crew";
-import { accessCodes, findProperty, houseKey, type AccessCode } from "../properties";
+import { accessCodes, findProperty, houseKey, videoSite, type AccessCode } from "../properties";
 import { houseLabel } from "../schedule";
 import { isLongSession, mergeSummary, otherRunningJob, sessionEntryId, startCheck, waitBriefly } from "../session";
 import { supplyList } from "../supplies";
@@ -849,6 +851,7 @@ export default function JobDetail() {
           onPress: async () => {
             try {
               await deleteDoc(doc(db, "jobs", job.id));
+              if (job.notePhotos?.length) deletePhotos(job.notePhotos);
               tapWarning();
               goBack();
             } catch (e) {
@@ -1282,7 +1285,7 @@ export default function JobDetail() {
           </Card>
         )}
 
-        {job.notes ? (
+        {job.notes || job.notePhotos?.length ? (
           <Card>
             <View style={styles.cardHeaderRow}>
               <Text style={type.section}>{job.source === "website" ? "Request details" : "Notes"}</Text>
@@ -1292,7 +1295,8 @@ export default function JobDetail() {
                 </TouchableOpacity>
               ) : null}
             </View>
-            <Text style={styles.notesText}>{job.notes}</Text>
+            {job.notes ? <Text style={styles.notesText}>{job.notes}</Text> : null}
+            <PhotoGrid ids={job.notePhotos || []} />
           </Card>
         ) : null}
 
@@ -1345,7 +1349,7 @@ export default function JobDetail() {
             <InfoRow
               icon="options-outline"
               value="Edit details"
-              sub={jobSeries ? `${repeatLabel(jobSeries.every)}${jobSeries.until ? " (stopped)" : ""} · kind, house, notes` : "Kind of cleaning, same-day, house, notes, repeats"}
+              sub={jobSeries ? `${repeatLabel(jobSeries.every)}${jobSeries.until ? " (stopped)" : ""} · kind, house, notes` : "Kind of cleaning, same-day, house, notes, photos, repeats"}
               trailing="chevron-forward"
               onPress={() => setShowEdit(true)}
               label="Edit the cleaning's details"
@@ -1354,10 +1358,28 @@ export default function JobDetail() {
           ) : null}
         </Card>
 
-        {property?.notes ? (
+        {property?.walkthroughUrl ? (
+          <Card onPress={() => openVideo(property.walkthroughUrl)}>
+            <View style={styles.videoRow}>
+              <View style={styles.videoIcon}>
+                <Ionicons name="play" size={22} color={colors.white} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.videoTitle}>Walkthrough video</Text>
+                <Text style={styles.videoSub}>
+                  How {property.short || "this house"} should look{videoSite(property.walkthroughUrl) ? ` · opens in ${videoSite(property.walkthroughUrl)}` : ""}
+                </Text>
+              </View>
+              <Ionicons name="open-outline" size={18} color={colors.tealDark} />
+            </View>
+          </Card>
+        ) : null}
+
+        {property?.notes || property?.notePhotos?.length ? (
           <Card>
             <Text style={type.section}>House notes</Text>
-            <Text style={styles.notesText}>{property.notes}</Text>
+            {property.notes ? <Text style={styles.notesText}>{property.notes}</Text> : null}
+            <PhotoGrid ids={property.notePhotos || []} />
           </Card>
         ) : null}
 
@@ -1534,6 +1556,15 @@ export default function JobDetail() {
 }
 
 // A line in the info card that only tells (nothing to tap).
+// Opens a house's walkthrough video in YouTube, Drive or the browser.
+function openVideo(url: string | undefined) {
+  if (!url) return;
+  Linking.openURL(url).catch((e: unknown) => {
+    console.warn("open video failed:", e);
+    Alert.alert("Couldn't open the video", "Ask the owner to check the link.");
+  });
+}
+
 function StaticRow({ icon, value, sub, divider }: {
   icon: keyof typeof Ionicons.glyphMap;
   value: string;
@@ -1610,6 +1641,10 @@ const styles = StyleSheet.create({
   contactRow: { flexDirection: "row", alignItems: "center", gap: 7, minHeight: 36 },
   contactLink: { fontSize: 14.5, fontWeight: "600", color: colors.tealDark },
   notesText: { fontSize: 14, color: colors.ink, lineHeight: 20, marginTop: 8 },
+  videoRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  videoIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.tealDark, alignItems: "center", justifyContent: "center", paddingLeft: 3 },
+  videoTitle: { fontSize: 15.5, fontWeight: "700", color: colors.ink },
+  videoSub: { fontSize: 13, color: colors.muted, marginTop: 2 },
   addressRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   addressIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.tealSoft, alignItems: "center", justifyContent: "center" },
   addressText: { fontSize: 16, fontWeight: "700", color: colors.ink, marginTop: 3 },

@@ -82,6 +82,8 @@ export type Job = {
   source?: string;
   contact?: { name?: string; phone?: string; email?: string } | null;
   notes?: string;
+  // Photos that go with the notes (ids in /photos, see notePhotos.ts).
+  notePhotos?: string[] | null;
   requestId?: number | null;
 };
 

@@ -4,6 +4,9 @@ import { collection, onSnapshot } from "firebase/firestore";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, PanResponder, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
 import { tapSelect } from "../../components/haptics";
+import { openInMaps } from "../../components/maps";
+import { OwnerEventSheet } from "../../components/OwnerEventSheet";
+import { useOwnerEvents } from "../../components/ownerEventsStore";
 import { useProfile } from "../../components/ProfileProvider";
 import { confirmRemoveTimeOff, TimeOffRow, TimeOffSheet } from "../../components/TimeOff";
 import { AssigneeRow, BrandButton, Card, ColorDot, ErrorState, IconButton, Pill, ScreenHeader, SheetModal } from "../../components/ui";
@@ -11,6 +14,7 @@ import { useProperties } from "../../components/useProperties";
 import { db } from "../../firebase";
 import { crewLabel, crewOf, isOnCrew } from "../../crew";
 import { formatTime } from "../../jobTime";
+import { eventsByDay, type OwnerEvent } from "../../ownerEvents";
 import {
   countsAsCleaning,
   countsByWeek,
@@ -36,6 +40,7 @@ import { Employee, Job } from "../../types";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 const CHIPS_PER_DAY = 3;
+const EVENTS_PER_DAY = 2;
 
 // Someone's time off on one day, as the grid shows it.
 type DayOff = { employee: Employee; blocks: TimeOff[] };
@@ -56,6 +61,11 @@ export default function CalendarScreen() {
   const [openDay, setOpenDay] = useState<string | null>(null);
   // The day the time-off form starts on; undefined = the form is closed.
   const [timeOffDay, setTimeOffDay] = useState<string | null | undefined>(undefined);
+  // The owner's meetings and other things that aren't cleanings.
+  const ownerEvents = useOwnerEvents(isOwner);
+  const eventsOnDay = useMemo(() => eventsByDay(ownerEvents || []), [ownerEvents]);
+  // The event form: which day it starts on, and the event when editing one.
+  const [eventEdit, setEventEdit] = useState<{ day: string; event: OwnerEvent | null } | null>(null);
   const chipsRef = useRef<ScrollView>(null);
   const chipX = useRef(new Map<string, number>());
 
@@ -166,6 +176,13 @@ export default function CalendarScreen() {
   }
 
   const dayJobs = openDay ? byDay.get(openDay) || [] : [];
+  const dayEvents = openDay ? eventsOnDay.get(openDay) || [] : [];
+  // From the day sheet, which has to finish closing before the form opens.
+  const openEvent = (day: string, event: OwnerEvent | null) => {
+    tapSelect();
+    setOpenDay(null);
+    setTimeout(() => setEventEdit({ day, event }), 450);
+  };
   const dayOff = openDay ? offOn(openDay) : [];
   const monthTotal = totals.done + totals.left;
   // Opens the time-off form on this day (today when null).
@@ -230,6 +247,7 @@ export default function CalendarScreen() {
                       isToday={key === today}
                       jobs={byDay.get(key) || []}
                       offs={offOn(key).map(offChip)}
+                      events={eventsOnDay.get(key) || []}
                       // Any day opens: a cleaner blocks it out, the owner adds a cleaning.
                       tappable
                       label={job => houseLabel(job, properties)}
@@ -256,6 +274,12 @@ export default function CalendarScreen() {
                 <ColorDot color={colors.gold} />
                 <Text style={styles.legendText}>Same-day</Text>
               </View>
+              {ownerEvents?.length ? (
+                <View style={styles.legendItem}>
+                  <View style={styles.legendEvent} />
+                  <Text style={styles.legendText}>Meetings & other</Text>
+                </View>
+              ) : null}
               {timeOffPeople.length > 0 ? (
                 <>
                   <View style={styles.legendItem}>
@@ -332,6 +356,38 @@ export default function CalendarScreen() {
             style={{ marginBottom: 12 }}
           />
         ) : null}
+        {isOwner && openDay ? (
+          <BrandButton
+            label="Add a meeting or other event"
+            icon="calendar-outline"
+            variant="outline"
+            compact
+            onPress={() => openEvent(openDay, null)}
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
+        {dayEvents.map(ev => (
+          <Card key={ev.id} accent={colors.ink} onPress={() => openDay && openEvent(openDay, ev)}>
+            <View style={styles.pillRow}>
+              <Pill label={formatTime(ev.time) || "No set time"} tone="neutral" icon="time-outline" />
+              <Pill label="Not a cleaning" tone="neutral" icon="calendar-outline" />
+            </View>
+            <Text style={styles.sheetHouse}>{ev.title}</Text>
+            {ev.place ? (
+              <TouchableOpacity
+                style={styles.eventPlace}
+                onPress={() => ev.place && openInMaps(ev.place)}
+                hitSlop={6}
+                accessibilityRole="link"
+                accessibilityLabel={`Directions to ${ev.place}`}
+              >
+                <Ionicons name="location-outline" size={15} color={colors.tealDark} />
+                <Text style={styles.eventPlaceText} numberOfLines={2}>{ev.place}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {ev.note ? <Text style={styles.eventNote}>{ev.note}</Text> : null}
+          </Card>
+        ))}
         {dayJobs.length === 0 ? (
           <Text style={styles.emptyDay}>No cleanings this day.</Text>
         ) : (
@@ -363,6 +419,15 @@ export default function CalendarScreen() {
           })
         )}
       </SheetModal>
+
+      {isOwner ? (
+        <OwnerEventSheet
+          visible={!!eventEdit}
+          day={eventEdit?.day || today}
+          event={eventEdit?.event || null}
+          onClose={() => setEventEdit(null)}
+        />
+      ) : null}
 
       {self ? (
         <TimeOffSheet
@@ -433,26 +498,29 @@ function TeamTimeOff({ people, today }: { people: Employee[]; today: string }) {
 
 type DayCellOff = { id: string; allDay: boolean; who: { initial: string; color: string } | null; text: string };
 
-function DayCell({ dayKey, inMonth, isToday, jobs, offs, tappable, label, colorFor, onPress }: {
+function DayCell({ dayKey, inMonth, isToday, jobs, offs, events, tappable, label, colorFor, onPress }: {
   dayKey: string;
   inMonth: boolean;
   isToday: boolean;
   jobs: Job[];
   // Who can't work this day, as dashed chips under the cleanings.
   offs: DayCellOff[];
+  // The owner's meetings and such, as outlined chips after the cleanings.
+  events: OwnerEvent[];
   // Open even with nothing on it.
   tappable: boolean;
   label: (job: Job) => string;
   colorFor: (job: Job) => string;
   onPress: () => void;
 }) {
-  const extra = jobs.length - CHIPS_PER_DAY;
+  const shownEvents = events.slice(0, EVENTS_PER_DAY);
+  const extra = Math.max(0, jobs.length - CHIPS_PER_DAY) + events.length - shownEvents.length;
   return (
     <TouchableOpacity
       style={[styles.cell, !inMonth && styles.cellOut]}
       onPress={onPress}
       activeOpacity={0.6}
-      disabled={!tappable && jobs.length === 0 && offs.length === 0}
+      disabled={!tappable && jobs.length === 0 && offs.length === 0 && events.length === 0}
     >
       <View style={[styles.dayNum, isToday && styles.dayNumToday]}>
         <Text style={[styles.dayNumText, !inMonth && styles.dayNumOut, isToday && styles.dayNumTodayText]}>{Number(dayKey.slice(8))}</Text>
@@ -480,6 +548,11 @@ function DayCell({ dayKey, inMonth, isToday, jobs, offs, tappable, label, colorF
           </View>
         );
       })}
+      {shownEvents.map(ev => (
+        <View key={ev.id} style={[styles.chip, styles.chipEvent]}>
+          <Text style={[styles.chipText, { color: colors.ink }]} numberOfLines={1} ellipsizeMode="tail">{ev.title}</Text>
+        </View>
+      ))}
       {extra > 0 ? <Text style={styles.more}>+{extra} more</Text> : null}
       {offs.map(off => {
         const color = timeOffColor(off.allDay);
@@ -578,6 +651,11 @@ const styles = StyleSheet.create({
   legendText: { fontSize: 12, fontWeight: "600", color: colors.muted },
   legendOff: { width: 14, height: 10, borderRadius: 3, borderWidth: 1.5, borderStyle: "dashed", borderColor: colors.muted },
   chipOff: { borderWidth: 1.5, borderStyle: "dashed" },
+  chipEvent: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.ink },
+  legendEvent: { width: 14, height: 10, borderRadius: 3, borderWidth: 1, borderColor: colors.ink, backgroundColor: colors.card },
+  eventPlace: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4, minHeight: 32 },
+  eventPlaceText: { flex: 1, fontSize: 13.5, fontWeight: "600", color: colors.tealDark },
+  eventNote: { fontSize: 13.5, color: colors.ink, lineHeight: 19, marginTop: 4 },
   offCard: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, paddingBottom: 12, ...shadow.card },
   offTip: { fontSize: 12, color: colors.faint, textAlign: "center", marginTop: 8 },
   dayOff: { backgroundColor: colors.bg, borderRadius: radius.md, padding: 12, marginBottom: 12, gap: 6 },

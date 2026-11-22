@@ -1,13 +1,16 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Clipboard from "expo-clipboard";
 import { useEffect, useState } from "react";
-import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { parsePrice, type Client } from "../money";
-import { aliasesToLink, type Property, type RegistryChanges } from "../properties";
+import { MAX_HOUSE_PHOTOS } from "../notePhotos";
+import { aliasesToLink, videoLink, videoSite, type Property, type RegistryChanges } from "../properties";
 import { DEFAULT_CLEANER_PAY, formatDollars } from "../payroll";
 import { colors, radius } from "../theme";
 import { formatShortDate, todayKey } from "../turnover";
 import { parseChecklistText } from "../types";
 import { tapSelect } from "./haptics";
+import { NotePhotosEditor } from "./NotePhotos";
 import { TimeChips } from "./TimeChips";
 import { BrandButton, DatePickerField, FormInput, SheetModal } from "./ui";
 
@@ -28,6 +31,7 @@ type Form = {
   steps: string;
   forwardsFrom: string;
   notes: string;
+  video: string;
   checkOutTime: string | null;
   checkInTime: string | null;
 };
@@ -54,6 +58,7 @@ function formOf(house: Property | null): Form {
     steps: (house?.checklist || []).join("\n"),
     forwardsFrom: house?.forwardsFrom || "",
     notes: house?.notes || "",
+    video: house?.walkthroughUrl || "",
     checkOutTime: house?.checkOutTime || null,
     checkInTime: house?.checkInTime || null,
   };
@@ -143,6 +148,11 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave, onD
       Alert.alert("Check the email", "Enter the one address the host forwards from, like host@example.com.");
       return;
     }
+    const video = form.video.trim() ? videoLink(form.video) : undefined;
+    if (form.video.trim() && !video) {
+      Alert.alert("Check the video link", "Paste the whole share link, like https://youtu.be/… or https://drive.google.com/….");
+      return;
+    }
     const changes: RegistryChanges = {
       short: form.short.trim() || null,
       price,
@@ -159,6 +169,7 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave, onD
       checklist: steps.length ? steps : null,
       forwardsFrom: forwardsFrom || null,
       notes: form.notes.trim() || null,
+      walkthroughUrl: video || null,
       checkOutTime: form.checkOutTime,
       checkInTime: form.checkInTime,
     };
@@ -166,6 +177,22 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave, onD
     if (!adding && house && name !== house.name) changes.name = name;
     const base: Property = house || { name, address: form.address.trim(), aliases: [], bedrooms: 0, bathrooms: 0 };
     onSave(base.name, changes, aliasesToLink(base, linked.flatMap(c => c.jobs)));
+  };
+
+  // The share link the owner just copied in YouTube or Drive.
+  const pasteVideo = async () => {
+    tapSelect();
+    const link = videoLink(await Clipboard.getStringAsync().catch(() => ""));
+    if (!link) {
+      Alert.alert("No link copied", "In YouTube or Google Drive, tap Share, then Copy link. Then come back and tap Paste link.");
+      return;
+    }
+    setForm(prev => ({ ...prev, video: link }));
+  };
+  const videoNow = videoLink(form.video);
+  const watchVideo = () => {
+    if (!videoNow) return;
+    Linking.openURL(videoNow).catch(() => Alert.alert("Couldn't open the video", "Check the link, then try again."));
   };
 
   const shown = showAll ? clients : clients.slice(0, CLIENTS_SHOWN);
@@ -230,12 +257,47 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave, onD
       <FormInput label="Supply closet" placeholder="Not set" value={form.supplyCode} onChangeText={set("supplyCode")} autoCapitalize="none" />
       <Text style={styles.group}>For the crew</Text>
       <FormInput
+        label="Walkthrough video"
+        placeholder="Paste a YouTube or Google Drive link"
+        value={form.video}
+        onChangeText={set("video")}
+        keyboardType="url"
+        autoCapitalize="none"
+      />
+      <View style={styles.videoActions}>
+        <TouchableOpacity style={styles.videoAction} onPress={pasteVideo} hitSlop={6} accessibilityRole="button">
+          <Ionicons name="clipboard-outline" size={16} color={colors.tealDark} />
+          <Text style={styles.videoActionText}>Paste link</Text>
+        </TouchableOpacity>
+        {videoNow ? (
+          <TouchableOpacity style={styles.videoAction} onPress={watchVideo} hitSlop={6} accessibilityRole="button">
+            <Ionicons name="play-circle-outline" size={17} color={colors.tealDark} />
+            <Text style={styles.videoActionText}>Watch{videoSite(videoNow) ? ` in ${videoSite(videoNow)}` : ""}</Text>
+          </TouchableOpacity>
+        ) : null}
+        {form.video ? (
+          <TouchableOpacity style={styles.videoAction} onPress={() => setForm(prev => ({ ...prev, video: "" }))} hitSlop={6} accessibilityRole="button">
+            <Ionicons name="close-circle-outline" size={16} color={colors.muted} />
+            <Text style={[styles.videoActionText, { color: colors.muted }]}>Clear</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+      <Text style={styles.hint}>
+        One video for the house, so the crew sees how it should look without asking. Film it on your phone, upload it to YouTube as Unlisted
+        (or to Google Drive, shared with anyone who has the link), copy the share link, then tap Paste link and Save.
+      </Text>
+      <FormInput
         label="House notes"
         placeholder={"Parking, trash day, where the linens are, the alarm"}
         value={form.notes}
         onChangeText={set("notes")}
         multiline
       />
+      {house ? (
+        <NotePhotosEditor owner={{ kind: "house", name: house.name, max: MAX_HOUSE_PHOTOS }} ids={house.notePhotos || []} />
+      ) : (
+        <Text style={styles.hint}>Save the house first, then you can add photos to its notes.</Text>
+      )}
       <TimeChips label="Guests check out by" value={form.checkOutTime} onChange={t => setForm(prev => ({ ...prev, checkOutTime: t }))} choices={CHECKOUT_TIMES} noneLabel="Not set" />
       <TimeChips label="Next guests check in at" value={form.checkInTime} onChange={t => setForm(prev => ({ ...prev, checkInTime: t }))} choices={CHECKIN_TIMES} noneLabel="Not set" />
       <Text style={styles.group}>Checklist</Text>
@@ -313,6 +375,9 @@ function ClientRow({ client, on, onPress }: { client: Client; on: boolean; onPre
 
 const styles = StyleSheet.create({
   deleteLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44, marginTop: 6 },
+  videoActions: { flexDirection: "row", flexWrap: "wrap", gap: 18, marginTop: -4, marginBottom: 8 },
+  videoAction: { flexDirection: "row", alignItems: "center", gap: 5, minHeight: 36 },
+  videoActionText: { fontSize: 13.5, fontWeight: "700", color: colors.tealDark },
   deleteText: { fontSize: 13.5, fontWeight: "600", color: colors.danger },
   pair: { flexDirection: "row", gap: 10 },
   group: { fontSize: 12.5, fontWeight: "700", color: colors.ink, marginTop: 4, marginBottom: 8 },

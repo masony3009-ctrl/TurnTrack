@@ -2,11 +2,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { canEditDate } from "../jobTime";
+import { MAX_JOB_PHOTOS } from "../notePhotos";
 import { findProperty, type Property } from "../properties";
 import { repeatLabel, REPEATS, type Repeat, type Series } from "../recurring";
 import { colors, radius } from "../theme";
 import { JOB_TYPES, type Job } from "../types";
 import { tapSelect } from "./haptics";
+import { NotePhotosEditor } from "./NotePhotos";
 import { BrandButton, FormInput, SheetModal } from "./ui";
 
 export type JobDetails = {
@@ -143,6 +145,8 @@ export function EditJobSheet({ visible, job, properties, series, busy, onClose, 
         onChangeText={t => setForm(prev => ({ ...prev, notes: t }))}
         multiline
       />
+      <Text style={styles.label}>Photos for the crew (optional)</Text>
+      <NotePhotosEditor owner={{ kind: "job", id: job.id, max: MAX_JOB_PHOTOS }} ids={job.notePhotos || []} />
       <BrandButton label={busy ? "Saving…" : "Save"} icon="checkmark" onPress={save} disabled={busy || !dirty} />
     </SheetModal>
   );

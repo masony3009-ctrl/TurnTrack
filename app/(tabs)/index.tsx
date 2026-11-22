@@ -20,6 +20,7 @@ import { cardTitle, matchesSearch, weeksOf } from "../../jobList";
 import { fillPlan, newSeriesId, REPEATS, seriesJobId, type Repeat, type Series } from "../../recurring";
 import { addSeries, fillRepeats, skipDay, useRecurring } from "../../components/recurringStore";
 import { openInMaps } from "../../components/maps";
+import { deletePhotos } from "../../components/notePhotoStore";
 import { availabilityColors, cleanerColor, colors, radius, unassignedColor } from "../../theme";
 import { daysFromToday, daysLeftInWeek, formatShortDate, GROUP_ORDER, GROUP_TITLES, hasSameDayTurnover, isJobVisible, jobDateKey, jobGroup, JobGroup, relativeDayLabel, sortByDate, todayKey } from "../../turnover";
 import { checklistProgress, currentRoom, DEFAULT_CHECKLIST, legacyItems, templateFromDoc, templateStats } from "../../checklist";
@@ -241,6 +242,7 @@ export default function JobsScreen() {
               Alert.alert("Couldn't delete", "The job is still there. Check your connection and try again.");
               return;
             }
+            if (job.notePhotos?.length) deletePhotos(job.notePhotos);
             // A repeat's cleaning deleted by hand stays gone.
             if (job.seriesId && job.seriesDate) {
               skipDay(job.seriesId, job.seriesDate).catch(e => console.warn("skipping repeat day failed:", e));
