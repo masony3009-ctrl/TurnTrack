@@ -379,63 +379,54 @@ export default function CalendarScreen() {
   );
 }
 
-// The owner's look at who has time off coming up, cleaner by cleaner. Folded
-// up to one line per cleaner until the owner opens it; the grid above
-// already marks every day someone is off.
+// The owner's look at who has time off coming up, cleaner by cleaner. Each
+// cleaner is folded up to one line until the owner taps their name; the grid
+// above already marks every day someone is off.
 function TeamTimeOff({ people, today }: { people: Employee[]; today: string }) {
-  const [open, setOpen] = useState(false);
+  const [openIds, setOpenIds] = useState<Set<string>>(new Set());
   const withTime = people.map(e => ({ e, blocks: upcomingTimeOff(timeOffOf(e), today) })).filter(p => p.blocks.length > 0);
-  const toggle = () => { tapSelect(); setOpen(o => !o); };
-  if (!withTime.length) {
-    return (
-      <>
-        <Text style={styles.sectionTitle}>Time off</Text>
-        <Text style={styles.sectionHint}>Nobody has blocked out time. Cleaners add it from their Calendar tab.</Text>
-      </>
-    );
-  }
+  const toggle = (id: string) => {
+    tapSelect();
+    setOpenIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   return (
     <>
-      <TouchableOpacity
-        style={styles.sectionToggle}
-        onPress={toggle}
-        hitSlop={{ top: 12, bottom: 8 }}
-        accessibilityRole="button"
-        accessibilityState={{ expanded: open }}
-        accessibilityLabel={open ? "Time off, hide the list" : "Time off, show the list"}
-      >
-        <Text style={styles.sectionToggleTitle}>Time off</Text>
-        <View style={styles.toggleLink}>
-          <Text style={styles.toggleText}>{open ? "Hide" : "Show all"}</Text>
-          <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={colors.tealDark} />
-        </View>
-      </TouchableOpacity>
-      <Text style={styles.sectionHint}>{"Days and hours your cleaners can't work."}</Text>
-      {!open ? (
-        <TouchableOpacity style={styles.offCard} onPress={toggle} accessibilityRole="button" accessibilityLabel="Show all time off">
-          {withTime.map(({ e, blocks }) => (
-            <View key={e.id} style={styles.offSummaryRow}>
-              <ColorDot color={cleanerColor(e)} />
-              <Text style={styles.offSummaryText} numberOfLines={2}>
-                <Text style={styles.dayOffName}>{e.name}</Text>
-                {`  ${offSummary(blocks, today)}`}
-              </Text>
-            </View>
-          ))}
-        </TouchableOpacity>
-      ) : (
+      <Text style={styles.sectionTitle}>Time off</Text>
+      <Text style={styles.sectionHint}>
+        {withTime.length ? "Days and hours your cleaners can't work. Tap a name to see the list." : "Nobody has blocked out time. Cleaners add it from their Calendar tab."}
+      </Text>
+      {withTime.length ? (
         <View style={styles.offCard}>
-          {withTime.map(({ e, blocks }) => (
-            <View key={e.id} style={styles.offPerson}>
-              <View style={styles.offPersonName}>
-                <ColorDot color={cleanerColor(e)} />
-                <Text style={styles.dayOffName}>{e.name}</Text>
+          {withTime.map(({ e, blocks }, i) => {
+            const open = openIds.has(e.id);
+            const summary = offSummary(blocks, today);
+            return (
+              <View key={e.id} style={i > 0 ? styles.offPersonNext : null}>
+                <TouchableOpacity
+                  style={styles.offPersonHead}
+                  onPress={() => toggle(e.id)}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: open }}
+                  accessibilityLabel={`${e.name}'s time off. ${summary}`}
+                >
+                  <ColorDot color={cleanerColor(e)} />
+                  <View style={styles.offPersonText}>
+                    <Text style={styles.dayOffName}>{e.name}</Text>
+                    <Text style={styles.offSummaryText}>{summary}</Text>
+                  </View>
+                  <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} />
+                </TouchableOpacity>
+                {open ? blocks.map(block => <TimeOffRow key={block.id} block={block} today={today} onRemove={() => confirmRemoveTimeOff(e, block, true)} />) : null}
               </View>
-              {blocks.map(block => <TimeOffRow key={block.id} block={block} today={today} onRemove={() => confirmRemoveTimeOff(e, block, true)} />)}
-            </View>
-          ))}
+            );
+          })}
         </View>
-      )}
+      ) : null}
     </>
   );
 }
@@ -589,20 +580,16 @@ const styles = StyleSheet.create({
   chipOff: { borderWidth: 1.5, borderStyle: "dashed" },
   offCard: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, paddingBottom: 12, ...shadow.card },
   offTip: { fontSize: 12, color: colors.faint, textAlign: "center", marginTop: 8 },
-  offPerson: { paddingTop: 12 },
-  offPersonName: { flexDirection: "row", alignItems: "center", gap: 7 },
   dayOff: { backgroundColor: colors.bg, borderRadius: radius.md, padding: 12, marginBottom: 12, gap: 6 },
   dayOffTitle: { fontSize: 12, fontWeight: "700", color: colors.muted, letterSpacing: 0.3 },
   dayOffRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   dayOffText: { flex: 1, fontSize: 14, color: colors.ink },
   dayOffName: { fontSize: 14, fontWeight: "700", color: colors.ink },
   sectionTitle: { fontSize: 17, fontWeight: "700", color: colors.ink, marginTop: 24 },
-  sectionToggle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 24, gap: 12 },
-  sectionToggleTitle: { fontSize: 17, fontWeight: "700", color: colors.ink, flexShrink: 1 },
-  toggleLink: { flexDirection: "row", alignItems: "center", gap: 4 },
-  toggleText: { fontSize: 14, fontWeight: "700", color: colors.tealDark },
-  offSummaryRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingTop: 12 },
-  offSummaryText: { flex: 1, fontSize: 13.5, color: colors.muted, lineHeight: 19 },
+  offPersonNext: { borderTopWidth: 1, borderTopColor: colors.line, marginTop: 8 },
+  offPersonHead: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48, paddingTop: 10 },
+  offPersonText: { flex: 1, gap: 1 },
+  offSummaryText: { fontSize: 13, color: colors.muted, lineHeight: 18 },
   sectionHint: { fontSize: 12.5, color: colors.muted, marginTop: 3, marginBottom: 10 },
   weekCard: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingVertical: 4, ...shadow.card },
   weekRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 11, gap: 10 },
