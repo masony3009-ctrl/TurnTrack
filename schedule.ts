@@ -119,6 +119,14 @@ export function gridNames(labels: string[]): Map<string, string> {
   return out;
 }
 
+// What a pay entry is called in a list: the house's short name, never the
+// full street address. Entries added by hand keep the note the owner typed.
+export function entryLabel(entry: { jobAddress?: string | null; manual?: boolean }, properties: Property[]): string {
+  const text = String(entry.jobAddress || "").trim();
+  if (entry.manual || !text) return text || "Cleaning";
+  return houseLabel({ date: "", address: text }, properties);
+}
+
 export type WeekCount = { total: number; done: number };
 
 // Week start (Sunday key) -> cleanings dated that week and how many are done.

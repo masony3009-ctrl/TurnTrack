@@ -64,7 +64,7 @@ function ViewingAsBanner() {
       <Text style={styles.bannerText} numberOfLines={1}>
         Viewing as {state.employee.name.split(" ")[0]}
       </Text>
-      <TouchableOpacity style={styles.bannerBtn} onPress={() => viewAs(null)} hitSlop={6}>
+      <TouchableOpacity style={styles.bannerBtn} onPress={() => viewAs(null)} hitSlop={8} accessibilityRole="button">
         <Ionicons name="arrow-undo" size={14} color={colors.dark} />
         <Text style={styles.bannerBtnText}>Back to owner</Text>
       </TouchableOpacity>
@@ -162,7 +162,7 @@ const styles = StyleSheet.create({
   bannerText: { flex: 1, color: colors.white, fontSize: 13.5, fontWeight: "600" },
   bannerBtn: {
     flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: colors.white,
-    borderRadius: radius.pill, paddingVertical: 5, paddingHorizontal: 10,
+    borderRadius: radius.pill, paddingVertical: 7, paddingHorizontal: 10,
   },
   bannerBtnText: { color: colors.dark, fontSize: 12.5, fontWeight: "700" },
 });

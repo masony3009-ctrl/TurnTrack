@@ -28,7 +28,9 @@ export function PriceSheet({ visible, price, housePrice, billed, hostPaid, busy,
     if (!visible) return;
     setText(price ? String(price) : "");
     setPaid(hostPaid);
-  }, [visible, price, hostPaid]);
+    // Only when it opens: a live update mustn't wipe what is being typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
   const save = () => {
     const trimmed = text.trim();
@@ -41,7 +43,7 @@ export function PriceSheet({ visible, price, housePrice, billed, hostPaid, busy,
   };
 
   return (
-    <SheetModal visible={visible} title="Price" onClose={onClose}>
+    <SheetModal visible={visible} title="Price" onClose={onClose} dirty={text.trim() !== (price ? String(price) : "") || paid !== hostPaid}>
       <FormInput
         label="This cleaning ($)"
         placeholder={housePrice ? String(housePrice) : "e.g. 150"}
@@ -67,6 +69,7 @@ export function PriceSheet({ visible, price, housePrice, billed, hostPaid, busy,
         </TouchableOpacity>
       ) : null}
       <BrandButton label={busy ? "Saving…" : "Save"} icon="checkmark" onPress={save} disabled={busy} />
+      <BrandButton label="Cancel" variant="ghost" onPress={onClose} style={{ marginTop: 4 }} />
     </SheetModal>
   );
 }

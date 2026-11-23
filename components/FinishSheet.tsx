@@ -151,7 +151,7 @@ const styles = StyleSheet.create({
   supplies: { marginTop: 16 },
   supplyGrid: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
   supplyChip: {
-    minHeight: 38, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1,
+    minHeight: 44, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1,
     borderColor: colors.line, backgroundColor: colors.bg, justifyContent: "center",
   },
   supplyChipOn: { backgroundColor: colors.goldSoft, borderColor: colors.gold },

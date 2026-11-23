@@ -2,6 +2,7 @@ import { useRouter } from "expo-router";
 import { collection, doc, onSnapshot, runTransaction } from "firebase/firestore";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { groupOutbox, isOpenJob, loadByCleaner, openCounts, openRange, RANGE_LABELS, type OpenRange } from "../assign";
 import { addToCrew, isOnCrew, removeFromCrew, type CrewChanges } from "../crew";
 import { tapSelect, tapSuccess } from "../components/haptics";
@@ -15,7 +16,7 @@ import {
   assignmentDigestMessage, assignmentMessage, openJobsMessage, sendPushToCrew, sendPushToEmployee, unassignedMessage,
 } from "../notifications";
 import { countsAsCleaning, houseLabel } from "../schedule";
-import { availabilityColors, cleanerColor, colors, radius, textOn } from "../theme";
+import { availabilityColors, cleanerColor, colors, radius, textOn, type } from "../theme";
 import { availabilityFor, availabilityShort, availabilityTone, availabilityWarning, bookingsOf } from "../availability";
 import { formatDayHeading, hasSameDayTurnover, jobDateKey, sortByDate, todayKey } from "../turnover";
 import { Employee, Job } from "../types";
@@ -204,9 +205,11 @@ export default function AssignScreen() {
             onPress={() => { tapSelect(); setRange(r); }}
             accessibilityRole="tab"
             accessibilityState={{ selected: range === r }}
+            accessibilityLabel={`${RANGE_LABELS[r]}, ${counts[r]} need a cleaner`}
           >
             <Text style={[styles.rangeText, range === r && styles.rangeTextOn]}>{RANGE_LABELS[r]}</Text>
-            <Text style={[styles.rangeCount, range === r && styles.rangeTextOn, counts[r] > 0 && range !== r && { color: colors.goldDark }]}>{counts[r]}</Text>
+            {/* Not gold: gold means a same-day turnover. */}
+            <Text style={[styles.rangeCount, range === r && styles.rangeTextOn, counts[r] > 0 && range !== r && { color: colors.tealDark }]}>{counts[r]}</Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -225,7 +228,7 @@ export default function AssignScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 130 }}>
         {loadError && !jobs ? (
-          <ErrorState title="Couldn't load the cleanings" body={`Check your connection and try again. (${loadError})`} />
+          <ErrorState title="Couldn't load the cleanings" body={`Check your signal. It updates on its own. (${loadError})`} />
         ) : !jobs ? (
           <View style={styles.loading}>
             <ActivityIndicator color={colors.teal} />
@@ -251,7 +254,7 @@ export default function AssignScreen() {
                     <TouchableOpacity onPress={() => router.push({ pathname: "/job", params: { id: job.id } })} accessibilityRole="button" accessibilityHint="Opens the cleaning">
                       <View style={styles.jobTop}>
                         <Text style={styles.house} numberOfLines={1}>{houseLabel(job, properties)}</Text>
-                        {saving.has(job.id) ? <ActivityIndicator size="small" color={colors.teal} /> : null}
+                        {saving.has(job.id) ? <ActivityIndicator size="small" color={colors.teal} /> : <Ionicons name="chevron-forward" size={18} color={colors.faint} />}
                       </View>
                       <View style={styles.pillRow}>
                         {time ? <Pill label={time} tone="neutral" icon="time-outline" /> : null}
@@ -284,7 +287,7 @@ export default function AssignScreen() {
                             onPress={pick}
                             disabled={saving.has(job.id)}
                             accessibilityRole="checkbox"
-                            accessibilityState={{ checked: on }}
+                            accessibilityState={{ checked: on, disabled: saving.has(job.id) }}
                             accessibilityLabel={on
                               ? `${e.name} has this. Tap to take it back off them`
                               : `${e.name}, ${status || "free"}. Give this to them`}
@@ -320,7 +323,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
   rangeRow: { flexDirection: "row", gap: 8, marginBottom: 10 },
   rangeChip: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 42,
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44,
     borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card,
   },
   rangeChipOn: { backgroundColor: colors.dark, borderColor: colors.dark },
@@ -333,7 +336,7 @@ const styles = StyleSheet.create({
   loadText: { fontSize: 12.5, fontWeight: "700", color: colors.ink },
   loading: { alignItems: "center", paddingVertical: 48, gap: 10 },
   loadingText: { fontSize: 14, color: colors.muted },
-  dayHeading: { fontSize: 13, fontWeight: "800", color: colors.ink, marginTop: 8, marginBottom: 8 },
+  dayHeading: { ...type.section, marginTop: 10, marginBottom: 8, paddingHorizontal: 2 },
   jobTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   house: { flex: 1, fontSize: 16.5, fontWeight: "700", color: colors.ink },
   pillRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 },

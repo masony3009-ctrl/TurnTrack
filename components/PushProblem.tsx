@@ -63,7 +63,7 @@ export function PushProblemCard({ result, checking, onRetry }: {
       <Text style={styles.body} numberOfLines={5}>
         {denied
           ? "Notifications are off for TurnTrack. Turn them on to hear about cleanings."
-          : `Signing up for alerts failed: ${result.reason}`}
+          : `Couldn't sign this phone up for alerts. Check your signal and try again. (${result.reason})`}
       </Text>
       {denied ? (
         <BrandButton label="Open settings" icon="settings-outline" variant="outline" compact onPress={openSettings} style={styles.button} />

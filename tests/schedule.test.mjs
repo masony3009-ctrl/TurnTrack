@@ -4,6 +4,7 @@ import {
   addDaysToKey,
   countsAsCleaning,
   countsByWeek,
+  entryLabel,
   gridNames,
   houseLabel,
   monthGrid,
@@ -171,4 +172,13 @@ test("gridNames drops a first word that two or more houses share", () => {
   assert.equal(names.get("Pine"), "Pine");
   assert.equal(names.get("Pine Lodge"), "Pine Lodge");
   assert.equal(gridNames([]).size, 0);
+});
+
+test("entryLabel names a pay entry by its house, and keeps a hand-typed note", () => {
+  const houses = [{ name: "Palm Cottage listing", short: "Palm Cottage", address: "12 Example Palm Rd, Sampletown, AZ 85000", aliases: [] }];
+  assert.equal(entryLabel({ jobAddress: "12 Example Palm Rd, Sampletown, AZ 85000" }, houses), "Palm Cottage");
+  assert.equal(entryLabel({ jobAddress: "900 E Sample Oak Ave, Sampletown, AZ 85000" }, houses), "Sample Oak");
+  assert.equal(entryLabel({ jobAddress: "Turnover at Palm Cottage", manual: true }, houses), "Turnover at Palm Cottage");
+  assert.equal(entryLabel({ jobAddress: "", manual: true }, houses), "Cleaning");
+  assert.equal(entryLabel({}, houses), "Cleaning");
 });

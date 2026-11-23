@@ -24,6 +24,7 @@ import { nextGuestsLine, nextStay } from "../nextGuests";
 import { warnUnreached } from "../components/pushWarning";
 import { RoomChecklist } from "../components/RoomChecklist";
 import { alertSoon, AssigneeRow, Avatar, BottomBar, BrandButton, Card, ElapsedTimer, Pill, ProgressBar, ScreenHeader, SheetModal } from "../components/ui";
+import { formatPhone } from "../phone";
 import { addableRooms, addRoom, checkAll, checklistForJob, checklistProgress, findStep, ownsList, removeRoom, roomMinutes, setStep, stepKey, templateFromDoc, toggleStep, type ChecklistItem } from "../checklist";
 import { db } from "../firebase";
 import {
@@ -213,13 +214,18 @@ export default function JobDetail() {
   const progress = taskCount > 0 ? checkedCount / taskCount : 0;
   const allDone = taskCount > 0 && checkedCount === taskCount;
 
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current); }, []);
   const copyCode = async (c: AccessCode) => {
     try {
       await Clipboard.setStringAsync(c.code);
       tapSelect();
       setCopied(c.label);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(null), 2500);
     } catch (e) {
       console.warn("copy code failed:", e);
+      Alert.alert("Couldn't copy", "Read the code off the screen instead.");
     }
   };
 
@@ -1049,6 +1055,7 @@ export default function JobDetail() {
       items={checklist}
       canWork={canWork}
       closed={job.done && !running}
+      bulkTicked={!!job.checkedAtFinish}
       onToggle={toggleChecklistItem}
       roomsToAdd={roomsToAdd}
       onAddRoom={canAddRooms ? addRoomToJob : undefined}
@@ -1253,13 +1260,13 @@ export default function JobDetail() {
               Confirm once the details are set. Cleaners can&apos;t see it until then.
             </Text>
             <BrandButton label={busy ? "Confirming…" : "Confirm job"} icon="checkmark-circle" onPress={confirmRequest} disabled={busy} style={{ marginTop: 12 }} />
-            <TouchableOpacity style={styles.declineBtn} onPress={declineRequest} hitSlop={6}>
+            <TouchableOpacity style={styles.declineBtn} onPress={declineRequest} hitSlop={6} accessibilityRole="button">
               <Text style={styles.declineText}>Decline & remove</Text>
             </TouchableOpacity>
           </Card>
         )}
 
-        {sameDay && !job.cancelled && (
+        {sameDay && !job.cancelled && !job.done && (
           <View style={styles.sameDayBanner}>
             <Ionicons name="alert-circle" size={17} color={colors.goldDark} />
             <Text style={styles.sameDayBannerText}>{guestsLine ? `Same day. ${guestsLine}.` : "Same day: clean between checkout and check-in."}</Text>
@@ -1271,13 +1278,25 @@ export default function JobDetail() {
             <Text style={type.section}>Customer</Text>
             {contact.name ? <Text style={styles.contactName}>{contact.name}</Text> : null}
             {contact.phone ? (
-              <TouchableOpacity style={styles.contactRow} onPress={() => Linking.openURL(`tel:${contact.phone}`)} hitSlop={6}>
+              <TouchableOpacity
+                style={styles.contactRow}
+                onPress={() => Linking.openURL(`tel:${contact.phone}`)}
+                hitSlop={6}
+                accessibilityRole="link"
+                accessibilityLabel="Call the customer"
+              >
                 <Ionicons name="call-outline" size={16} color={colors.tealDark} />
-                <Text style={styles.contactLink}>{contact.phone}</Text>
+                <Text style={styles.contactLink}>{formatPhone(contact.phone)}</Text>
               </TouchableOpacity>
             ) : null}
             {isOwner && contact.email ? (
-              <TouchableOpacity style={styles.contactRow} onPress={() => Linking.openURL(`mailto:${contact.email}`)} hitSlop={6}>
+              <TouchableOpacity
+                style={styles.contactRow}
+                onPress={() => Linking.openURL(`mailto:${contact.email}`)}
+                hitSlop={6}
+                accessibilityRole="link"
+                accessibilityLabel="Email the customer"
+              >
                 <Ionicons name="mail-outline" size={16} color={colors.tealDark} />
                 <Text style={styles.contactLink}>{contact.email}</Text>
               </TouchableOpacity>
@@ -1290,7 +1309,7 @@ export default function JobDetail() {
             <View style={styles.cardHeaderRow}>
               <Text style={type.section}>{job.source === "website" ? "Request details" : "Notes"}</Text>
               {isOwner && !job.cancelled ? (
-                <TouchableOpacity onPress={() => setShowEdit(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit the notes">
+                <TouchableOpacity onPress={() => setShowEdit(true)} hitSlop={14} accessibilityRole="button" accessibilityLabel="Edit the notes">
                   <Text style={styles.changeLink}>Edit</Text>
                 </TouchableOpacity>
               ) : null}
@@ -1358,6 +1377,39 @@ export default function JobDetail() {
           ) : null}
         </Card>
 
+        {!isPending && codes.length > 0 && !(isOwner || isMine || viewingAs) && !job.done && (
+          <Text style={styles.codesLocked}>Codes show once this cleaning is yours.</Text>
+        )}
+        {!isPending && codes.length > 0 && (isOwner || isMine || viewingAs) && (
+          <Card>
+            <View style={styles.cardHeaderRow}>
+              <Text style={type.section}>Access codes</Text>
+              <Ionicons name="keypad-outline" size={18} color={colors.tealDark} />
+            </View>
+            <View style={styles.codeRow}>
+              {codes.map((c) => (
+                <TouchableOpacity
+                  key={c.label}
+                  style={[styles.codeChip, copied === c.label && styles.codeChipCopied]}
+                  onPress={() => copyCode(c)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${c.label} code ${c.code}, tap to copy`}
+                  hitSlop={4}
+                >
+                  <View style={styles.codeLabelRow}>
+                    <Text style={styles.codeLabel}>{c.label}</Text>
+                    {copied === c.label ? <Ionicons name="checkmark-circle" size={15} color={colors.tealDark} /> : null}
+                  </View>
+                  <Text style={styles.codeValue}>{c.code}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.codeHint, !!copied && styles.codeHintCopied]} accessibilityLiveRegion="polite">
+              {copied ? `${copied} code copied` : "Tap a code to copy it"}
+            </Text>
+          </Card>
+        )}
+
         {property?.walkthroughUrl ? (
           <Card onPress={() => openVideo(property.walkthroughUrl)}>
             <View style={styles.videoRow}>
@@ -1383,40 +1435,16 @@ export default function JobDetail() {
           </Card>
         ) : null}
 
-        {!isPending && codes.length > 0 && !(isOwner || isMine || viewingAs) && !job.done && (
-          <Text style={styles.codesLocked}>Codes show once this cleaning is yours.</Text>
-        )}
-        {!isPending && codes.length > 0 && (isOwner || isMine || viewingAs) && (
-          <Card>
-            <View style={styles.cardHeaderRow}>
-              <Text style={type.section}>Access codes</Text>
-              <Ionicons name="keypad-outline" size={18} color={colors.tealDark} />
-            </View>
-            <View style={styles.codeRow}>
-              {codes.map((c) => (
-                <TouchableOpacity
-                  key={c.label}
-                  style={styles.codeChip}
-                  onPress={() => copyCode(c)}
-                  accessibilityLabel={`${c.label} code ${c.code}, tap to copy`}
-                  hitSlop={4}
-                >
-                  <Text style={styles.codeLabel}>{c.label}</Text>
-                  <Text style={styles.codeValue}>{c.code}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={styles.codeHint}>
-              {copied ? `${copied} code copied` : "Tap to copy"}
-            </Text>
-          </Card>
-        )}
-
         {!isPending && <Card accent={assignedColor}>
           <View style={styles.cardHeaderRow}>
             <Text style={type.section}>{crewIds.length > 1 ? "Cleaners" : "Assigned cleaner"}</Text>
             {isOwner && !job.cancelled && (
-              <TouchableOpacity onPress={() => setShowAssign(true)} hitSlop={8}>
+              <TouchableOpacity
+                onPress={() => setShowAssign(true)}
+                hitSlop={14}
+                accessibilityRole="button"
+                accessibilityLabel={job.assignedToName ? "Change the cleaner" : "Assign a cleaner"}
+              >
                 <Text style={styles.changeLink}>{job.assignedToName ? "Change" : "Assign"}</Text>
               </TouchableOpacity>
             )}
@@ -1464,6 +1492,8 @@ export default function JobDetail() {
               <Text style={styles.timerHint}>
                 {viewingAs
                   ? "Read-only while viewing as a cleaner."
+                  : canWork && isOwner && !job.assignedTo
+                  ? "Assign a cleaner first, so the time is tracked to them."
                   : canWork
                   ? "Tap Start cleaning when you arrive."
                   : job.assignedToName
@@ -1512,11 +1542,12 @@ export default function JobDetail() {
           {renderChecklist()}
         </Card>}
 
-        {isOwner && !isPending && (
+        {/* A finished cleaning stays in the records: no cancel link under it. */}
+        {isOwner && !isPending && (job.cancelled || !job.done || running) && (
           job.cancelled ? (
             <BrandButton label="Restore this cleaning" icon="refresh" variant="outline" onPress={restoreCleaning} />
           ) : (
-            <TouchableOpacity style={styles.cancelLink} onPress={cancelCleaning} hitSlop={6}>
+            <TouchableOpacity style={styles.cancelLink} onPress={cancelCleaning} hitSlop={6} accessibilityRole="button">
               <Ionicons name="close-circle-outline" size={16} color={colors.danger} />
               <Text style={styles.cancelLinkText}>Cancel this cleaning</Text>
             </TouchableOpacity>
@@ -1540,6 +1571,8 @@ export default function JobDetail() {
               <BrandButton label="Take this job" icon="hand-right-outline" variant="outline" onPress={takeJob} disabled={busy} style={stackBar ? undefined : { flex: 1 }} />
               <BrandButton label={busy ? "Starting…" : "Take & start"} icon="play" onPress={startCleaning} disabled={busy} style={stackBar ? undefined : { flex: 1 }} />
             </View>
+          ) : isOwner && !job.assignedTo && !canTake ? (
+            <BrandButton label="Assign a cleaner" icon="person-add-outline" onPress={() => setShowAssign(true)} />
           ) : (
             <BrandButton
               label={busy ? "Starting…" : job.done ? "Start another session" : "Start cleaning"}
@@ -1638,7 +1671,7 @@ const styles = StyleSheet.create({
   declineBtn: { alignItems: "center", justifyContent: "center", minHeight: 44, marginTop: 2 },
   declineText: { color: colors.danger, fontSize: 13.5, fontWeight: "600" },
   contactName: { fontSize: 16, fontWeight: "700", color: colors.ink, marginTop: 8 },
-  contactRow: { flexDirection: "row", alignItems: "center", gap: 7, minHeight: 36 },
+  contactRow: { flexDirection: "row", alignItems: "center", gap: 7, minHeight: 44 },
   contactLink: { fontSize: 14.5, fontWeight: "600", color: colors.tealDark },
   notesText: { fontSize: 14, color: colors.ink, lineHeight: 20, marginTop: 8 },
   videoRow: { flexDirection: "row", alignItems: "center", gap: 12 },
@@ -1666,6 +1699,9 @@ const styles = StyleSheet.create({
   codeLabel: { fontSize: 11, fontWeight: "700", color: colors.tealDark, textTransform: "uppercase", letterSpacing: 0.6 },
   codeValue: { fontSize: 24, fontWeight: "800", color: colors.ink, marginTop: 2, fontVariant: ["tabular-nums"] },
   codeHint: { fontSize: 12, color: colors.muted, marginTop: 10 },
+  codeHintCopied: { color: colors.tealDark, fontWeight: "700" },
+  codeChipCopied: { borderColor: colors.teal },
+  codeLabelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 },
   cardHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   changeLink: { fontSize: 14, fontWeight: "700", color: colors.tealDark },
   timerBlock: { marginTop: 10, alignItems: "flex-start" },

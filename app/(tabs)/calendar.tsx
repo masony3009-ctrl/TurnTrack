@@ -42,6 +42,8 @@ import { Employee, Job } from "../../types";
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 const CHIPS_PER_DAY = 3;
 const EVENTS_PER_DAY = 2;
+// How many of a cleaner's own time-off rows show before "Show all".
+const OFF_SHOWN = 5;
 
 // Someone's time off on one day, as the grid shows it.
 type DayOff = { employee: Employee; blocks: TimeOff[] };
@@ -67,6 +69,9 @@ export default function CalendarScreen() {
   const eventsOnDay = useMemo(() => eventsByDay(ownerEvents || []), [ownerEvents]);
   // The event form: which day it starts on, and the event when editing one.
   const [eventEdit, setEventEdit] = useState<{ day: string; event: OwnerEvent | null } | null>(null);
+  // A cleaner's own list of time off shows the next few until they ask for all.
+  const [showAllOff, setShowAllOff] = useState(false);
+  const myOff = useMemo(() => (self ? upcomingTimeOff(timeOffOf(self), today) : []), [self, today]);
   const chipsRef = useRef<ScrollView>(null);
   const chipX = useRef(new Map<string, number>());
 
@@ -105,7 +110,8 @@ export default function CalendarScreen() {
   const months = useMemo(() => scheduleMonths(all, today), [all, today]);
   const maxWeek = useMemo(() => Math.max(1, ...[...weekCounts.values()].map(c => c.total)), [weekCounts]);
   const grid = useMemo(() => monthGrid(month), [month]);
-  const totals = useMemo(() => monthTotals(all, month), [all, month]);
+  // A cleaner's header counts their own cleanings; the owner's, everyone's.
+  const totals = useMemo(() => monthTotals(selfId ? all.filter(j => isOnCrew(j, selfId)) : all, month), [all, month, selfId]);
   // Cleaners with a chip on this month's grid, so a cleaner who has since
   // left still gets a legend entry for their color.
   const shownCleaners = useMemo(() => {
@@ -221,7 +227,9 @@ export default function CalendarScreen() {
     <View style={styles.container}>
       <ScreenHeader
         title={monthLabel(month, true)}
-        subtitle={jobs ? `${monthTotal} cleaning${monthTotal === 1 ? "" : "s"} · ${totals.done} done, ${totals.left} to go` : "\u00A0"}
+        subtitle={!jobs ? "\u00A0" : self
+          ? `${monthTotal} ${ownerViewing ? `for ${self.name.split(" ")[0]}` : "of your cleanings"} · ${totals.done} done, ${totals.left} to go`
+          : `${monthTotal} cleaning${monthTotal === 1 ? "" : "s"} · ${totals.done} done, ${totals.left} to go`}
         right={<IconButton icon="today-outline" onPress={() => pickMonth(monthOfKey(today))} label="Go to this month" />}
       />
 
@@ -345,11 +353,22 @@ export default function CalendarScreen() {
                   {ownerViewing ? "Days and hours they can't work." : "Days and hours you can't work. The owner sees them before handing out cleanings."}
                 </Text>
                 <View style={styles.offCard}>
-                  {upcomingTimeOff(timeOffOf(self), today).map(block => (
-                    <TimeOffRow key={block.id} block={block} today={today} onRemove={() => confirmRemoveTimeOff(self, block, ownerViewing)} />
-                  ))}
                   <BrandButton label="Block out time" icon="add" variant="outline" compact onPress={() => blockDay(null)} style={{ marginTop: 12 }} />
                   <Text style={styles.offTip}>Or tap a day on the calendar.</Text>
+                  {(showAllOff ? myOff : myOff.slice(0, OFF_SHOWN)).map(block => (
+                    <TimeOffRow key={block.id} block={block} today={today} onRemove={() => confirmRemoveTimeOff(self, block, ownerViewing)} />
+                  ))}
+                  {myOff.length > OFF_SHOWN ? (
+                    <TouchableOpacity
+                      style={styles.offMore}
+                      onPress={() => { tapSelect(); setShowAllOff(v => !v); }}
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded: showAllOff }}
+                    >
+                      <Text style={styles.offMoreText}>{showAllOff ? "Show fewer" : `Show all ${myOff.length}`}</Text>
+                      <Ionicons name={showAllOff ? "chevron-up" : "chevron-down"} size={15} color={colors.tealDark} />
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
               </>
             ) : null}
@@ -631,7 +650,7 @@ function DayCell({ dayKey, inMonth, isToday, jobs, offs, events, tappable, label
             </View>
           ) : (
             <View key={off.id} style={[styles.chip, styles.chipOff, offLook(off.allDay)]}>
-              <Text style={[styles.chipText, { color: colors.ink }]} numberOfLines={1}>{off.text}</Text>
+              <Text style={styles.chipOffText} numberOfLines={2}>{off.text.length > 6 ? off.text.replace("–", "\n–") : off.text}</Text>
             </View>
           ))}
         </View>
@@ -694,7 +713,7 @@ const styles = StyleSheet.create({
   monthChipWrap: { flexDirection: "row", alignItems: "center", gap: 8 },
   yearMark: { fontSize: 15, fontWeight: "800", color: colors.ink, marginHorizontal: 4 },
   monthChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
-  monthChipOn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
+  monthChipOn: { backgroundColor: colors.dark, borderColor: colors.dark },
   monthChipText: { fontSize: 14, fontWeight: "700", color: colors.ink },
   monthChipTextOn: { color: colors.white },
   loading: { alignItems: "center", paddingVertical: 48, gap: 10 },
@@ -727,6 +746,7 @@ const styles = StyleSheet.create({
   offBadge: { width: 17, height: 17, borderRadius: 9, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
   offBadgeText: { fontSize: 9, fontWeight: "800" },
   chipOff: { width: "100%", borderWidth: 1.5 },
+  chipOffText: { fontSize: 9.5, fontWeight: "700", lineHeight: 12, color: colors.ink, textAlign: "center" },
   chipEvent: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.ink },
   legend: { flexDirection: "row", flexWrap: "wrap", columnGap: 14, rowGap: 8, marginTop: 12, paddingHorizontal: 2 },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
@@ -744,17 +764,19 @@ const styles = StyleSheet.create({
   eventPlaceText: { flex: 1, fontSize: 13.5, fontWeight: "600", color: colors.tealDark },
   eventNote: { fontSize: 13.5, color: colors.ink, lineHeight: 19, marginTop: 4 },
   offCard: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, paddingBottom: 12, ...shadow.card },
-  offTip: { fontSize: 12, color: colors.faint, textAlign: "center", marginTop: 8 },
+  offTip: { fontSize: 12, color: colors.muted, textAlign: "center", marginTop: 8 },
+  offMore: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, minHeight: 44, marginTop: 4 },
+  offMoreText: { fontSize: 13.5, fontWeight: "600", color: colors.tealDark },
   dayOff: { backgroundColor: colors.bg, borderRadius: radius.md, padding: 12, marginBottom: 12, gap: 6 },
   dayOffRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   dayOffText: { flex: 1, fontSize: 14, color: colors.ink },
   dayOffName: { fontSize: 14, fontWeight: "700", color: colors.ink },
-  sectionTitle: { fontSize: 17, fontWeight: "700", color: colors.ink, marginTop: 24 },
+  sectionTitle: { ...type.section, marginTop: 24, paddingHorizontal: 2 },
   offPersonNext: { borderTopWidth: 1, borderTopColor: colors.line, marginTop: 8 },
   offPersonHead: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48, paddingTop: 10 },
   offPersonText: { flex: 1, gap: 1 },
   offSummaryText: { fontSize: 13, color: colors.muted, lineHeight: 18 },
-  sectionHint: { fontSize: 12.5, color: colors.muted, marginTop: 3, marginBottom: 10 },
+  sectionHint: { fontSize: 12.5, color: colors.muted, marginTop: 4, marginBottom: 10, paddingHorizontal: 2 },
   weekCard: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, paddingVertical: 4, ...shadow.card },
   weekRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 11, gap: 10 },
   weekRowNow: { backgroundColor: colors.tealFaint },

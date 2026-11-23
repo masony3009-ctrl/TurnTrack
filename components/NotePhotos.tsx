@@ -183,7 +183,7 @@ export function NotePhotosEditor({ owner, ids: start }: { owner: PhotoOwner; ids
         {size ? ids.map((id, i) => (
           <View key={id}>
             <Thumb value={loaded[id]} size={size} label={`Photo ${i + 1}`} />
-            <TouchableOpacity style={styles.remove} onPress={() => remove(id)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Remove photo ${i + 1}`}>
+            <TouchableOpacity style={styles.remove} onPress={() => remove(id)} hitSlop={12} accessibilityRole="button" accessibilityLabel={`Remove photo ${i + 1}`}>
               <Ionicons name="close" size={15} color={colors.white} />
             </TouchableOpacity>
           </View>
@@ -212,7 +212,7 @@ export function NotePhotosEditor({ owner, ids: start }: { owner: PhotoOwner; ids
         ) : null}
       </View>
       <Text style={styles.hint}>
-        {room > 0 ? `Saved as soon as you add them · up to ${owner.max}` : `That's the most a note holds (${owner.max}). Remove one to add another.`}
+        {room > 0 ? `Photos save as soon as you add them, without tapping Save · up to ${owner.max}` : `That's the most a note holds (${owner.max}). Remove one to add another.`}
       </Text>
     </View>
   );

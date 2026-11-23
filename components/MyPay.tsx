@@ -5,9 +5,11 @@ import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, TouchableOpac
 import { OWNER_PHONE, OWNER_PHONE_LABEL } from "../business";
 import { db } from "../firebase";
 import { cleaningsLabel, formatDuration, formatEntryDate, formatMoney, paymentsOf, weekStartMs, workedBetween } from "../payroll";
+import { entryLabel } from "../schedule";
 import { colors, radius, shadow } from "../theme";
 import { Employee, TimeEntry } from "../types";
 import { Card, EmptyState, ErrorState, ScreenHeader, SectionHeader } from "./ui";
+import { useProperties } from "./useProperties";
 
 const PAYMENTS_SHOWN = 10;
 
@@ -17,6 +19,7 @@ export function MyPay({ employee }: { employee: Employee }) {
   const [entries, setEntries] = useState<TimeEntry[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const firstName = employee.name.split(" ")[0];
+  const properties = useProperties();
 
   useEffect(() => {
     setEntries(null);
@@ -45,7 +48,7 @@ export function MyPay({ employee }: { employee: Employee }) {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title="My pay" subtitle={`${firstName} · paid per house`} />
+      <ScreenHeader title="My pay" subtitle={`${firstName} · paid per cleaning`} />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={[styles.hero, shadow.card]}>
           <Text style={styles.heroLabel}>OWED TO YOU</Text>
@@ -55,6 +58,11 @@ export function MyPay({ employee }: { employee: Employee }) {
               <Text style={styles.heroSub}>
                 {owed > 0 ? `${cleaningsLabel(unpaid.length)} not paid yet` : "All paid up"}
               </Text>
+            </>
+          ) : loadError ? (
+            <>
+              <Text style={styles.heroAmount}>—</Text>
+              <Text style={styles.heroSub}>Couldn&apos;t load your pay yet</Text>
             </>
           ) : (
             <View style={styles.heroLoading}>
@@ -82,7 +90,7 @@ export function MyPay({ employee }: { employee: Employee }) {
                   {unpaid.map((entry, i) => (
                     <View key={entry.id} style={[styles.entryRow, i > 0 && styles.entryDivider]}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.entryTitle} numberOfLines={1}>{entry.jobAddress}</Text>
+                        <Text style={styles.entryTitle} numberOfLines={1}>{entryLabel(entry, properties)}</Text>
                         <Text style={styles.entryMeta}>{entry.jobDate}{entry.minutes > 0 ? ` · ${formatDuration(entry.minutes)}` : ""}{entry.manual ? " · added by the owner" : ""}</Text>
                       </View>
                       <Text style={styles.entryAmount}>{formatMoney(entry.earned)}</Text>
@@ -141,13 +149,13 @@ const styles = StyleSheet.create({
   weekRow: { flexDirection: "row", gap: 10, marginBottom: 6 },
   weekTile: { flex: 1, backgroundColor: colors.card, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, padding: 14 },
   weekLabel: { fontSize: 12, fontWeight: "600", color: colors.muted },
-  weekAmount: { fontSize: 20, fontWeight: "800", color: colors.ink, marginTop: 3 },
+  weekAmount: { fontSize: 20, fontWeight: "700", color: colors.ink, marginTop: 3, fontVariant: ["tabular-nums"] },
   weekSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
   entryRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 10, minHeight: 48 },
   entryDivider: { borderTopWidth: 1, borderTopColor: colors.bg },
   entryTitle: { fontSize: 14, fontWeight: "600", color: colors.ink },
   entryMeta: { fontSize: 12, color: colors.muted, marginTop: 2 },
-  entryAmount: { fontSize: 15, fontWeight: "700", color: colors.tealDark },
+  entryAmount: { fontSize: 15, fontWeight: "700", color: colors.tealDark, fontVariant: ["tabular-nums"] },
   help: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44, marginTop: 8 },
   helpText: { fontSize: 13.5, fontWeight: "600", color: colors.tealDark },
 });

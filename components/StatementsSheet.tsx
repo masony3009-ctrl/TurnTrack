@@ -106,7 +106,7 @@ export function StatementsSheet({ visible, groups, today, onClose }: {
 const styles = StyleSheet.create({
   monthRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 14 },
   monthChip: {
-    paddingHorizontal: 14, minHeight: 38, justifyContent: "center", borderRadius: radius.pill,
+    paddingHorizontal: 14, minHeight: 44, justifyContent: "center", borderRadius: radius.pill,
     borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card,
   },
   monthChipOn: { backgroundColor: colors.dark, borderColor: colors.dark },

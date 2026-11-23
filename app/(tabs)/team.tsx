@@ -8,7 +8,8 @@ import { alertSoon, Avatar, BrandButton, Card, ColorPicker, EmptyState, Fab, For
 import { tapSuccess } from "../../components/haptics";
 import { removeFromCrew } from "../../crew";
 import { db } from "../../firebase";
-import { cleanerColor, colors, pickUnusedColor, radius, timeOffColor } from "../../theme";
+import { formatPhone } from "../../phone";
+import { cleanerColor, colors, pickUnusedColor, radius, timeOffColor, type } from "../../theme";
 import { datesLabel, hoursLabel, isAllDay, timeOffOf, upcomingTimeOff } from "../../timeOff";
 import { todayKey } from "../../turnover";
 import { Employee, Job } from "../../types";
@@ -266,14 +267,25 @@ export default function TeamScreen() {
         {isOwner && editingId && employees.find(e => e.id === editingId)?.pin ? (
           <TouchableOpacity
             style={styles.resetPinLink}
-            onPress={async () => {
-              try {
-                await updateDoc(doc(db, "employees", editingId), { pin: null });
-                Alert.alert("PIN reset", "They'll create a new PIN the next time they sign in.");
-              } catch (e) {
-                console.warn("pin reset failed:", e);
-                Alert.alert("Couldn't reset", "The PIN reset didn't save. Try again.");
-              }
+            accessibilityRole="button"
+            onPress={() => {
+              const first = (employees.find(e => e.id === editingId)?.name || "This cleaner").split(" ")[0];
+              Alert.alert(`Reset ${first}'s PIN?`, "Their PIN stops working now. They make a new one the next time they sign in.", [
+                { text: "Keep it", style: "cancel" },
+                {
+                  text: "Reset PIN",
+                  style: "destructive",
+                  onPress: async () => {
+                    try {
+                      await updateDoc(doc(db, "employees", editingId), { pin: null });
+                      alertSoon("PIN reset", `${first} will make a new PIN the next time they sign in.`);
+                    } catch (e) {
+                      console.warn("pin reset failed:", e);
+                      Alert.alert("Couldn't reset", "The PIN is unchanged. Check your signal and try again.");
+                    }
+                  },
+                },
+              ]);
             }}
           >
             <Ionicons name="key-outline" size={15} color={colors.tealDark} />
@@ -310,22 +322,23 @@ export default function TeamScreen() {
           return (
             <TouchableOpacity
               key={emp.id}
-              onPress={() => {
-                if (isOwner) openEdit(emp);
-                else if (isSelf) openEdit(emp);
-              }}
-              activeOpacity={tappable ? 0.7 : 1}
+              onPress={() => openEdit(emp)}
+              disabled={!tappable}
+              activeOpacity={0.7}
+              accessibilityRole={tappable ? "button" : undefined}
+              accessibilityLabel={tappable ? (isSelf ? "Edit your profile" : `Edit ${emp.name}`) : undefined}
             >
-              <Card style={!emp.active ? styles.cardInactive : undefined}>
+              <Card>
                 <View style={styles.cardTop}>
                   <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} muted={!emp.active} size={44} />
                   <View style={styles.nameBlock}>
-                    <Text style={styles.name}>{emp.name}</Text>
+                    <Text style={[styles.name, !emp.active && styles.nameInactive]}>{emp.name}</Text>
                   </View>
+                  {/* Wrapped so the pill centers on the name: a pill pins itself to the top. */}
                   {isSelf ? (
-                    <Pill label="You" tone="solid" />
-                  ) : isOwner ? (
-                    <Pill label={emp.active ? "Active" : "Inactive"} tone={emp.active ? "teal" : "neutral"} />
+                    <View style={styles.pillSlot}><Pill label="You" tone="solid" /></View>
+                  ) : isOwner && !emp.active ? (
+                    <View style={styles.pillSlot}><Pill label="Inactive" tone="neutral" /></View>
                   ) : null}
                 </View>
                 {(emp.phone || (canSeePay(emp) && emp.zelle)) ? (
@@ -339,7 +352,7 @@ export default function TeamScreen() {
                           accessibilityLabel={`Call ${emp.name}`}
                         >
                           <Ionicons name="call-outline" size={15} color={colors.tealDark} />
-                          <Text style={styles.contactLinkText}>{emp.phone}</Text>
+                          <Text style={styles.contactLinkText}>{formatPhone(emp.phone)}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={styles.contactLink}
@@ -355,7 +368,7 @@ export default function TeamScreen() {
                     {canSeePay(emp) && emp.zelle ? (
                       <View style={styles.contactRow}>
                         <Ionicons name="card-outline" size={14} color={colors.faint} />
-                        <Text style={styles.contactText}>Zelle: {emp.zelle}</Text>
+                        <Text style={styles.contactText}>Zelle: {formatPhone(emp.zelle)}</Text>
                       </View>
                     ) : null}
                   </View>
@@ -369,12 +382,16 @@ export default function TeamScreen() {
                 )}
                 {isOwner && (
                   <View style={styles.ownerActions}>
-                    <TouchableOpacity style={styles.toggleBtn} onPress={() => toggleActive(emp)}>
+                    <TouchableOpacity style={styles.toggleBtn} onPress={() => openEdit(emp)} accessibilityRole="button" accessibilityLabel={`Edit ${emp.name}`}>
+                      <Ionicons name="create-outline" size={13} color={colors.tealDark} />
+                      <Text style={styles.toggleBtnText}>Edit</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.toggleBtn} onPress={() => toggleActive(emp)} accessibilityRole="button">
                       <Ionicons name={emp.active ? "pause-outline" : "play-outline"} size={13} color={colors.tealDark} />
                       <Text style={styles.toggleBtnText}>{emp.active ? "Deactivate" : "Reactivate"}</Text>
                     </TouchableOpacity>
                     {emp.active && (
-                      <TouchableOpacity style={styles.toggleBtn} onPress={() => viewAs(emp)}>
+                      <TouchableOpacity style={styles.toggleBtn} onPress={() => viewAs(emp)} accessibilityRole="button">
                         <Ionicons name="eye-outline" size={13} color={colors.tealDark} />
                         <Text style={styles.toggleBtnText}>View as {emp.name.split(" ")[0]}</Text>
                       </TouchableOpacity>
@@ -402,7 +419,7 @@ function TimeOffSummary({ employee }: { employee: Employee }) {
   const extra = upcoming.length - TIME_OFF_SHOWN;
   return (
     <View style={styles.offBlock}>
-      <Text style={styles.offLabel}>{"Can't work"}</Text>
+      <Text style={type.section}>{"Can't work"}</Text>
       {upcoming.slice(0, TIME_OFF_SHOWN).map(block => (
         <View key={block.id} style={styles.contactRow}>
           <Ionicons name={block.weekdays ? "repeat" : "calendar-clear-outline"} size={14} color={colors.faint} />
@@ -419,32 +436,32 @@ function TimeOffSummary({ employee }: { employee: Employee }) {
 
 const styles = StyleSheet.create({
   offBlock: { marginTop: 12, gap: 5 },
-  offLabel: { fontSize: 12, fontWeight: "700", color: colors.muted, letterSpacing: 0.3 },
   offText: { flex: 1, fontSize: 13, color: colors.ink },
   offMore: { fontSize: 12.5, color: colors.faint },
   ownerActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   container: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20 },
-  cardInactive: { opacity: 0.55 },
+  nameInactive: { color: colors.muted },
+  pillSlot: { alignSelf: "center" },
   cardTop: { flexDirection: "row", alignItems: "center", gap: 12 },
   nameBlock: { flex: 1 },
   name: { fontSize: 16, fontWeight: "700", color: colors.ink },
   contactBlock: { marginTop: 12, gap: 5 },
   contactRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  contactLink: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 40, paddingRight: 10 },
+  contactLink: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 44, paddingRight: 10 },
   contactLinkText: { fontSize: 14, fontWeight: "600", color: colors.tealDark },
   contactText: { fontSize: 13, color: colors.muted },
   editHintRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 10 },
   editHintText: { fontSize: 12.5, fontWeight: "600", color: colors.tealDark },
   toggleBtn: {
     flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start", marginTop: 12,
-    borderWidth: 1, borderColor: colors.line, borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.line, borderRadius: radius.md,
     paddingHorizontal: 12, minHeight: 44, backgroundColor: colors.bg,
   },
   toggleBtnText: { fontSize: 12.5, fontWeight: "600", color: colors.tealDark },
   photoRow: { flexDirection: "row", alignItems: "center", gap: 14, marginBottom: 16 },
   photoActions: { flex: 1, gap: 6 },
   photoBtn: { paddingVertical: 9 },
-  removePhoto: { alignSelf: "center", padding: 2 },
+  removePhoto: { alignSelf: "center", minHeight: 44, paddingHorizontal: 12, justifyContent: "center" },
   removePhotoText: { fontSize: 12.5, fontWeight: "600", color: colors.danger },
   resetPinLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 10, minHeight: 44 },
   resetPinText: { color: colors.tealDark, fontSize: 13.5, fontWeight: "600" },

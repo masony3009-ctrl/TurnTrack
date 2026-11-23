@@ -3,7 +3,8 @@ import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { db } from "../firebase";
-import { colors, radius, shadow, type } from "../theme";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { cleanerColor, colors, radius, shadow, type } from "../theme";
 import { Employee } from "../types";
 import { useProfile } from "./ProfileProvider";
 import { Avatar, BrandButton, FormInput, SheetModal } from "./ui";
@@ -14,6 +15,7 @@ type PinTarget =
 
 export function ProfileGate() {
   const { employees, assignDevice } = useProfile();
+  const insets = useSafeAreaInsets();
   const [target, setTarget] = useState<PinTarget | null>(null);
   const [pin, setPin] = useState("");
   const [pinConfirm, setPinConfirm] = useState("");
@@ -47,7 +49,7 @@ export function ProfileGate() {
       setTarget({ kind: "owner", creating: !exists });
     } catch (e) {
       console.warn("owner pin lookup failed:", e);
-      setPinError("Couldn't reach the server. Close this and try again.");
+      setPinError("Couldn't reach the server. Check your signal, then try again.");
     }
   };
 
@@ -103,10 +105,14 @@ export function ProfileGate() {
       setTarget(null);
     } catch (e) {
       console.warn("sign in failed:", e);
-      setPinError("Something went wrong signing in. Try again.");
+      setPinError("Couldn't sign in. Check your signal and try again.");
     }
     setBusy(false);
   };
+
+  // Looking up whether an owner PIN exists yet; and that lookup having failed.
+  const checking = target?.creating === null && !pinError;
+  const lookupFailed = target?.creating === null && !!pinError;
 
   const sheetTitle = !target
     ? ""
@@ -118,7 +124,7 @@ export function ProfileGate() {
 
   return (
     <View style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.scroll, { paddingTop: Math.max(insets.top, 20) + 8 }]}>
         <Text style={type.wordmark}>TurnTrack</Text>
         <Text style={styles.title}>Sign in</Text>
         <Text style={styles.sub}>Tap your profile and enter your PIN. This phone stays signed in.</Text>
@@ -138,8 +144,10 @@ export function ProfileGate() {
             style={[styles.cleanerRow, shadow.card]}
             onPress={() => openCleaner(emp)}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`Sign in as ${emp.name}`}
           >
-            <Avatar name={emp.name} photo={emp.photo} size={46} />
+            <Avatar name={emp.name} photo={emp.photo} color={cleanerColor(emp)} size={46} />
             <View style={{ flex: 1 }}>
               <Text style={styles.cleanerName}>{emp.name}</Text>
               {!emp.pin && <Text style={styles.firstTime}>First sign-in — you&apos;ll create your PIN</Text>}
@@ -149,7 +157,13 @@ export function ProfileGate() {
         ))}
 
         <Text style={[type.section, styles.sectionLabel]}>Management</Text>
-        <TouchableOpacity style={[styles.ownerRow, shadow.card]} onPress={openOwner} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={[styles.ownerRow, shadow.card]}
+          onPress={openOwner}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="Sign in as the owner"
+        >
           <View style={styles.ownerIcon}>
             <Ionicons name="shield-checkmark" size={22} color={colors.white} />
           </View>
@@ -162,9 +176,9 @@ export function ProfileGate() {
       </ScrollView>
 
       <SheetModal visible={target !== null} title={sheetTitle} onClose={() => setTarget(null)}>
-        {target?.creating === null && !pinError ? (
+        {checking ? (
           <Text style={styles.checkingText}>Checking…</Text>
-        ) : (
+        ) : lookupFailed ? null : (
           <>
             {target?.creating && !useOwnerPin && (
               <Text style={styles.pinIntro}>
@@ -177,16 +191,17 @@ export function ProfileGate() {
               label={useOwnerPin ? "Owner PIN" : target?.creating ? "New PIN (4–8 digits)" : "PIN"}
               placeholder="••••"
               value={pin}
-              onChangeText={setPin}
+              onChangeText={text => { setPin(text); setPinError(""); }}
               keyboardType="number-pad"
               secure
+              autoFocus
             />
             {target?.creating && !useOwnerPin && (
               <FormInput
                 label="Confirm PIN"
                 placeholder="••••"
                 value={pinConfirm}
-                onChangeText={setPinConfirm}
+                onChangeText={text => { setPinConfirm(text); setPinError(""); }}
                 keyboardType="number-pad"
                 secure
               />
@@ -194,16 +209,23 @@ export function ProfileGate() {
           </>
         )}
         {pinError ? <Text style={styles.pinErrorText}>{pinError}</Text> : null}
-        <BrandButton
-          label={busy ? "One sec…" : target?.creating && !useOwnerPin ? "Set PIN & sign in" : "Sign in"}
-          icon="lock-closed"
-          onPress={submit}
-        />
+        {checking ? null : lookupFailed ? (
+          // The owner PIN couldn't be looked up, so there is nothing to check a PIN against yet.
+          <BrandButton label="Try again" icon="refresh" onPress={openOwner} />
+        ) : (
+          <BrandButton
+            label={busy ? "One sec…" : target?.creating && !useOwnerPin ? "Set PIN & sign in" : "Sign in"}
+            icon="lock-closed"
+            onPress={submit}
+            disabled={busy}
+          />
+        )}
         {target?.kind === "cleaner" && (
           <TouchableOpacity
             style={styles.ownerLink}
             onPress={() => { setUseOwnerPin(!useOwnerPin); setPinError(""); setPin(""); setPinConfirm(""); }}
             hitSlop={6}
+            accessibilityRole="button"
           >
             <Ionicons name={useOwnerPin ? "person-outline" : "shield-checkmark-outline"} size={14} color={colors.tealDark} />
             <Text style={styles.ownerLinkText}>
@@ -218,7 +240,8 @@ export function ProfileGate() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  scroll: { paddingTop: 84, paddingHorizontal: 24, paddingBottom: 48 },
+  // The same gutter and header height as every tab, so the wordmark doesn't jump on sign-in.
+  scroll: { paddingHorizontal: 20, paddingBottom: 48 },
   title: { fontSize: 26, fontWeight: "700", color: colors.ink, marginTop: 4 },
   sub: { fontSize: 14, color: colors.muted, marginTop: 4, marginBottom: 22 },
   sectionLabel: { marginBottom: 8, marginTop: 10 },
@@ -246,6 +269,6 @@ const styles = StyleSheet.create({
   checkingText: { fontSize: 14, color: colors.muted, marginBottom: 14 },
   pinIntro: { fontSize: 13.5, color: colors.muted, lineHeight: 19, marginBottom: 14 },
   pinErrorText: { fontSize: 13.5, fontWeight: "600", color: colors.danger, marginBottom: 12 },
-  ownerLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 14 },
+  ownerLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8, minHeight: 44 },
   ownerLinkText: { fontSize: 13, fontWeight: "600", color: colors.tealDark },
 });

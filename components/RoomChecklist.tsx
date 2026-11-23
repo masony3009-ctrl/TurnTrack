@@ -13,11 +13,14 @@ const firstName = (name: string | null | undefined) => (name ? name.split(" ")[0
 // one room at a time, and finishing the open room moves on to the next
 // unfinished one. The owner sees the same list live: when each room was
 // finished, by whom, and how long it took.
-export function RoomChecklist({ items, canWork, closed, onToggle, roomsToAdd, onAddRoom, onRemoveRoom }: {
+export function RoomChecklist({ items, canWork, closed, bulkTicked, onToggle, roomsToAdd, onAddRoom, onRemoveRoom }: {
   items: ChecklistItem[];
   canWork: boolean;
   // The job is finished, so anything unticked was skipped.
   closed?: boolean;
+  // The leftover steps were all ticked in one tap at the finish. Rooms closed
+  // by that tap don't show minutes: the span runs to the finish, not the work.
+  bulkTicked?: boolean;
   onToggle: (index: number) => void;
   // Kinds of room that can be added to this cleaning. Leave out
   // onAddRoom to hide adding altogether.
@@ -27,6 +30,7 @@ export function RoomChecklist({ items, canWork, closed, onToggle, roomsToAdd, on
 }) {
   const [adding, setAdding] = useState(false);
   const rooms = useMemo(() => roomSections(items), [items]);
+  const bulkAt = bulkTicked ? Math.max(0, ...rooms.map(r => r.lastAt || 0)) : 0;
   const firstUnfinished = rooms.find(r => !r.complete)?.key ?? null;
   // undefined = nobody has picked a room yet, so follow the work. A key that
   // no longer exists (the list was rebuilt) falls back the same way.
@@ -56,6 +60,7 @@ export function RoomChecklist({ items, canWork, closed, onToggle, roomsToAdd, on
           expanded={room.key === openKey}
           canWork={canWork}
           closed={closed === true}
+          timed={!(bulkAt > 0 && room.lastAt === bulkAt)}
           onHeaderPress={() => {
             tapSelect();
             setPicked(room.key === openKey ? null : room.key);
@@ -99,12 +104,12 @@ export function RoomChecklist({ items, canWork, closed, onToggle, roomsToAdd, on
   );
 }
 
-function roomStatus(room: RoomSection, closed: boolean): { text: string; tone: "done" | "live" | "idle" | "missed" } {
+function roomStatus(room: RoomSection, closed: boolean, timed: boolean): { text: string; tone: "done" | "live" | "idle" | "missed" } {
   if (room.complete) {
     const parts = [
       room.lastAt ? `Done ${formatClockTime(room.lastAt)}` : "Done",
       firstName(room.lastBy),
-      roomMinutes(room) ? `${roomMinutes(room)} min` : null,
+      timed && roomMinutes(room) ? `${roomMinutes(room)} min` : null,
     ];
     return { text: parts.filter(Boolean).join(" · "), tone: "done" };
   }
@@ -120,20 +125,22 @@ function roomStatus(room: RoomSection, closed: boolean): { text: string; tone: "
 const STATUS_ICON = {
   done: { name: "checkmark-circle", color: colors.teal },
   live: { name: "radio-button-on", color: colors.teal },
-  idle: { name: "ellipse-outline", color: colors.faint },
+  idle: { name: "list-outline", color: colors.muted },
   missed: { name: "alert-circle", color: colors.danger },
 } as const;
 
-function Room({ room, expanded, canWork, closed, onHeaderPress, onToggle, onRemove }: {
+function Room({ room, expanded, canWork, closed, timed, onHeaderPress, onToggle, onRemove }: {
   room: RoomSection;
   expanded: boolean;
   canWork: boolean;
   closed: boolean;
+  // False when this room was closed by the one-tap finish: no minutes shown.
+  timed: boolean;
   onHeaderPress: () => void;
   onToggle: (index: number) => void;
   onRemove?: () => void;
 }) {
-  const status = roomStatus(room, closed);
+  const status = roomStatus(room, closed, timed);
   const icon = STATUS_ICON[status.tone];
   return (
     <View style={[styles.room, room.complete && styles.roomDone, expanded && styles.roomOpen]}>

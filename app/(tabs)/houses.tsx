@@ -290,7 +290,7 @@ export default function HousesScreen() {
                     <View key={report.key} style={[styles.shopRow, i > 0 && styles.divider]}>
                       <View style={styles.rowTop}>
                         <Text style={styles.name} numberOfLines={1}>{report.name}</Text>
-                        <TouchableOpacity onPress={() => restockAll(report)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Clear ${report.name}'s list`}>
+                        <TouchableOpacity onPress={() => restockAll(report)} hitSlop={14} accessibilityRole="button" accessibilityLabel={`Clear ${report.name}'s list`}>
                           <Text style={styles.link}>Clear</Text>
                         </TouchableOpacity>
                       </View>
@@ -333,13 +333,16 @@ export default function HousesScreen() {
               <View style={styles.heroStats}>
                 <HeroStat label="Cleanings" value={String(totals.cleanings)} />
                 <HeroStat label="Pay" value={formatDollars(Math.round(totals.labor))} />
-                <HeroStat label={margin !== null ? `Profit · ${margin}%` : "Profit"} value={totals.revenue > 0 ? formatDollars(Math.round(totals.profit)) : "—"} />
+                <HeroStat
+                  label={uncosted > 0 ? "Profit · est." : margin !== null ? `Profit · ${margin}%` : "Profit"}
+                  value={totals.revenue > 0 ? formatDollars(Math.round(totals.profit)) : "—"}
+                />
               </View>
               {totals.booked > 0 ? (
                 <Text style={styles.heroSub}>+ {totals.booked} booked{totals.bookedRevenue > 0 ? ` · ${formatDollars(totals.bookedRevenue)}` : ""}</Text>
               ) : null}
+              {notes.length ? <Text style={styles.heroSub}>{notes.join(" · ")}</Text> : null}
             </View>
-            {notes.length ? <Text style={styles.notes}>{notes.join(" · ")}</Text> : null}
 
             <SectionHeader title="By house" count={houseCount} />
             {rows.length === 0 ? (
@@ -381,35 +384,35 @@ function HouseRow({ row, first, onPress, onMarkPaid }: { row: Row; first: boolea
   const detail = [
     `${money.cleanings} done`,
     money.booked ? `${money.booked} booked` : null,
-    per.minutes !== null ? formatDuration(per.minutes) : house?.price ? `${formatDollars(house.price)} each` : null,
+    per.minutes !== null ? `avg ${formatDuration(per.minutes)}` : house?.price ? `${formatDollars(house.price)} each` : null,
   ].filter(Boolean).join(" · ");
   const flags = flagsOf(row);
   const body = (
     <View style={[styles.row, !first && styles.divider]}>
       <View style={{ flex: 1 }}>
         <Text style={styles.name} numberOfLines={1}>{row.label}</Text>
-        <Text style={styles.meta} numberOfLines={2}>
-          {detail}
-          {per.margin !== null ? (
-            <Text style={[styles.margin, losing && { color: colors.danger }]}>
-              {losing ? ` · loses ${formatDollars(Math.round(-per.margin))}` : ` · ${formatDollars(Math.round(per.margin))} kept`}
-            </Text>
-          ) : null}
-        </Text>
+        <Text style={styles.meta} numberOfLines={2}>{detail}</Text>
         {flags.length ? (
           <View style={styles.flagRow}>
             {flags.map(f => (
               <Text key={f.text} style={[styles.flag, f.tone === "danger" ? styles.flagDanger : f.tone === "warn" ? styles.flagWarn : styles.flagMuted]}>{f.text}</Text>
             ))}
             {row.owed.amount > 0 ? (
-              <TouchableOpacity onPress={onMarkPaid} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Mark ${row.label} paid`}>
+              <TouchableOpacity onPress={onMarkPaid} hitSlop={14} accessibilityRole="button" accessibilityLabel={`Mark ${row.label} paid`}>
                 <Text style={styles.link}>Mark paid</Text>
               </TouchableOpacity>
             ) : null}
           </View>
         ) : null}
       </View>
-      <Text style={[styles.money, money.revenue === 0 && { color: colors.faint }]}>{formatDollars(money.revenue)}</Text>
+      <View style={styles.moneyCol}>
+        <Text style={[styles.money, money.revenue === 0 && { color: colors.faint }]}>{formatDollars(money.revenue)}</Text>
+        {per.margin !== null ? (
+          <Text style={[styles.margin, losing && { color: colors.danger }]}>
+            {losing ? `loses ${formatDollars(Math.round(-per.margin))} each` : `keeps ${formatDollars(Math.round(per.margin))} each`}
+          </Text>
+        ) : null}
+      </View>
       <Ionicons name={house ? "chevron-forward" : "add-circle-outline"} size={house ? 16 : 18} color={house ? colors.faint : colors.tealDark} />
     </View>
   );
@@ -432,8 +435,9 @@ const styles = StyleSheet.create({
   rowTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   name: { fontSize: 15, fontWeight: "700", color: colors.ink, flexShrink: 1 },
   meta: { fontSize: 12.5, color: colors.muted, marginTop: 2 },
-  margin: { fontWeight: "700", color: colors.tealDark },
-  money: { fontSize: 15.5, fontWeight: "700", color: colors.tealDark },
+  moneyCol: { alignItems: "flex-end" },
+  margin: { fontSize: 11.5, fontWeight: "600", color: colors.tealDark, fontVariant: ["tabular-nums"], marginTop: 1 },
+  money: { fontSize: 15.5, fontWeight: "700", color: colors.tealDark, fontVariant: ["tabular-nums"] },
   link: { fontSize: 13, fontWeight: "700", color: colors.tealDark },
   flagRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 5 },
   flag: { fontSize: 11.5, fontWeight: "700", paddingHorizontal: 7, paddingVertical: 2, borderRadius: radius.pill, overflow: "hidden" },
@@ -445,7 +449,7 @@ const styles = StyleSheet.create({
   itemText: { fontSize: 13, fontWeight: "600", color: colors.goldDark },
   periodRow: { flexDirection: "row", gap: 6, marginBottom: 10 },
   periodChip: {
-    flex: 1, minHeight: 36, paddingHorizontal: 6, borderRadius: radius.pill, borderWidth: 1,
+    flex: 1, minHeight: 44, paddingHorizontal: 6, borderRadius: radius.pill, borderWidth: 1,
     borderColor: colors.line, backgroundColor: colors.card, alignItems: "center", justifyContent: "center",
   },
   periodChipOn: { backgroundColor: colors.dark, borderColor: colors.dark },
@@ -453,11 +457,10 @@ const styles = StyleSheet.create({
   periodTextOn: { color: colors.white },
   hero: { backgroundColor: colors.dark, borderRadius: radius.lg, padding: 18, marginBottom: 8 },
   heroLabel: { fontSize: 11, fontWeight: "700", color: "#9FB4BE", letterSpacing: 1.5 },
-  heroAmount: { fontSize: 32, fontWeight: "700", color: colors.white, marginTop: 2 },
+  heroAmount: { fontSize: 32, fontWeight: "700", color: colors.white, marginTop: 2, fontVariant: ["tabular-nums"] },
   heroStats: { flexDirection: "row", gap: 8, marginTop: 10 },
   heroStat: { flex: 1, backgroundColor: "rgba(255,255,255,0.07)", borderRadius: radius.sm, paddingVertical: 7, paddingHorizontal: 9 },
   heroStatValue: { fontSize: 14, fontWeight: "700", color: colors.white },
   heroStatLabel: { fontSize: 11, color: "#9FB4BE", marginTop: 1 },
   heroSub: { fontSize: 12.5, color: "#B9CAD2", marginTop: 8 },
-  notes: { fontSize: 12, color: colors.muted, paddingHorizontal: 4, marginBottom: 4 },
 });

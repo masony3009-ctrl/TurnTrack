@@ -166,7 +166,7 @@ export function TimeOffSheet({ visible, employee, ownerViewing, jobs, houseOf, s
   };
 
   return (
-    <SheetModal visible={visible} title="Block out time" onClose={onClose} dirty={note.trim().length > 0 || from !== null || to !== null || end !== null}>
+    <SheetModal visible={visible} title="Block out time" onClose={onClose} dirty={note.trim().length > 0 || from !== null || to !== null || end !== null || kind !== "day"}>
       <Text style={styles.label}>How long</Text>
       <View style={styles.segment}>
         {KINDS.map(k => (
@@ -257,7 +257,7 @@ const styles = StyleSheet.create({
   label: { fontSize: 12, fontWeight: "600", color: colors.muted, marginBottom: 6, letterSpacing: 0.3 },
   segment: { flexDirection: "row", gap: 7, marginBottom: 14 },
   segmentChip: {
-    flex: 1, minHeight: 42, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.line,
+    flex: 1, minHeight: 44, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.line,
     backgroundColor: colors.bg, alignItems: "center", justifyContent: "center", paddingHorizontal: 6,
   },
   segmentChipOn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
@@ -265,7 +265,7 @@ const styles = StyleSheet.create({
   segmentTextOn: { color: colors.white },
   weekdays: { flexDirection: "row", justifyContent: "space-between", marginBottom: 14 },
   weekday: {
-    width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: colors.line,
+    width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: colors.line,
     backgroundColor: colors.bg, alignItems: "center", justifyContent: "center",
   },
   weekdayOn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },

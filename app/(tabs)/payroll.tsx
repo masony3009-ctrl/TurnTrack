@@ -4,6 +4,7 @@ import { addDoc, collection, deleteDoc, doc, onSnapshot, updateDoc, writeBatch }
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { recordCleaningPay } from "../../components/cleaningPay";
+import { tapSuccess } from "../../components/haptics";
 import { MyPay } from "../../components/MyPay";
 import { useProfile } from "../../components/ProfileProvider";
 import { alertSoon, Avatar, BrandButton, Card, DatePickerField, EmptyState, ErrorState, FormInput, ScreenHeader, SectionHeader, SheetModal } from "../../components/ui";
@@ -12,7 +13,7 @@ import { db } from "../../firebase";
 import { parsePrice } from "../../money";
 import { cleanerPayFor, cleaningsLabel, computeEarned, DEFAULT_CLEANER_PAY, formatDuration, formatEntryDate, formatMoney, payNotRecorded } from "../../payroll";
 import { findProperty } from "../../properties";
-import { houseLabel } from "../../schedule";
+import { entryLabel, houseLabel } from "../../schedule";
 import { LONG_SESSION_MINUTES } from "../../session";
 import { cleanerColor, colors, radius, shadow } from "../../theme";
 import { dateFromKey, formatShortDate, jobDateKey, keyFromDate, todayKey } from "../../turnover";
@@ -44,6 +45,9 @@ export default function PayrollScreen() {
   const [editDateKey, setEditDateKey] = useState<string | null>(null);
   const [editPay, setEditPay] = useState("");
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobsError, setJobsError] = useState(false);
+  // A save in flight, so a double tap can't add or change an entry twice.
+  const [saving, setSaving] = useState(false);
   // Rows being saved, so a double tap can't add the same pay twice.
   const [recording, setRecording] = useState<Set<string>>(new Set());
   const { state, employees } = useProfile();
@@ -72,8 +76,10 @@ export default function PayrollScreen() {
     if (!isOwner) return;
     return onSnapshot(collection(db, "jobs"), (snapshot) => {
       setJobs(snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Job[]);
+      setJobsError(false);
     }, (error) => {
       console.warn("payroll jobs listener error:", error);
+      setJobsError(true);
     });
   }, [isOwner]);
 
@@ -145,7 +151,7 @@ export default function PayrollScreen() {
   const markUnpaid = (entry: TimeEntry) => {
     Alert.alert(
       "Mark as not paid?",
-      `${entry.employeeName}: ${entry.jobAddress} (${formatMoney(entry.earned)}) goes back to owed.`,
+      `${entry.employeeName}: ${entryLabel(entry, properties)} (${formatMoney(entry.earned)}) goes back to owed.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -175,7 +181,7 @@ export default function PayrollScreen() {
   const deleteEntry = (entry: TimeEntry) => {
     Alert.alert(
       "Delete time entry",
-      `Delete ${formatMoney(entry.earned)} for ${entry.employeeName} (${entry.jobAddress})? This can't be undone.`,
+      `Delete ${formatMoney(entry.earned)} for ${entry.employeeName} (${entryLabel(entry, properties)})? This can't be undone.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -214,7 +220,7 @@ export default function PayrollScreen() {
   };
 
   const saveEdit = async () => {
-    if (!editing) return;
+    if (!editing || saving) return;
     const flat = isFlat(editing);
     // Flat pay doesn't depend on time, so minutes are optional there.
     const minutes = minutesOf(editMinutes, flat);
@@ -229,6 +235,7 @@ export default function PayrollScreen() {
     }
     const sameDay = editDateKey === keyFromDate(new Date(editing.endedAt));
     const endedAt = sameDay || !editDateKey ? editing.endedAt : noonOf(editDateKey);
+    setSaving(true);
     try {
       await updateDoc(doc(db, "timeEntries", editing.id), {
         minutes,
@@ -239,14 +246,16 @@ export default function PayrollScreen() {
         editedAt: Date.now(),
       });
       setEditing(null);
+      tapSuccess();
     } catch (e) {
       console.warn("edit entry failed:", e);
       Alert.alert("Couldn't save", "The entry didn't change. Check your connection and try again.");
     }
+    setSaving(false);
   };
 
   const saveManual = async () => {
-    if (!manualFor) return;
+    if (!manualFor || saving) return;
     const minutes = minutesOf(manualMinutes, true);
     if (minutes === null) {
       Alert.alert("Check the minutes", "Enter the minutes worked, like 90, or leave it empty.");
@@ -258,6 +267,7 @@ export default function PayrollScreen() {
       return;
     }
     const endedAt = manualDateKey && manualDateKey !== todayKey() ? noonOf(manualDateKey) : Date.now();
+    setSaving(true);
     try {
       await addDoc(collection(db, "timeEntries"), {
         jobId: null,
@@ -278,11 +288,13 @@ export default function PayrollScreen() {
         note: manualNote.trim(),
       });
       setManualFor(null);
+      tapSuccess();
       alertSoon("Pay added", `${formatMoney(pay)} added for ${manualFor.name}.`);
     } catch (e) {
       console.warn("manual entry failed:", e);
       Alert.alert("Couldn't add time", "The entry didn't save. Check your connection and try again.");
     }
+    setSaving(false);
   };
 
   const editPreview = parseInt(editMinutes, 10);
@@ -304,7 +316,10 @@ export default function PayrollScreen() {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title="Payroll" />
+      <ScreenHeader
+        title="Payroll"
+        subtitle="Paid per cleaning"
+      />
 
       <SheetModal
         visible={editing !== null}
@@ -314,7 +329,7 @@ export default function PayrollScreen() {
       >
         {editing ? (
           <Text style={styles.editLead}>
-            {editing.jobAddress} · {isFlat(editing) ? "paid by the house" : `logged at ${formatMoney(editing.hourlyRate)}/hr`}
+            {entryLabel(editing, properties)} · {isFlat(editing) ? "paid by the house" : `logged at ${formatMoney(editing.hourlyRate)}/hr`}
           </Text>
         ) : null}
         <DatePickerField label="Day" value={editDateKey} onChange={setEditDateKey} />
@@ -336,9 +351,9 @@ export default function PayrollScreen() {
             </Text>
           </View>
         ) : null}
-        <BrandButton label="Save" icon="checkmark" onPress={saveEdit} />
+        <BrandButton label={saving ? "Saving…" : "Save"} icon="checkmark" onPress={saveEdit} disabled={saving} />
         {editing ? (
-          <TouchableOpacity style={styles.deleteLink} onPress={() => deleteEntry(editing)} accessibilityRole="button">
+          <TouchableOpacity style={styles.deleteLink} onPress={() => deleteEntry(editing)} disabled={saving} accessibilityRole="button">
             <Ionicons name="trash-outline" size={15} color={colors.danger} />
             <Text style={styles.deleteLinkText}>Delete this entry</Text>
           </TouchableOpacity>
@@ -361,7 +376,7 @@ export default function PayrollScreen() {
             <FormInput label="Minutes (optional)" placeholder="e.g. 150" value={manualMinutes} onChangeText={setManualMinutes} keyboardType="number-pad" />
           </View>
         </View>
-        <BrandButton label="Add entry" icon="add" onPress={saveManual} />
+        <BrandButton label={saving ? "Adding…" : "Add entry"} icon="add" onPress={saveManual} disabled={saving} />
       </SheetModal>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
@@ -377,6 +392,11 @@ export default function PayrollScreen() {
                     ? "Nothing owed on payroll, but some finished cleanings have no pay recorded (below)"
                     : "Everyone is paid up"}
               </Text>
+            </>
+          ) : loadError ? (
+            <>
+              <Text style={styles.heroAmount}>—</Text>
+              <Text style={styles.heroSub}>Couldn&apos;t load the pay yet</Text>
             </>
           ) : (
             <View style={styles.heroLoading}>
@@ -400,6 +420,9 @@ export default function PayrollScreen() {
           />
         )}
 
+        {jobsError && !loadError ? (
+          <Text style={styles.jobsError}>Couldn&apos;t check for finished cleanings with no pay recorded. Check your signal; this fills in on its own.</Text>
+        ) : null}
         {entries && missing.length > 0 ? (
           <>
             <SectionHeader title="Finished, no pay recorded" count={missing.length} />
@@ -464,22 +487,32 @@ export default function PayrollScreen() {
                 <Text style={[styles.empOwed, total === 0 && { color: colors.faint }]}>{formatMoney(total)}</Text>
               </View>
 
-              {empUnpaid.map(entry => <EntryRow key={entry.id} entry={entry} onPress={() => openEdit(entry)} />)}
+              {empUnpaid.map(entry => <EntryRow key={entry.id} entry={entry} place={entryLabel(entry, properties)} onPress={() => openEdit(entry)} />)}
 
               <View style={styles.actionRow}>
                 {empUnpaid.length > 0 && (
                   <BrandButton
-                    label={`Mark ${formatMoney(total)} paid`}
+                    label={`Mark paid · ${formatMoney(total)}`}
                     icon="checkmark-circle"
                     onPress={() => markPaid(emp, empUnpaid, total)}
                     style={styles.actionMain}
                   />
                 )}
-                <TouchableOpacity style={styles.smallAction} onPress={() => copyZelle(emp)}>
+                <TouchableOpacity
+                  style={styles.smallAction}
+                  onPress={() => copyZelle(emp)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Copy Zelle info for ${emp.name.split(" ")[0]}`}
+                >
                   <Ionicons name="copy-outline" size={15} color={colors.tealDark} />
-                  <Text style={styles.smallActionText}>Zelle</Text>
+                  <Text style={styles.smallActionText}>Copy Zelle</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.smallAction} onPress={() => openManual(emp)}>
+                <TouchableOpacity
+                  style={styles.smallAction}
+                  onPress={() => openManual(emp)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add pay for ${emp.name.split(" ")[0]}`}
+                >
                   <Ionicons name="add" size={16} color={colors.tealDark} />
                   <Text style={styles.smallActionText}>Add pay</Text>
                 </TouchableOpacity>
@@ -499,15 +532,15 @@ export default function PayrollScreen() {
                 </View>
                 <Text style={styles.empOwed}>{formatMoney(total)}</Text>
               </View>
-              {owed.map(entry => <EntryRow key={entry.id} entry={entry} onPress={() => openEdit(entry)} />)}
+              {owed.map(entry => <EntryRow key={entry.id} entry={entry} place={entryLabel(entry, properties)} onPress={() => openEdit(entry)} />)}
               <View style={styles.actionRow}>
-                <BrandButton label={`Mark ${formatMoney(total)} paid`} icon="checkmark-circle" onPress={() => markPaid(payee, owed, total)} style={styles.actionMain} />
+                <BrandButton label={`Mark paid · ${formatMoney(total)}`} icon="checkmark-circle" onPress={() => markPaid(payee, owed, total)} style={styles.actionMain} />
               </View>
             </Card>
           );
         })}
 
-        <TouchableOpacity style={styles.historyToggle} onPress={() => setShowHistory(!showHistory)}>
+        <TouchableOpacity style={styles.historyToggle} onPress={() => setShowHistory(!showHistory)} accessibilityRole="button" accessibilityState={{ expanded: showHistory }}>
           <Ionicons name={showHistory ? "chevron-up" : "time-outline"} size={15} color={colors.tealDark} />
           <Text style={styles.historyToggleText}>
             {showHistory ? "Hide paid history" : `Paid history (${paid.length})`}
@@ -530,7 +563,7 @@ export default function PayrollScreen() {
           >
             <Ionicons name="checkmark-circle" size={17} color={colors.teal} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.entryAddress}>{entry.employeeName} — {entry.jobAddress}</Text>
+              <Text style={styles.entryAddress} numberOfLines={1}>{entry.employeeName} · {entryLabel(entry, properties)}</Text>
               <Text style={styles.entryMeta}>
                 {entry.jobDate}{timedPart(entry)} · {formatMoney(entry.earned)} · paid {entry.paidAt ? formatEntryDate(entry.paidAt) : ""}{entry.method ? ` via ${entry.method}` : ""}
               </Text>
@@ -562,12 +595,12 @@ function payOf(text: string): number | null {
 
 // One unpaid entry; tap to fix its time or delete it. Very long ones are
 // flagged, since a timer left running is the usual way pay goes wrong.
-function EntryRow({ entry, onPress }: { entry: TimeEntry; onPress: () => void }) {
+function EntryRow({ entry, place, onPress }: { entry: TimeEntry; place: string; onPress: () => void }) {
   const long = entry.minutes > LONG_SESSION_MINUTES;
   return (
     <TouchableOpacity style={styles.entryRow} onPress={onPress} accessibilityRole="button" accessibilityHint="Opens the entry to fix or delete it">
       <View style={{ flex: 1 }}>
-        <Text style={styles.entryAddress}>{entry.jobAddress}</Text>
+        <Text style={styles.entryAddress} numberOfLines={1}>{place}</Text>
         <Text style={styles.entryMeta}>
           {entry.jobDate}{timedPart(entry)} · {formatMoney(entry.earned)}{entry.manual ? " · added by hand" : ""}
         </Text>
@@ -584,12 +617,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dark, borderRadius: radius.lg, padding: 20, marginBottom: 14,
   },
   heroLabel: { fontSize: 11, fontWeight: "700", color: "#9FB4BE", letterSpacing: 1.5 },
-  heroAmount: { fontSize: 34, fontWeight: "700", color: colors.white, marginTop: 4 },
+  heroAmount: { fontSize: 34, fontWeight: "700", color: colors.white, marginTop: 4, fontVariant: ["tabular-nums"] },
   heroSub: { fontSize: 13, color: "#B9CAD2", marginTop: 4 },
   empTop: { flexDirection: "row", alignItems: "center", gap: 11 },
   empName: { fontSize: 15.5, fontWeight: "700", color: colors.ink },
   empSub: { fontSize: 12.5, color: colors.muted, marginTop: 1 },
-  empOwed: { fontSize: 18, fontWeight: "700", color: colors.tealDark },
+  empOwed: { fontSize: 18, fontWeight: "700", color: colors.tealDark, fontVariant: ["tabular-nums"] },
   entryRow: {
     flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 9, minHeight: 48,
     borderTopWidth: 1, borderTopColor: colors.bg, marginTop: 9,
@@ -603,18 +636,21 @@ const styles = StyleSheet.create({
   deleteLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 6, minHeight: 44 },
   deleteLinkText: { color: colors.danger, fontSize: 13.5, fontWeight: "600" },
   actionRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "stretch" },
-  actionMain: { flex: 1, paddingVertical: 11 },
+  // Marking paid is the main thing to do here: a row to itself, so the
+  // label never wraps. The two small ones share the row under it.
+  actionMain: { flexBasis: "100%", flexGrow: 1, paddingVertical: 11 },
   smallAction: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4,
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, minHeight: 44,
     borderWidth: 1.5, borderColor: colors.line, borderRadius: radius.md,
     paddingHorizontal: 13, paddingVertical: 11, backgroundColor: colors.card,
   },
+  jobsError: { fontSize: 12.5, color: colors.danger, marginBottom: 10, paddingHorizontal: 2 },
   smallActionText: { fontSize: 13, fontWeight: "600", color: colors.tealDark },
   historyToggle: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, padding: 13 },
   historyToggleText: { fontSize: 13.5, fontWeight: "600", color: colors.tealDark },
   paidRow: {
     flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.card,
-    borderRadius: radius.md, padding: 12, marginBottom: 7, borderWidth: 1, borderColor: colors.line, opacity: 0.75,
+    borderRadius: radius.md, padding: 12, marginBottom: 7, borderWidth: 1, borderColor: colors.line,
   },
   previewStrip: {
     flexDirection: "row", alignItems: "center", gap: 7, backgroundColor: colors.tealSoft,

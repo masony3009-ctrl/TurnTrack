@@ -22,14 +22,16 @@ export function WhenSheet({ visible, source, dateKey, time, busy, onClose, onSav
   // Start from the job as it is now each time the sheet opens.
   useEffect(() => {
     if (visible) { setDay(dateKey); setAt(time); }
-  }, [visible, dateKey, time]);
+    // Only when it opens: a live update mustn't undo what was just picked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
   const dateEditable = canEditDate(source);
   const from = syncedFrom(source);
   const changed = day !== dateKey || at !== time;
 
   return (
-    <SheetModal visible={visible} title="Date & time" onClose={onClose}>
+    <SheetModal visible={visible} title="Date & time" onClose={onClose} dirty={changed}>
       {dateEditable ? (
         <DatePickerField label="Date" value={day} onChange={setDay} />
       ) : (

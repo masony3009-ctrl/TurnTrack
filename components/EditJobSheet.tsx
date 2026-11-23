@@ -172,7 +172,7 @@ const styles = StyleSheet.create({
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 14 },
   chip: {
     paddingHorizontal: 12, paddingVertical: 9, borderRadius: radius.pill, borderWidth: 1.5,
-    borderColor: colors.line, backgroundColor: colors.card, minHeight: 40, justifyContent: "center", maxWidth: "100%",
+    borderColor: colors.line, backgroundColor: colors.card, minHeight: 44, justifyContent: "center", maxWidth: "100%",
   },
   chipOn: { backgroundColor: colors.tealDark, borderColor: colors.tealDark },
   chipText: { fontSize: 13.5, fontWeight: "600", color: colors.ink },

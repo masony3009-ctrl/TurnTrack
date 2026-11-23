@@ -6,7 +6,7 @@ import { parsePrice, type Client } from "../money";
 import { MAX_HOUSE_PHOTOS } from "../notePhotos";
 import { aliasesToLink, videoLink, videoSite, type Property, type RegistryChanges } from "../properties";
 import { DEFAULT_CLEANER_PAY, formatDollars } from "../payroll";
-import { colors, radius } from "../theme";
+import { colors, radius, type } from "../theme";
 import { formatShortDate, todayKey } from "../turnover";
 import { parseChecklistText } from "../types";
 import { tapSelect } from "./haptics";
@@ -73,6 +73,28 @@ function roomCount(text: string): number | null {
 }
 
 const CLIENTS_SHOWN = 5;
+
+// Which form fields each saved value comes from.
+const FIELDS_OF: Record<string, (keyof Form)[]> = {
+  address: ["address"],
+  short: ["short"],
+  price: ["price"],
+  cleanerPay: ["cleanerPay"],
+  bedrooms: ["bedrooms"],
+  bathrooms: ["bathrooms"],
+  doorCode: ["doorCode"],
+  garageCode: ["garageCode"],
+  supplyCode: ["supplyCode"],
+  lockboxCode: ["lockboxCode"],
+  lockboxSpot: ["lockboxCode", "lockboxSpot"],
+  billedFrom: ["billedFrom"],
+  checklist: ["steps"],
+  forwardsFrom: ["forwardsFrom"],
+  notes: ["notes"],
+  walkthroughUrl: ["video"],
+  checkOutTime: ["checkOutTime"],
+  checkInTime: ["checkInTime"],
+};
 
 // Edits one house in the registry, or adds one (house = null). Codes typed
 // here show up on every cleaning at that house, past and future. Cleanings
@@ -174,6 +196,14 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave, onD
       checkInTime: form.checkInTime,
     };
     changes.address = form.address.trim();
+    if (!adding && house) {
+      // Send only the fields touched in this sheet. The rest stay as the
+      // registry has them now, which may be newer than when this opened.
+      const before = formOf(house);
+      for (const [key, fields] of Object.entries(FIELDS_OF)) {
+        if (fields.every(f => form[f] === before[f])) delete changes[key];
+      }
+    }
     if (!adding && house && name !== house.name) changes.name = name;
     const base: Property = house || { name, address: form.address.trim(), aliases: [], bedrooms: 0, bathrooms: 0 };
     onSave(base.name, changes, aliasesToLink(base, linked.flatMap(c => c.jobs)));
@@ -224,8 +254,8 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave, onD
       {!adding && house && form.name.trim() !== house.name ? (
         <Text style={styles.hint}>Cleanings filed under &quot;{house.name}&quot; stay with this house.</Text>
       ) : null}
+      <FormInput label="Short name (what the app calls it)" placeholder="e.g. Desert Oasis" value={form.short} onChangeText={set("short")} autoCapitalize="words" />
       <FormInput label="Address" placeholder="Street, city, ZIP" value={form.address} onChangeText={set("address")} autoCapitalize="words" />
-      <FormInput label="Short name" placeholder="e.g. Desert Oasis" value={form.short} onChangeText={set("short")} autoCapitalize="words" />
       <View style={styles.pair}>
         <View style={{ flex: 1 }}>
           <FormInput label="Price per cleaning ($)" placeholder="e.g. 150" value={form.price} onChangeText={set("price")} keyboardType="decimal-pad" />
@@ -243,6 +273,8 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave, onD
           <FormInput label="Bathrooms" placeholder="2.5" value={form.bathrooms} onChangeText={set("bathrooms")} keyboardType="decimal-pad" />
         </View>
       </View>
+      <TimeChips label="Guests check out by" value={form.checkOutTime} onChange={t => setForm(prev => ({ ...prev, checkOutTime: t }))} choices={CHECKOUT_TIMES} noneLabel="Not set" fold />
+      <TimeChips label="Next guests check in at" value={form.checkInTime} onChange={t => setForm(prev => ({ ...prev, checkInTime: t }))} choices={CHECKIN_TIMES} noneLabel="Not set" fold />
       <Text style={styles.group}>Codes</Text>
       <FormInput label="Front door" placeholder="Not set" value={form.doorCode} onChangeText={set("doorCode")} autoCapitalize="none" />
       <FormInput label="Garage" placeholder="Not set" value={form.garageCode} onChangeText={set("garageCode")} autoCapitalize="none" />
@@ -298,8 +330,6 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave, onD
       ) : (
         <Text style={styles.hint}>Save the house first, then you can add photos to its notes.</Text>
       )}
-      <TimeChips label="Guests check out by" value={form.checkOutTime} onChange={t => setForm(prev => ({ ...prev, checkOutTime: t }))} choices={CHECKOUT_TIMES} noneLabel="Not set" />
-      <TimeChips label="Next guests check in at" value={form.checkInTime} onChange={t => setForm(prev => ({ ...prev, checkInTime: t }))} choices={CHECKIN_TIMES} noneLabel="Not set" />
       <Text style={styles.group}>Checklist</Text>
       <Text style={styles.hint}>Only this house gets these, at the end of every cleaning here. One step per line.</Text>
       <FormInput
@@ -339,7 +369,7 @@ export function HouseSheet({ visible, house, clients, busy, onClose, onSave, onD
       {adding ? null : linkList}
       <BrandButton label={busy ? "Saving…" : (adding ? "Add house" : "Save") + linkLabel} icon="checkmark" onPress={save} disabled={busy} />
       {!adding && house && onDelete ? (
-        <TouchableOpacity style={styles.deleteLink} onPress={() => onDelete(house)} hitSlop={6} accessibilityRole="button">
+        <TouchableOpacity style={[styles.deleteLink, busy && { opacity: 0.45 }]} onPress={() => onDelete(house)} disabled={busy} hitSlop={6} accessibilityRole="button">
           <Ionicons name="trash-outline" size={15} color={colors.danger} />
           <Text style={styles.deleteText}>Delete this house</Text>
         </TouchableOpacity>
@@ -380,7 +410,7 @@ const styles = StyleSheet.create({
   videoActionText: { fontSize: 13.5, fontWeight: "700", color: colors.tealDark },
   deleteText: { fontSize: 13.5, fontWeight: "600", color: colors.danger },
   pair: { flexDirection: "row", gap: 10 },
-  group: { fontSize: 12.5, fontWeight: "700", color: colors.ink, marginTop: 4, marginBottom: 8 },
+  group: { ...type.section, marginTop: 14, marginBottom: 8 },
   hint: { fontSize: 12, color: colors.muted, marginTop: -4, marginBottom: 8 },
   toggleRow: {
     flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderColor: colors.line,

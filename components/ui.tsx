@@ -61,7 +61,14 @@ export function DatePickerField({ label, value, onChange }: {
   return (
     <View style={{ marginBottom: 12 }}>
       <Text style={styles.inputLabel}>{label}</Text>
-      <TouchableOpacity style={[styles.input, styles.dateField]} onPress={() => setOpen(true)} activeOpacity={0.7}>
+      <TouchableOpacity
+        style={[styles.input, styles.dateField]}
+        onPress={() => setOpen(true)}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${value ? formatDayHeading(value) : "not picked"}`}
+        accessibilityHint="Opens a calendar to pick the day"
+      >
         <Ionicons name="calendar-clear-outline" size={17} color={value ? colors.tealDark : colors.faint} />
         <Text style={[styles.dateFieldText, !value && { color: colors.faint }]}>
           {value ? formatDayHeading(value) : "Pick a date"}
@@ -125,7 +132,7 @@ export function ScreenHeader({ title, subtitle, right, onBack, backLabel, onSubt
         )}
         <Text style={[type.title, { marginTop: 2 }]} numberOfLines={2}>{title}</Text>
         {subtitle && onSubtitlePress ? (
-          <TouchableOpacity onPress={onSubtitlePress} style={styles.subtitleLink} hitSlop={8}>
+          <TouchableOpacity onPress={onSubtitlePress} style={styles.subtitleLink} hitSlop={8} accessibilityRole="link">
             <Text style={[type.subtitle, styles.subtitleLinkText]}>{subtitle}</Text>
             <Ionicons name="chevron-forward" size={15} color={colors.tealDark} />
           </TouchableOpacity>
@@ -196,7 +203,7 @@ export function Pill({ label, tone = "teal", icon, color }: {
     custom: { bg: tint(color || colors.teal, 0.16), fg: color || colors.tealDark },
   }[tone];
   return (
-    <View style={[styles.pill, { backgroundColor: palette.bg }]}>
+    <View style={[styles.pill, { backgroundColor: palette.bg }, tone === "neutral" && styles.pillNeutral]}>
       {icon ? <Ionicons name={icon} size={12} color={palette.fg} style={{ marginRight: 4 }} /> : null}
       <Text style={[styles.pillText, { color: palette.fg }]}>{label}</Text>
     </View>
@@ -485,7 +492,7 @@ export function ColorPicker({ label, value, onChange }: {
     <View style={{ marginBottom: 12 }}>
       <Text style={styles.inputLabel}>{label}</Text>
       <View style={styles.swatchRow}>
-        {cleanerPalette.map(hex => {
+        {cleanerPalette.map((hex, i) => {
           const selected = hex === value;
           return (
             <TouchableOpacity
@@ -493,6 +500,9 @@ export function ColorPicker({ label, value, onChange }: {
               onPress={() => onChange(hex)}
               style={[styles.swatch, { backgroundColor: hex }, selected && styles.swatchSelected]}
               hitSlop={4}
+              accessibilityRole="radio"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`Color ${i + 1} of ${cleanerPalette.length}`}
             >
               {selected ? <Ionicons name="checkmark" size={16} color={colors.white} /> : null}
             </TouchableOpacity>
@@ -591,6 +601,7 @@ const styles = StyleSheet.create({
     flexDirection: "row", alignItems: "center", alignSelf: "flex-start",
     borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 4,
   },
+  pillNeutral: { borderWidth: 1, borderColor: colors.line, paddingVertical: 3 },
   pillText: { fontSize: 11.5, fontWeight: "700" },
   sectionHeader: { flexDirection: "row", alignItems: "center", gap: 7, marginTop: 6, marginBottom: 10, paddingHorizontal: 2 },
   sectionCount: { fontSize: 11, fontWeight: "700", letterSpacing: 0.5 },
