@@ -7,17 +7,23 @@ import { todayKey } from "../turnover";
 const REF = () => doc(db, "settings", "ownerEvents");
 
 // The owner's events, live. Null until loaded; stays null (and reads nothing)
-// on a cleaner's phone.
-export function useOwnerEvents(enabled: boolean): OwnerEvent[] | null {
+// on a cleaner's phone. failed = they couldn't be read, so the screen can say
+// so instead of showing a calendar that quietly has no meetings on it.
+export function useOwnerEvents(enabled: boolean): { events: OwnerEvent[] | null; failed: boolean } {
   const [events, setEvents] = useState<OwnerEvent[] | null>(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     if (!enabled) return;
-    return onSnapshot(REF(), snap => setEvents(eventsOf(snap.data()?.items)), error => {
+    return onSnapshot(REF(), snap => {
+      setEvents(eventsOf(snap.data()?.items));
+      setFailed(false);
+    }, error => {
       console.warn("owner events listener error:", error);
       setEvents(prev => prev || []);
+      setFailed(true);
     });
   }, [enabled]);
-  return enabled ? events : null;
+  return { events: enabled ? events : null, failed: enabled && failed };
 }
 
 // Read-modify-write of the whole list in one transaction, so two owner phones

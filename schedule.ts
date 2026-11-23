@@ -96,6 +96,29 @@ export function houseLabel(job: ScheduleJob, properties: Property[]): string {
   return property || job.type || "Cleaning";
 }
 
+// Names for the month grid, where a chip fits about eight letters. When two
+// or more houses start with the same word ("Desert Oasis", "Desert Chic"),
+// that word tells them apart least, so it is dropped: "Oasis", "Chic". Every
+// other name is left as it is.
+export function gridNames(labels: string[]): Map<string, string> {
+  const wordsOf = (label: string) => label.trim().split(/\s+/).filter(Boolean);
+  const sharing = new Map<string, Set<string>>();
+  for (const label of labels) {
+    const words = wordsOf(label);
+    if (words.length < 2) continue;
+    const first = words[0].toLowerCase();
+    if (!sharing.has(first)) sharing.set(first, new Set());
+    sharing.get(first)!.add(label.trim().toLowerCase());
+  }
+  const out = new Map<string, string>();
+  for (const label of labels) {
+    const words = wordsOf(label);
+    const shared = words.length > 1 && (sharing.get(words[0].toLowerCase())?.size || 0) > 1;
+    out.set(label, shared ? words.slice(1).join(" ") : label);
+  }
+  return out;
+}
+
 export type WeekCount = { total: number; done: number };
 
 // Week start (Sunday key) -> cleanings dated that week and how many are done.

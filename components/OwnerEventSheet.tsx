@@ -76,7 +76,7 @@ export function OwnerEventSheet({ visible, day, event, onClose }: {
       <FormInput label="What" placeholder="e.g. Meet the owner · walkthrough" value={form.title} onChangeText={set("title")} autoCapitalize="sentences" />
       <FormInput label="Where (optional)" placeholder="Street address or place" value={form.place} onChangeText={set("place")} autoCapitalize="words" />
       <DatePickerField label="Day" value={form.dateKey} onChange={key => setForm(prev => ({ ...prev, dateKey: key }))} />
-      <TimeChips label="Time" value={form.time} onChange={t => setForm(prev => ({ ...prev, time: t }))} choices={EVENT_TIMES} />
+      <TimeChips label="Time" value={form.time} onChange={t => setForm(prev => ({ ...prev, time: t }))} choices={EVENT_TIMES} fold />
       <FormInput label="Notes (optional)" placeholder="Who you're meeting, their number, what to bring" value={form.note} onChangeText={set("note")} multiline />
       <BrandButton label={busy ? "Saving…" : event ? "Save" : "Add to calendar"} icon="checkmark" onPress={save} disabled={busy || (!!event && !dirty)} />
       {event ? (

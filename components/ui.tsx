@@ -292,6 +292,8 @@ export function BrandButton({ label, onPress, variant = "primary", icon, style, 
       onPress={onPress}
       disabled={disabled}
       activeOpacity={0.8}
+      // A compact button is 40 tall; this makes it 44 to the finger.
+      hitSlop={compact ? { top: 2, bottom: 2 } : undefined}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ disabled: !!disabled }}

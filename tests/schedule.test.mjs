@@ -4,6 +4,7 @@ import {
   addDaysToKey,
   countsAsCleaning,
   countsByWeek,
+  gridNames,
   houseLabel,
   monthGrid,
   monthLabel,
@@ -157,4 +158,17 @@ test("swiping steps through the offered months and stops at the ends", async () 
   assert.equal(stepMonth(months, { year: 2027, month: 0 }, 1), null);
   assert.equal(stepMonth(months, { year: 2026, month: 10 }, -1), null);
   assert.equal(stepMonth(months, { year: 2025, month: 0 }, 1), null);
+});
+
+test("gridNames drops a first word that two or more houses share", () => {
+  const names = gridNames(["Sunset Ridge", "Sunset Cove", "sunset cove", "Maple House", "Pine", "Pine Lodge", "Sunset Ridge"]);
+  assert.equal(names.get("Sunset Ridge"), "Ridge");
+  assert.equal(names.get("Sunset Cove"), "Cove");
+  // One house, however it is spelled, doesn't count as two.
+  assert.equal(gridNames(["Sunset Cove", "sunset cove"]).get("Sunset Cove"), "Sunset Cove");
+  // A name on its own keeps its first word; so does a one-word name.
+  assert.equal(names.get("Maple House"), "Maple House");
+  assert.equal(names.get("Pine"), "Pine");
+  assert.equal(names.get("Pine Lodge"), "Pine Lodge");
+  assert.equal(gridNames([]).size, 0);
 });
