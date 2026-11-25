@@ -53,7 +53,7 @@ function scanAllEmails() {
   sendDigest(ctx);
   reportOffers(ctx);
   scanForwardedAirbnb(ctx);    // hosts who forward us their Airbnb and Vrbo emails
-  scanIcalFeeds(ctx);          // houses whose hosts gave us an Airbnb calendar link
+  scanIcalFeeds(ctx);          // houses whose hosts gave us Airbnb/Vrbo calendar links
   checkAirbnbSync(); // notices if the PC-side Airbnb sync has gone quiet
 }
 
@@ -128,8 +128,9 @@ function loadProperties() {
       bedrooms: numberField(f.bedrooms),
       bathrooms: numberField(f.bathrooms),
       short: f.short ? f.short.stringValue : "",
-      // A host's Airbnb calendar export link, for houses we aren't co-hosts on.
-      icalUrl: f.icalUrl ? f.icalUrl.stringValue : "",
+      // A host's calendar export links (Airbnb, Vrbo, ...), for houses we
+      // aren't co-hosts on. One field, links separated by spaces or new lines.
+      icalUrls: icalLinks(f.icalUrl ? f.icalUrl.stringValue : ""),
       // Where the host forwards their Airbnb emails from, for houses whose
       // host does that instead of sharing a calendar link.
       forwardsFrom: forwardAddresses(f.forwardsFrom ? f.forwardsFrom.stringValue : "")
@@ -596,24 +597,63 @@ var ICAL_SOURCE = "airbnb-ical";
 var ICAL_JOB_TYPE = "Airbnb Turnover";
 var ICAL_ALERT_HOURS = 24;
 
+// "link1 link2" or one per line -> ["link1", "link2"]. A host listed on both
+// Airbnb and Vrbo gives us one export link from each.
+function icalLinks(raw) {
+  return String(raw || "").split(/\s+/).filter(function (s) { return /^https?:\/\//i.test(s); });
+}
+
+// Which site a link belongs to, for the owner alert when one stops working.
+function icalSite(url) {
+  var m = String(url).match(/^https?:\/\/(?:www\.)?([^\/.]+)/i);
+  return m ? m[1].charAt(0).toUpperCase() + m[1].slice(1) : "calendar";
+}
+
+// Every stay across a house's feeds, one per booking. The plan for the house
+// is made from all of them at once: planned one feed at a time, each feed's
+// bookings would look missing from the other and get cancelled.
+function mergeStays(feeds) {
+  var seen = {}, out = [];
+  feeds.forEach(function (stays) {
+    stays.forEach(function (s) {
+      if (seen[s.uid]) return;
+      seen[s.uid] = true;
+      out.push(s);
+    });
+  });
+  return out;
+}
+
+// Reads every link for a house. Any link that fails means the whole house is
+// skipped this run (null), since a missing feed would look like cancellations.
+function readHouseFeeds(house) {
+  var feeds = [];
+  for (var i = 0; i < house.icalUrls.length; i++) {
+    var url = house.icalUrls[i], site = icalSite(url), res;
+    try {
+      res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    } catch (e) {
+      icalProblem(house, "Couldn't reach the " + site + " calendar link (" + String(e).slice(0, 120) + ").");
+      return null;
+    }
+    var body = res.getContentText();
+    if (res.getResponseCode() !== 200 || body.indexOf("BEGIN:VCALENDAR") === -1) {
+      icalProblem(house, "The " + site + " calendar link answered " + res.getResponseCode() + ". The host may have reset it - ask them for the new export link.");
+      return null;
+    }
+    feeds.push(parseIcal(body));
+  }
+  return feeds;
+}
+
 function scanIcalFeeds(ctx) {
   ctx.icalChanges = { created: [], cancelled: [], moved: [], restored: [] };
   var today = todayKey();
   ctx.properties.forEach(function (house) {
-    if (!house.icalUrl) return;
-    var res;
-    try {
-      res = UrlFetchApp.fetch(house.icalUrl, { muteHttpExceptions: true, followRedirects: true });
-    } catch (e) {
-      icalProblem(house, "Couldn't reach the calendar link (" + String(e).slice(0, 120) + ").");
-      return;
-    }
-    var body = res.getContentText();
-    if (res.getResponseCode() !== 200 || body.indexOf("BEGIN:VCALENDAR") === -1) {
-      icalProblem(house, "The calendar link answered " + res.getResponseCode() + ". The host may have reset it in Airbnb - ask them for the new export link.");
-      return;
-    }
-    var plan = planIcalHouse(parseIcal(body), ctx.jobs, house, today);
+    if (!house.icalUrls || !house.icalUrls.length) return;
+    var feeds = readHouseFeeds(house);
+    if (!feeds) return;
+    var plan = planIcalHouse(mergeStays(feeds), ctx.jobs, house, today);
     // A half-loaded feed would look exactly like a wave of cancellations.
     if (plan.badRead) {
       icalProblem(house, "The calendar would have cancelled " + plan.cancel.length + " cleanings at once, which looks like a bad read, so nothing was changed.");
@@ -627,7 +667,7 @@ function scanIcalFeeds(ctx) {
       Logger.log("ical changes at " + house.name + " stopped part way: " + e);
     }
   });
-  var d = buildDigest(ctx, "Airbnb", ctx.icalChanges);
+  var d = buildDigest(ctx, "Bookings", ctx.icalChanges);
   if (d) notifyPhones(d.title, d.body, d.data);
 }
 
@@ -751,7 +791,7 @@ function applyIcalPlan(ctx, house, plan, today) {
     r.job.sameDayTurnover = r.sameDay;
   });
   plan.cancel.forEach(function (j) {
-    if (!patchDoc(j.name, { cancelled: bool(true), cancelledAt: int(Date.now()), cancelReason: str("Booking no longer on the host's Airbnb calendar") })) return;
+    if (!patchDoc(j.name, { cancelled: bool(true), cancelledAt: int(Date.now()), cancelReason: str("Booking no longer on the host's calendar") })) return;
     report.cancelled.push({ dateKey: j.dateKey, property: house.name, jobId: jobIdOf(j) });
     j.cancelled = true;
   });
@@ -799,7 +839,7 @@ function icalProblem(house, message) {
   var key = "icalAlertAt:" + house.name;
   var last = Number(props.getProperty(key) || 0);
   if (Date.now() - last < ICAL_ALERT_HOURS * 3600 * 1000) return;
-  if (alertOwnerTelegram("Airbnb calendar for " + (house.short || house.name) + " isn't working", message + "\n\nNothing changed for that house this time.")) {
+  if (alertOwnerTelegram("Booking calendar for " + (house.short || house.name) + " isn't working", message + "\n\nNothing changed for that house this time.")) {
     props.setProperty(key, String(Date.now()));
   }
 }

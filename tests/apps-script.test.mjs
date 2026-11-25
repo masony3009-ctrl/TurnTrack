@@ -116,6 +116,47 @@ test("nothing dated today, at another house, or from another source is cancelled
   assert.deepEqual(planIcalHouse(parseIcal(FEED), jobs, HOUSE, TODAY).cancel, []);
 });
 
+// Vrbo's export format: "Reserved - <first name>", its own UIDs.
+const VRBO = [
+  "BEGIN:VCALENDAR",
+  "PRODID:-//HomeAway.com\\, Inc.//EN",
+  "BEGIN:VEVENT",
+  "UID:aae7cdee-5017-4693-a937-c0ab7515d642",
+  "DTSTART;VALUE=DATE:20261105",
+  "DTEND;VALUE=DATE:20261109",
+  "SUMMARY:Reserved - Megan",
+  "END:VEVENT",
+  "END:VCALENDAR",
+  "",
+].join("\r\n");
+
+test("a house's links are split on spaces and new lines; junk is ignored", () => {
+  assert.deepEqual(plain(gs.icalLinks("https://a.test/x.ics\nhttps://b.test/y.ics?nonTentative  notalink")), [
+    "https://a.test/x.ics", "https://b.test/y.ics?nonTentative",
+  ]);
+  assert.deepEqual(plain(gs.icalLinks("")), []);
+  assert.deepEqual(plain(gs.icalLinks(undefined)), []);
+  assert.equal(gs.icalSite("https://www.vrbo.com/icalendar/abc.ics"), "Vrbo");
+  assert.equal(gs.icalSite("https://www.airbnb.com/calendar/ical/1.ics"), "Airbnb");
+});
+
+test("Airbnb and Vrbo feeds for one house are planned together, so neither cancels the other", () => {
+  const stays = plain(gs.mergeStays([gs.parseIcal(FEED), gs.parseIcal(VRBO), gs.parseIcal(VRBO)]));
+  assert.deepEqual(stays.map((s) => s.checkOut), ["2026-10-30", "2026-11-05", "2026-11-09"]);
+  const vrboJob = job("v", "2026-11-09", "aae7cdee-5017-4693-a937-c0ab7515d642");
+  const airbnbJob = job("b", "2026-11-05", "1418fb94e984-bbb222@airbnb.com");
+  const p = planIcalHouse(stays, [vrboJob, airbnbJob], HOUSE, TODAY);
+  assert.deepEqual(counts(p), [1, 0, 0, 0]);
+  // Planned from the Airbnb feed alone, the Vrbo cleaning would be cancelled.
+  assert.deepEqual(planIcalHouse(parseIcal(FEED), [vrboJob], HOUSE, TODAY).cancel.map((j) => j.dateKey), ["2026-11-09"]);
+});
+
+test("a Vrbo check-in on an Airbnb checkout day makes it a same-day turnover", () => {
+  const vrboSameDay = VRBO.replace("20261105", "20261030");
+  const p = planIcalHouse(plain(gs.mergeStays([gs.parseIcal(FEED), gs.parseIcal(vrboSameDay)])), [], HOUSE, TODAY);
+  assert.equal(p.create.find((c) => c.stay.checkOut === "2026-10-30").sameDay, true);
+});
+
 test("a wave of cancellations is treated as a bad read", () => {
   const jobs = [1, 2, 3, 4].map((n) => job(`g${n}`, `2026-12-0${n}`, `gone${n}@airbnb.com`));
   assert.equal(planIcalHouse(parseIcal(FEED), jobs, HOUSE, TODAY).badRead, true);
